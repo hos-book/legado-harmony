@@ -1,4 +1,4 @@
-import { Book, BookChapter, BookSource, ContentRule, HttpClient, HttpResponse, AnalyzeUrl, AnalyzeRule, RuleContext, VerificationSupport, EncodedSourceUrl, BookUrlResolver, BookFieldSanitizer, AjaxRuleCompat, JavaRegexCompat, JsRuntime, ScriptEngine, ScriptEngineContext, BookSourceRuntimeRouter, SourceRuntimeStage, BookSourceStageWebRuntime, StageWebRuntimeRequest, ReaderActionMarker, CookieStore, RuleExecutionService, RuleBatchExecutionRequest, RuleFieldRequest, CooperativeScheduler, RuleExecutionTarget, RuleValue, BookSourceDebugContext, LogText, NativeSourceService } from '@legado/sourceengine';
+import { SourceEngineHost, Book, BookChapter, BookSource, ContentRule, HttpClient, HttpResponse, AnalyzeUrl, AnalyzeRule, RuleContext, VerificationSupport, EncodedSourceUrl, BookUrlResolver, BookFieldSanitizer, AjaxRuleCompat, JavaRegexCompat, JsRuntime, ScriptEngine, ScriptEngineContext, BookSourceRuntimeRouter, SourceRuntimeStage, BookSourceStageWebRuntime, StageWebRuntimeRequest, ReaderActionMarker, CookieStore, RuleExecutionService, RuleBatchExecutionRequest, RuleFieldRequest, CooperativeScheduler, RuleExecutionTarget, RuleValue, BookSourceDebugContext, LogText, NativeSourceService } from '@legado/sourceengine';
 import { util } from '@kit.ArkTS';
 import { BookSourceDataUrlSupport } from './BookSourceDataUrlSupport';
 import { ReaderImageMarker } from './ReaderImageMarker';
@@ -41,7 +41,7 @@ export class WebBookService {
         return await NativeSourceService.getBookInfo(source, this.http, book, debugContext);
       } catch (e) {
         console.warn('[WS] native book info failed:', source.bookSourceName, (e as Error).message);
-        AppStorage.setOrCreate('bookSourceStageLastError', (e as Error).message || '详情解析失败');
+        SourceEngineHost.setError(source, (e as Error).message || '详情解析失败');
         return book;
       }
     }
@@ -60,7 +60,7 @@ export class WebBookService {
     if (this.requestVerificationIfNeeded(source, book.bookUrl, resp.body, resp.statusCode, source.bookInfoRule.init)) {
       return book;
     }
-    if (!resp.success || !resp.body) return book;
+    if (!resp.success || !resp.body) { SourceEngineHost.setError(source, resp.error || '详情请求失败或空响应'); return book; }
     const baseUrl = BookUrlResolver.effectiveBase(resp, book.bookUrl, source.bookSourceUrl);
 
     const ctx = new RuleContext();
@@ -262,18 +262,18 @@ export class WebBookService {
   async getChapterList(source: BookSource, book: Book, maxChapters: number = 0,
     allowGenericFallback: boolean = true,
     debugContext: BookSourceDebugContext | null = null): Promise<BookChapter[]> {
-    AppStorage.setOrCreate('bookSourceStageLastError', '');
+    SourceEngineHost.setError(source, '');
     if (NativeSourceService.isNative(source)) {
       try {
         const nativeChapters = await NativeSourceService.getChapterList(source, this.http, book,
           maxChapters > 0 ? Math.max(1, Math.round(maxChapters)) : 0, debugContext);
         if (nativeChapters.length === 0) {
-          AppStorage.setOrCreate('bookSourceStageLastError', '目录规则没有匹配到章节');
+          SourceEngineHost.setError(source, '目录规则没有匹配到章节');
         }
         return nativeChapters;
       } catch (e) {
         console.warn('[WS] native chapter list failed:', source.bookSourceName, (e as Error).message);
-        AppStorage.setOrCreate('bookSourceStageLastError', (e as Error).message || '目录解析失败');
+        SourceEngineHost.setError(source, (e as Error).message || '目录解析失败');
         return [];
       }
     }
@@ -291,7 +291,7 @@ export class WebBookService {
     if (!resp.success || !resp.body) {
       // A silent empty return left the chapter list showing a generic placeholder with no hint
       // of whether the network, the tocUrl composition or the API failed.
-      AppStorage.setOrCreate('bookSourceStageLastError', `目录请求失败：${!resp.success ?
+      SourceEngineHost.setError(source, `目录请求失败：${!resp.success ?
         (resp.statusCode > 0 ? `HTTP ${resp.statusCode}` : (resp.error || '网络异常')) : '接口返回空响应'}`);
       return [];
     }
@@ -299,7 +299,7 @@ export class WebBookService {
     if (tocApiFailure) {
       // Servers commonly answer a malformed tocUrl (e.g. a missing bookid) with a JSON error.
       // Record it so the chapter list page can show the real cause instead of 暂无目录.
-      AppStorage.setOrCreate('bookSourceStageLastError', `目录接口返回失败：${tocApiFailure}`);
+      SourceEngineHost.setError(source, `目录接口返回失败：${tocApiFailure}`);
       return [];
     }
     const ctx = new RuleContext();
@@ -354,12 +354,12 @@ export class WebBookService {
             first ? chapterLimit : remainingLimit, debugContext);
           if (runtimeChapters.length > 0) return runtimeChapters;
           if (first) {
-            AppStorage.setOrCreate('bookSourceStageLastError',
+            SourceEngineHost.setError(source,
               `目录脚本已返回内容，但没有转换出章节（返回 ${runtimeList.length} 字符）`);
           }
         } else if (first && hasStageRule) {
-          const lastError = AppStorage.get<string>('bookSourceStageLastError') || '';
-          if (!lastError) AppStorage.setOrCreate('bookSourceStageLastError', '目录脚本返回空结果');
+          const lastError = SourceEngineHost.getError(source) || '';
+          if (!lastError) SourceEngineHost.setError(source, '目录脚本返回空结果');
         }
       }
       return await this.parseChapterPage(source, book, pageResp.body, baseUrl, ctx,
@@ -378,12 +378,12 @@ export class WebBookService {
       if (pageChapters === null) break;
       if (page === 0 && !tocRule.nextTocUrl && hasStageRule && pageChapters.length > 0) {
         // A script-built single-page catalog is returned exactly as the script produced it.
-        const lastError = AppStorage.get<string>('bookSourceStageLastError') || '';
+        const lastError = SourceEngineHost.getError(source) || '';
         if (!lastError) return pageChapters;
       }
       appendChapters(pageChapters);
       // A later page produced chapters: a diagnostic left by an empty earlier attempt is no longer the outcome.
-      if (page > 0 && pageChapters.length > 0) AppStorage.setOrCreate('bookSourceStageLastError', '');
+      if (page > 0 && pageChapters.length > 0) SourceEngineHost.setError(source, '');
       if (chapterLimit > 0 && chapters.length >= chapterLimit) break;
       if (!tocRule.nextTocUrl) break;
 
@@ -422,7 +422,7 @@ export class WebBookService {
             break;
           }
           appendChapters(listedChapters);
-          if (listedChapters.length > 0) AppStorage.setOrCreate('bookSourceStageLastError', '');
+          if (listedChapters.length > 0) SourceEngineHost.setError(source, '');
           if (chapterLimit > 0 && chapters.length >= chapterLimit) {
             stopped = true;
             break;
@@ -439,7 +439,7 @@ export class WebBookService {
 
     const fallbackChapters = this.tryBuildGenericChapterList(book, firstBody, firstBaseUrl);
     if (fallbackChapters.length > 0) {
-      AppStorage.setOrCreate('bookSourceStageLastError', '正式目录规则未匹配，当前使用临时通用目录');
+      SourceEngineHost.setError(source, '正式目录规则未匹配，当前使用临时通用目录');
       return chapterLimit > 0 ? fallbackChapters.slice(0, chapterLimit) : fallbackChapters;
     }
     return chapters;
@@ -535,7 +535,7 @@ export class WebBookService {
         console.warn('[WS] toc field errors:', source.bookSourceName, batch.errors.join('; '));
         // A failed chapterUrl rule silently empties every chapter; surface the cause on the
         // catalog page instead of a generic 暂无目录.
-        AppStorage.setOrCreate('bookSourceStageLastError', `目录字段解析失败：${batch.errors[0]}`);
+        SourceEngineHost.setError(source, `目录字段解析失败：${batch.errors[0]}`);
       }
     } finally {
       RuleExecutionService.get().clearOwner(fieldRequest.ownerId);
@@ -579,9 +579,9 @@ export class WebBookService {
     if (chapters.length === 0 && items.length > 0) {
       // Every chapter was dropped (chapterUrl rule produced nothing usable). Record why so the
       // catalog page shows the real cause instead of a silent empty state.
-      const droppedError = AppStorage.get<string>('bookSourceStageLastError') ||
+      const droppedError = SourceEngineHost.getError(source) ||
         `目录匹配 ${items.length} 章，但章节地址全部为空（chapterUrl 规则未生成有效地址）`;
-      AppStorage.setOrCreate('bookSourceStageLastError', droppedError);
+      SourceEngineHost.setError(source, droppedError);
     }
     if (contextValues.length > 0) ctx.loadFromJson(contextValues[contextValues.length - 1]);
     return chapters;
@@ -609,7 +609,7 @@ export class WebBookService {
 
   private async getNativeContent(source: BookSource, book: Book, chapter: BookChapter,
     shouldCancel: (() => boolean) | null, debugContext: BookSourceDebugContext | null = null): Promise<string> {
-    AppStorage.setOrCreate('bookSourceStageLastError', '');
+    SourceEngineHost.setError(source, '');
     try {
       const result = await NativeSourceService.getContent(source, this.http, book, chapter,
         (): boolean => this.contentRequestCanceled(shouldCancel), debugContext);
@@ -621,14 +621,14 @@ export class WebBookService {
           result.baseUrl || chapter.url || book.bookUrl || source.bookSourceUrl, result.images);
       }
       if (!result.text.trim()) {
-        AppStorage.setOrCreate('bookSourceStageLastError', '正文规则没有取到内容');
+        SourceEngineHost.setError(source, '正文规则没有取到内容');
         return '';
       }
       return await this.normalizeReaderContent(source, result.text,
         result.baseUrl || chapter.url || book.bookUrl || source.bookSourceUrl);
     } catch (e) {
       console.warn('[WS] native content failed:', source.bookSourceName, (e as Error).message);
-      AppStorage.setOrCreate('bookSourceStageLastError', (e as Error).message || '正文解析失败');
+      SourceEngineHost.setError(source, (e as Error).message || '正文解析失败');
       return '';
     }
   }
@@ -639,6 +639,7 @@ export class WebBookService {
 
   private sourceWithContentRule(source: BookSource, contentRule: string): BookSource {
     const copy = Object.assign(new BookSource(), source);
+    SourceEngineHost.bindSource(source,copy);
     copy.contentRule = Object.assign(new ContentRule(), source.contentRule);
     copy.contentRule.content = contentRule;
     copy.contentRule.audioUrl = '';
@@ -651,7 +652,7 @@ export class WebBookService {
     if (this.contentRequestCanceled(shouldCancel)) return '';
     // Validation and reader diagnostics must describe the current content request, not a
     // stale error left by a previous catalog/script stage.
-    AppStorage.setOrCreate('bookSourceStageLastError', '');
+    SourceEngineHost.setError(source, '');
     if (BookSourceDataUrlSupport.isEncodedSource(chapter.url)) {
       const shortcutContent = await BookSourceDataUrlSupport.getContent(this.http, source, book, chapter);
       if (this.contentRequestCanceled(shouldCancel)) return '';
@@ -711,12 +712,12 @@ export class WebBookService {
       const status = Number(resp.statusCode || 0);
       const detail = String(resp.error || '').trim();
       if (status === 401 || status === 403) {
-        AppStorage.setOrCreate('bookSourceStageLastError', `正文请求需要登录、验证或授权（HTTP ${status}）`);
+        SourceEngineHost.setError(source, `正文请求需要登录、验证或授权（HTTP ${status}）`);
       } else if (status === 408 || status === 425 || status === 429 || status >= 500 || status === 0) {
-        AppStorage.setOrCreate('bookSourceStageLastError',
+        SourceEngineHost.setError(source,
           `正文网络请求暂时失败${status > 0 ? `（HTTP ${status}）` : ''}${detail ? `：${detail}` : ''}`);
       } else {
-        AppStorage.setOrCreate('bookSourceStageLastError',
+        SourceEngineHost.setError(source,
           `正文请求失败（HTTP ${status}）${detail ? `：${detail}` : ''}`);
       }
       return '';
@@ -1689,12 +1690,12 @@ export class WebBookService {
     if (!code) return '';
     const decision = BookSourceRuntimeRouter.decide(stage, `${source.jsLib || ''}\n${code}`);
     if (decision.runtime !== 'arkweb') {
-      AppStorage.setOrCreate('bookSourceStageLastError', `${stage} 阶段未路由到完整脚本运行层`);
+      SourceEngineHost.setError(source, `${stage} 阶段未路由到完整脚本运行层`);
       return '';
     }
     const runtime = BookSourceStageWebRuntime.get();
     if (!await runtime.waitUntilAvailable()) {
-      AppStorage.setOrCreate('bookSourceStageLastError', `${stage} 阶段脚本运行环境未就绪`);
+      SourceEngineHost.setError(source, `${stage} 阶段脚本运行环境未就绪`);
       return '';
     }
     const request = new StageWebRuntimeRequest();
@@ -1723,7 +1724,7 @@ export class WebBookService {
     } catch (error) {
       console.warn('[WS] stage runtime failed:', source.bookSourceName, stage, error);
       const message = error instanceof Error ? error.message : String(error || '');
-      AppStorage.setOrCreate('bookSourceStageLastError', `${stage} 阶段：${message || '脚本执行失败'}`);
+      SourceEngineHost.setError(source, `${stage} 阶段：${message || '脚本执行失败'}`);
       return '';
     }
   }
@@ -2020,7 +2021,7 @@ export class WebBookService {
     analyzer.parse(chapter.url || '');
     const request = analyzer.buildRequest();
     if (!/^https?:\/\//i.test(request.url || '')) {
-      AppStorage.setOrCreate('bookSourceStageLastError', '网页音频规则需要 HTTP(S) 章节地址');
+      SourceEngineHost.setError(source, '网页音频规则需要 HTTP(S) 章节地址');
       return '';
     }
     const response = await this.http.execute({
@@ -2038,7 +2039,7 @@ export class WebBookService {
     if (response.success && /^https?:\/\/[^\s<>]+$/i.test(AudioRuleSupport.splitRequestOptions(value).url)) {
       return value;
     }
-    AppStorage.setOrCreate('bookSourceStageLastError', response.success ?
+    SourceEngineHost.setError(source, response.success ?
       '网页音频规则未返回 HTTP(S) 音频地址' : `网页音频规则执行失败：${response.error || '网页加载失败'}`);
     return '';
   }
@@ -2049,6 +2050,7 @@ export class WebBookService {
     // Without `sourceRegex` the sniffer accepts known media extensions only. That is the whole
     // resolution for a rule-less chapter; with a content rule the rule itself reads the page.
     if (!this.audioChapterUsesWebView(source, chapter) || (!sourceRegex && !directRule)) return '';
+    return SourceEngineHost.withWeb(source.bookSourceUrl, async () => {
     const runtime = BookSourceAudioWebRuntime.get();
     if (!await runtime.waitUntilAvailable()) return '';
     try {
@@ -2059,6 +2061,7 @@ export class WebBookService {
         source.bookSourceName, chapter.title, error);
       return '';
     }
+    });
   }
 
   /** The option may be literal in the catalog rule or computed into the chapter address by a script. */

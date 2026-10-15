@@ -41,6 +41,23 @@ import { QuickJsDiagnostics } from '@legado/sourceengine/Diagnostics';
 | 网页验证 | 遇到验证页时 `VerificationSupport` 写入 AppStorage：`pendingVerificationUrl`、`pendingVerificationTitle`、`pendingVerificationTime`、`pendingVerificationSourceUrl`、`pendingVerificationLoginUrl`。宿主的验证页读取这些值。 |
 | QuickJS 诊断刷新 | 存储变化时更新 AppStorage 的 `quickJsMigrationRevision`、`quickJsValidationRevision`、`quickJsRegressionArtifactRevision`，界面可以监听这些值来刷新。 |
 
+## 可选宿主端口
+
+`SourceEngineHost.install(adapter)` 在启动时、执行书源前调用一次。所有端口均可省略；轻页保持原有 ArkWeb 串行执行、CookieStore 和 `BookSourceRuntimeStore.install` 行为。不要在任务执行期间切换 adapter。
+
+- `cookies(sourceUrl)` / `persistence(source)`：提供按源隔离的会话与状态存储。
+- `scripts`：注入有预算限制的脚本执行器。只有独立上下文才能声明 `concurrent: true`；共享 ArkWeb 控制器必须串行。可强制完整脚本路由，并禁止同步 QuickJS 入口。
+- `requests`：宿主选择等待者优先级和取消状态；频率窗口仍由公共包维护，不因优先级而额外发放额度。
+- `web`：宿主管理网页会话租约；`state` 绑定源副本的上下文和错误；`diagnostics` 接收分段耗时。
+
+这些端口只给可信宿主使用，不暴露给书源脚本。简听保留加密存储、有界 QuickJS、播放优先级、Cookie 隔离和网页会话租约，公共包不依赖简听模块。
+
+`NativeSourceImport.importObject` / `toBookSource` 仅转换定义，不清理缓存、不访问网络或数据库；实际导入仍可使用 `NativeSourceService.importObject`，保留原来的缓存失效行为。原生声明式缓存按定义、登录信息和登录站点 Cookie 区分上下文。
+
+## 宿主兼容性回归
+
+设置 `DEVECO_HOME` 为已安装的 Release DevEco Studio，执行 `node scripts/source-engine-host-check.cjs`，覆盖默认串行与注入并发执行、Cookie、持久化及取消。平台 API 使用测试替身，不能替代设备验证。
+
 ## 回归检查
 
 `scripts/` 里的 Node 回归脚本通过 `scripts/lib/ets-module-staging.mjs` 加载本模块的源码。这个工具把 `entry` 和 `sourceengine` 两个源码根合并成同一棵目录树，并把 `@legado/sourceengine` 的导入按名字改写成指向定义文件的相对导入。改动内核后至少运行：

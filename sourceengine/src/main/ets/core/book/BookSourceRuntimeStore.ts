@@ -1,3 +1,4 @@
+import { SourceEngineHost } from '../host/SourceEngineHost';
 import { BookSource } from '../../model/data/Book';
 
 /**
@@ -12,6 +13,10 @@ export interface BookSourceRuntimePersistence {
 }
 
 export class BookSourceRuntimeStore {
+  static forSource(source: BookSource): BookSourceRuntimePersistence | null {
+    return SourceEngineHost.persistence(source) || this.persistence;
+  }
+
   private static persistence: BookSourceRuntimePersistence | null = null;
 
   static install(persistence: BookSourceRuntimePersistence): void {

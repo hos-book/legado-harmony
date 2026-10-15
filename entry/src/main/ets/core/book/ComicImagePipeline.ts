@@ -1,7 +1,7 @@
+import { BookSource, HttpClient, NativeSourceCrypto } from '@legado/sourceengine';
 import fs from '@ohos.file.fs';
 import { util } from '@kit.ArkTS';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
-import { BookSource, HttpClient, NativeSourceCrypto } from '@legado/sourceengine';
 
 export class ComicImageSpec {
   url: string = '';
@@ -67,6 +67,7 @@ export class ComicImagePipeline {
     if (existing) return existing;
 
     const response = await http.executeBinary({
+      cookieSource: source.bookSourceUrl,
       url: spec.url,
       method: 'GET',
       headers: {

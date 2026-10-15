@@ -1,3 +1,4 @@
+import { NativeSourceImport } from './NativeSourceImport';
 /**
  * 原生书源接入层：把执行器接到应用的请求层、选择器引擎和数据模型上。
  * 原生书源只经过这里，不进入任何脚本引擎。
@@ -93,7 +94,8 @@ class NativeHost implements NativeRunnerHost {
     webRequest.webJsMaxAttempts = Math.max(4, request.webTimeout * 2);
     webRequest.readTimeout = request.webTimeout * 1000;
     webRequest.debugContext = this.debugContext || undefined;
-    return await this.http.execute(webRequest);
+    if (this.maxResponseBytes > 0) webRequest.maxResponseBytes = this.maxResponseBytes;
+    return await analyzeUrl.fetchPrepared(webRequest);
   }
 
   async fetch(request: NativeRequest): Promise<NativeResponse> {
@@ -162,11 +164,20 @@ class NativeHost implements NativeRunnerHost {
   }
 
   cacheGet(key: string): NativeValue {
-    return NativeSourceService.cacheGet(this.source.bookSourceUrl, key);
+    return NativeSourceService.cacheGet(this.source.bookSourceUrl, this.cacheKey(key));
   }
 
   cachePut(key: string, value: NativeValue, ttlSeconds: number): void {
-    NativeSourceService.cachePut(this.source.bookSourceUrl, key, value, ttlSeconds);
+    NativeSourceService.cachePut(this.source.bookSourceUrl, this.cacheKey(key), value, ttlSeconds);
+  }
+
+  private cacheKey(key: string): string {
+    // Pure definition conversion must not reuse values from another definition or login session.
+    const login = NativeSourceService.loginSpec(this.source);
+    const cookies = login?.url ? CookieStore.forSource(this.source.bookSourceUrl).getCookie(login.url) : '';
+    const context = JSON.stringify([this.source.jsLib, this.source.header, this.source.loginHeader,
+      this.source.loginInfo, cookies]);
+    return digestHashHex('SHA256', context) + '\n' + key;
   }
 
   crypto(name: string, args: NativeValue[]): NativeValue {
@@ -174,7 +185,7 @@ class NativeHost implements NativeRunnerHost {
   }
 
   cookie(url: string, name: string): string {
-    return CookieStore.getCookieValue(url, name);
+    return CookieStore.forSource(this.source.bookSourceUrl).getCookieValue(url, name);
   }
 }
 
@@ -226,29 +237,7 @@ export class NativeSourceService {
 
   /** 把定义写进书源记录。existing 传入时保留排序、置顶、已选变量等本地状态。 */
   static toBookSource(definition: NativeSourceDefinition, existing: BookSource | null = null): BookSource {
-    const source = existing ? Object.assign(new BookSource(), existing) : new BookSource();
-    source.bookSourceUrl = definition.url;
-    source.bookSourceName = definition.name;
-    source.bookSourceGroup = definition.group || '';
-    source.bookSourceComment = definition.comment || '';
-    source.bookSourceType = NativeSourceSpec.bookSourceType(definition);
-    source.concurrentRate = definition.rate || '';
-    source.header = definition.headers && Object.keys(definition.headers).length > 0 ?
-      JSON.stringify(definition.headers) : '';
-    source.jsLib = NativeSourceSpec.pack(definition);
-    source.searchUrl = definition.search ? NativeSourceSpec.SEARCH_MARKER : '';
-    source.exploreUrl = definition.explore ? NativeSourceSpec.EXPLORE_MARKER : '';
-    // 登录页地址放进 loginUrl，列表上的登录状态角标和 Cookie 同步沿用现有逻辑。
-    source.loginUrl = definition.login && definition.login.url ? definition.login.url : '';
-    source.loginUi = '';
-    source.loginCheckJs = '';
-    source.rawSourceJson = '';
-    source.bookUrlPattern = '';
-    if (!existing) {
-      source.enabled = definition.enabled !== false;
-      source.enabledExplore = definition.enabledExplore !== false;
-    }
-    source.lastUpdateTime = Date.now();
+    const source = NativeSourceImport.toBookSource(definition, existing);
     NativeSourceService.clearCache(source.bookSourceUrl);
     return source;
   }
@@ -312,8 +301,8 @@ export class NativeSourceService {
     if (NativeSourceService.credential(source).token) return true;
     if (!login.url) return false;
     const names = Array.isArray(login.cookies) ? login.cookies : [];
-    if (names.length === 0) return !!CookieStore.getCookie(login.url);
-    return names.every((name: string): boolean => !!CookieStore.getCookieValue(login.url, String(name)));
+    if (names.length === 0) return !!CookieStore.forSource(source.bookSourceUrl).getCookie(login.url);
+    return names.every((name: string): boolean => !!CookieStore.forSource(source.bookSourceUrl).getCookieValue(login.url, String(name)));
   }
 
   static logout(source: BookSource): void {
@@ -322,12 +311,12 @@ export class NativeSourceService {
     NativeSourceService.clearCache(source.bookSourceUrl);
     if (!login.url) return;
     const origin = /^https?:\/\/[^/?#]+/i.exec(login.url);
-    CookieStore.removeCookie(login.url);
+    CookieStore.forSource(source.bookSourceUrl).removeCookie(login.url);
     if (origin) {
-      CookieStore.removeCookie(origin[0]);
-      CookieStore.removeCookie(`${origin[0]}/`);
+      CookieStore.forSource(source.bookSourceUrl).removeCookie(origin[0]);
+      CookieStore.forSource(source.bookSourceUrl).removeCookie(`${origin[0]}/`);
     }
-    CookieStore.saveAsync();
+    CookieStore.forSource(source.bookSourceUrl).saveAsync();
     NativeSourceService.clearCache(source.bookSourceUrl);
   }
 
@@ -506,9 +495,9 @@ export class NativeSourceService {
   }
 
   static async search(source: BookSource, http: HttpClient, keyword: string, cancelled: () => boolean,
-    maxResponseBytes: number = 0, debugContext: BookSourceDebugContext | null = null): Promise<SearchBook[]> {
+    maxResponseBytes: number = 0, debugContext: BookSourceDebugContext | null = null, page: number = 1): Promise<SearchBook[]> {
     const records = await NativeSourceService.runner(source, http, cancelled, maxResponseBytes, debugContext)
-      .search(keyword, 1);
+      .search(keyword, page);
     return records.map((record: NativeBookRecord): SearchBook => NativeSourceService.toSearchBook(source, record));
   }
 

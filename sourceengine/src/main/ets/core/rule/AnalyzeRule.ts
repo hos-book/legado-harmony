@@ -27,6 +27,7 @@ export class AnalyzeRule {
     this.baseUrl = baseUrl;
     this.ctx = ctx || new RuleContext();
     this.js = new JsRuntime();
+    this.js.setVar('source.bookSourceUrl', this.ctx.get('source.bookSourceUrl') || this.ctx.get('bookSourceUrl'));
     this.js.setVar('baseUrl', baseUrl);
     this.scriptEngine = new ScriptEngine(this.js);
   }
@@ -37,7 +38,7 @@ export class AnalyzeRule {
     this.js.setVar('baseUrl', u);
     return this;
   }
-  setContext(ctx: RuleContext): AnalyzeRule { this.ctx = ctx; return this; }
+  setContext(ctx: RuleContext): AnalyzeRule { this.ctx = ctx; this.js.setVar('source.bookSourceUrl',ctx.get('source.bookSourceUrl') || ctx.get('bookSourceUrl')); return this; }
   getContext(): RuleContext { return this.ctx; }
   setJsVar(k: string, v: string): AnalyzeRule { this.js.setVar(k, v); return this; }
   setQuickJsObservation(observation: QuickJsObservationContext | null): AnalyzeRule {

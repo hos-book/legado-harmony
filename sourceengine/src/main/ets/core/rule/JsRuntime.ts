@@ -372,8 +372,8 @@ export class JsRuntime {
     const setRe = /\bcookie\.setCookie\(\s*([^,]+)\s*,\s*([^)]+)\)/g;
     let setMatch: RegExpExecArray | null;
     while ((setMatch = setRe.exec(expr)) !== null) {
-      CookieStore.setCookies(this.evalStr(setMatch[1]), this.evalStr(setMatch[2]));
-      CookieStore.saveAsync();
+      CookieStore.forSource(this.getVar('source.bookSourceUrl') || this.getVar('bookSourceUrl')).setCookies(this.evalStr(setMatch[1]), this.evalStr(setMatch[2]));
+      CookieStore.forSource(this.getVar('source.bookSourceUrl') || this.getVar('bookSourceUrl')).saveAsync();
     }
 
     const removeRe = /\bcookie\.removeCookie\(\s*([^)]+)\)/g;
@@ -382,7 +382,7 @@ export class JsRuntime {
       const args = this.splitArgs(removeMatch[1]);
       const url = this.evalStr(args[0] || '');
       const name = args.length > 1 ? this.evalStr(args[1]) : '';
-      CookieStore.removeCookie(url, name || undefined);
+      CookieStore.forSource(this.getVar('source.bookSourceUrl') || this.getVar('bookSourceUrl')).removeCookie(url, name || undefined);
     }
   }
 
@@ -706,7 +706,7 @@ export class JsRuntime {
     const args = this.splitArgs(rawArgs);
     const url = this.evalStr(args[0] || '');
     const name = args.length > 1 ? this.evalStr(args[1]) : '';
-    return name ? CookieStore.getCookieValue(url, name) : CookieStore.getCookie(url);
+    return name ? CookieStore.forSource(this.getVar('source.bookSourceUrl') || this.getVar('bookSourceUrl')).getCookieValue(url, name) : CookieStore.forSource(this.getVar('source.bookSourceUrl') || this.getVar('bookSourceUrl')).getCookie(url);
   }
 
   private putVar(rawArgs: string): string {

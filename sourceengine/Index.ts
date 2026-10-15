@@ -304,3 +304,9 @@ export {
 export {
   sleepMs
 } from './src/main/ets/utils/Sleep';
+
+export {
+  SourceCookieJar, SourceRateWaiter, SourceRequestScheduler, SourceScriptExecutor,
+  SourceWebSession, SourceExecutionState, SourceDiagnostics, SourceEngineHostAdapter, SourceEngineHost
+} from './src/main/ets/core/host/SourceEngineHost';
+export { NativeSourceImport } from './src/main/ets/core/nativesource/NativeSourceImport';
