@@ -12,6 +12,7 @@ import { SourceRuntimeStage } from './BookSourceRuntimeRouter';
 import { BookSourceLoginCrypto } from './BookSourceLoginCrypto';
 import { BookSourceExecutionJournal, BookSourceHostActionKind } from './BookSourceExecutionJournal';
 import { BookSourceDebugContext } from './BookSourceDebugModels';
+import { SourceScriptNotice } from './SourceScriptNotice';
 
 export class StageWebRuntimeRequest {
   source: BookSource = new BookSource();
@@ -436,6 +437,7 @@ export class BookSourceStageWebRuntime {
     this.activeTask = task;
     this.executeTask(task.request)
       .then((value: StageWebRuntimeResult): void => {
+        SourceScriptNotice.emit(task.request.stage, task.request.source.bookSourceName, value.toastMessage);
         if (task.resolve) task.resolve(value);
       })
       .catch((error: Error): void => {
@@ -695,7 +697,7 @@ export class BookSourceStageWebRuntime {
     const content = request.contextContent && request.contextContent !== request.content ?
       request.contextContent : request.content;
     const analyzer = new AnalyzeRule(content || '', request.baseUrl || '',
-      this.buildStringRuleContext(request));
+      this.buildStringRuleContext(request)).setNoticeScope(request.stage, request.source.bookSourceName);
     for (const item of items) {
       if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
       const record = item as Record<string, Object>;

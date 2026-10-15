@@ -229,7 +229,7 @@ fn sign(path, ts) {
 | `name`、`url` | 书源名称与地址。`url` 是书源的唯一标识，必须以 `http://` 或 `https://` 开头 |
 | `group`、`comment` | 分组与说明 |
 | `type` | 默认媒体类型：`text`（默认）、`audio`、`comic`、`video`，见[媒体类型](#媒体类型) |
-| `rate` | 并发限制，写法与兼容书源的 `concurrentRate` 相同 |
+| `rate` | 并发限制，写法与兼容书源的 `concurrentRate` 相同。对整个书源的所有请求生效，并发抓目录页也要排队；纯数字间隔会让 N 页目录至少耗时 N × 间隔，站点不限流时不要写 |
 | `headers` | 每个请求都带的请求头 |
 | `vars` | 书源变量，见下 |
 | `lib` | 函数库，见上 |
@@ -454,7 +454,7 @@ fn sign(path, ts) {
 | `fields.isVip`、`fields.isPay` | 布尔标记 |
 | `fields.isVolume` | 为真时该元素是分卷标题，不需要 `url`。它不占章节位置，目录会把卷名显示在它后面第一章的上方 |
 | `fields.tag` | 章节附加信息，一般放更新时间 |
-| `nextUrl` | 下一页目录地址，为空或重复时停止，最多 100 页 |
+| `nextUrl` | 目录分页地址。返回一个地址表示“下一页”，逐页请求，为空或重复时停止；返回列表（或多行文本）表示“剩余全部目录页”，按列出顺序每批 4 页并发请求，不再跟随这些页自己的 `nextUrl`，已请求过的地址自动跳过。合计最多 1000 页。已知总页数时优先用列表写法，例如 `= map(range(int(data.pages)), i => '/toc?page=' + (i + 1))` |
 | `reverse` | 为 `true` 时倒序 |
 
 ### 正文 `content`
@@ -467,6 +467,7 @@ fn sign(path, ts) {
 | `images` | 图片地址列表（漫画） |
 | `audio` | 音频地址（听书） |
 | `video` | 这一集的视频流地址（如 mp4、m3u8），由应用自带的播放页播放。每次切集都会重新请求，地址带时效也没关系 |
+| `mediaError` | 可选。`audio` / `video` 求值为空时显示给用户的原因，可以读取附加请求的结果（例如「这本书没有真人录音版」）。不写或求值为空时，应用从附加请求和主请求里第一个 `code` 不为 0 的响应归纳原因（如「音频接口返回失败：ILLEGAL_ACCESS（code=110）」） |
 | `mediaHeaders` | 取漫画图片和音频时附带的请求头，例如 `{ "Referer": "{{server}}/" }`。只接受 Referer、Origin、User-Agent、Accept、Accept-Language、Authorization、Cookie、Range。对正文文字里夹带的插图和视频不生效 |
 | `imageDecode` | 漫画图片解密，见下 |
 | `fetch` | 附加请求，见下 |

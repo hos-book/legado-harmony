@@ -74,7 +74,6 @@ import {
 } from '../core/reader/ReaderV2Document';
 import { ReaderV2LayoutInput, ReaderV2LayoutSnapshot } from '../core/reader/ReaderV2LayoutSnapshot';
 import {
-  ReaderV2CommentIconSegment,
   ReaderV2PageFragment,
   ReaderV2PageLayout,
   ReaderV2PageSet,
@@ -82,6 +81,7 @@ import {
 } from '../core/reader/ReaderV2PageLayout';
 import { ReaderV2PaginationSession, ReaderV2Paginator } from '../core/reader/ReaderV2Paginator';
 import { ReaderV2Color, ReaderV2SpanStyleRange } from '../core/reader/ReaderV2Style';
+import { ReaderCommentBubbleStyle, ReaderCommentBubbleStyles } from '../core/reader/ReaderCommentBubble';
 import { ReaderV2PageNodeController } from '../core/reader/ReaderV2RenderNode';
 import { ReaderV2GestureRouter, ReaderV2TapResult } from '../core/reader/ReaderV2Interaction';
 import { ReaderOpenTrace } from '../utils/ReaderOpenTrace';
@@ -765,6 +765,8 @@ struct ReadBookPage {
     this.applyReaderScreenOrientation();
     this.applyReaderScreenTimeout();
     this.shortcutRoutingActive = true;
+    // onNewWant 先于 onPageShow 写入快捷项，那时 @Watch 因页面隐藏而忽略，这里补一次。
+    this.openPendingShortcut();
     const returningFromReplaceRules = this.returningFromReaderReplaceRules;
     this.returningFromReaderReplaceRules = false;
     if (!this.readerEntryInitializing && !returningFromBackground) {
@@ -2377,7 +2379,9 @@ struct ReadBookPage {
             .onlineImageAccess(true)
             .imageAccess(true)
             .darkMode(this.appDarkMode ? WebDarkMode.On : WebDarkMode.Off)
-            .forceDarkAccess(this.appDarkMode)
+            // 强制深色在部分 ArkWeb 版本上不生效，生效时又会和下面的注入样式叠加反色；
+            // 没有深色样式的评论页统一由 syncReaderCommentPanelWebTheme 注入反色样式。
+            .forceDarkAccess(false)
             .onControllerAttached(() => {
               this.readerCommentPanelHtmlLoaded = false;
               setTimeout(() => this.loadReaderCommentPanelHtmlIfNeeded(), 0);
@@ -5019,6 +5023,9 @@ struct ReadBookPage {
     }
     this.pageViewWidth = width;
     this.pageViewHeight = height;
+    // 旧视口下还在排的相邻章节会话作废，下面按新视口重新预排。
+    this.adjacentPaginationPreloadSerial++;
+    this.previousPaginationPreloadSerial++;
     this.eyeTurn().refreshForViewport();
     AppStorage.setOrCreate<number>('readerLastPageViewWidth', width);
     AppStorage.setOrCreate<number>('readerLastPageViewHeight', height);
@@ -10953,16 +10960,18 @@ struct ReadBookPage {
   }
 
   private resumeReaderPaginationWorkAfterPageShow(): void {
-    if (!this.pagedContentText || !this.hasPagedReaderArea()) {
-      this.preloadReaderContentLater();
-      return;
-    }
+    this.resumeCurrentReaderPaginationCompletion();
+    this.preloadReaderContentLater();
+  }
+
+  // 本章分页会话的后台补排链在页面不可见、被别的会话顶掉序号时会静默退出，这里按当前键重新挂上。
+  resumeCurrentReaderPaginationCompletion(): void {
+    if (!this.pagedContentText || !this.hasPagedReaderArea()) return;
     const key = this.buildReaderPaginationCacheKey(this.currentChapterIndex, this.pagedContentText);
     const result = this.readerPaginationCache.get(key);
     if (result && !result.complete) {
       this.scheduleReaderPaginationCompletion(this.currentChapterIndex, key, result);
     }
-    this.preloadReaderContentLater();
   }
 
   @Builder
@@ -12182,9 +12191,18 @@ struct ReadBookPage {
       this.readerCommentPanelReadyTimerId = -1;
       if (!this.showReaderCommentPanel || serial !== this.readerCommentPanelLoadSerial) return;
       this.syncReaderCommentPanelWebTheme().finally(() => {
-        if (this.showReaderCommentPanel && serial === this.readerCommentPanelLoadSerial) {
+        if (!this.showReaderCommentPanel || serial !== this.readerCommentPanelLoadSerial) return;
+        // runJavaScript 返回时反色样式刚插入，网页还要两三帧才画出深色；立刻撤掉加载层会闪出原来的白底。
+        if (!this.appDarkMode) {
           this.readerCommentPanelLoading = false;
+          return;
         }
+        this.readerCommentPanelReadyTimerId = setTimeout(() => {
+          this.readerCommentPanelReadyTimerId = -1;
+          if (this.showReaderCommentPanel && serial === this.readerCommentPanelLoadSerial) {
+            this.readerCommentPanelLoading = false;
+          }
+        }, 160);
       });
     }, Math.max(0, delayMs));
   }
@@ -12215,18 +12233,38 @@ struct ReadBookPage {
     if (!this.showReaderCommentPanel || !this.readerCommentPanelUrl) return;
     const scheme = this.appDarkMode ? 'dark' : 'light';
     const dark = this.appDarkMode ? 'true' : 'false';
+    // 评论页多半是书源服务器的网页，未必写了深色样式。应用为深色而页面底色仍是浅色时，
+    // 注入整页反色（图片再反回来）；切回浅色或页面自己支持深色时移除。
     const script = `(function(){var scheme='${scheme}',dark=${dark};` +
       `var root=document.documentElement;if(root){root.style.colorScheme=scheme;` +
       `root.setAttribute('data-legado-color-scheme',scheme);}` +
       `var body=document.body,themeToggle=document.getElementById('themeToggle');` +
-      `if(body&&themeToggle&&typeof window.toggleCmtTheme==='function'){` +
+      `var ownToggle=!!(body&&themeToggle&&typeof window.toggleCmtTheme==='function');` +
+      `if(ownToggle){` +
       `var pageDark=body.classList.contains('dark');` +
       `if(pageDark!==dark){window.toggleCmtTheme();}` +
       `try{window.localStorage.setItem('cmt-theme',scheme);}catch(_){}` +
       `body.classList.toggle('dark',dark);}` +
       `window.__LEGADO_COLOR_SCHEME__=scheme;window.__LEGADO_DARK_MODE__=dark;` +
       `window.dispatchEvent(new CustomEvent('legado-color-scheme-change',` +
-      `{detail:{colorScheme:scheme,dark:dark}}));return scheme;})()`;
+      `{detail:{colorScheme:scheme,dark:dark}}));` +
+      `var fallbackId='legado-dark-fallback',fallback=document.getElementById(fallbackId);` +
+      `if(fallback&&fallback.parentNode){fallback.parentNode.removeChild(fallback);}` +
+      `if(dark&&!ownToggle&&root){` +
+      `var rgb=function(value){var m=/rgba?\\(([^)]+)\\)/.exec(value||'');if(!m)return null;` +
+      `var p=m[1].split(',').map(function(v){return parseFloat(v);});` +
+      `if(p.length>3&&p[3]<0.5)return null;return (0.2126*p[0]+0.7152*p[1]+0.0722*p[2])/255;};` +
+      `var bodyStyle=body?getComputedStyle(body):null,rootStyle=getComputedStyle(root);` +
+      `var bg=bodyStyle?rgb(bodyStyle.backgroundColor):null;if(bg===null)bg=rgb(rootStyle.backgroundColor);` +
+      `var light=bg!==null?bg>0.6:((rgb((bodyStyle||rootStyle).color)||0)<0.4);` +
+      `if(light){root.style.colorScheme='light';` +
+      `var css='html{filter:invert(.92) hue-rotate(180deg)!important;}' +` +
+      `'img,video,picture,canvas,iframe,embed,object,[style*="background-image"]' +` +
+      `'{filter:invert(1) hue-rotate(180deg)!important;}';` +
+      `if(rgb(rootStyle.backgroundColor)===null)css+='html{background-color:#fff!important;}';` +
+      `fallback=document.createElement('style');fallback.id=fallbackId;fallback.textContent=css;` +
+      `(document.head||root).appendChild(fallback);}}` +
+      `return scheme;})()`;
     try {
       await this.readerCommentPanelController.runJavaScript(script);
     } catch (error) {
@@ -12438,11 +12476,22 @@ struct ReadBookPage {
     return ReaderRegexBubbleStyleResolver.resolve(null, context);
   }
 
-  /** Bubble fill at 60% of its opacity, so a pill reads one step quieter than a dialogue bubble beside it. */
-  readerCommentThemeFill(theme: ReaderResolvedRegexEmphasis): number {
-    const fill = ReaderV2Color.parse(theme.backgroundColor, this.isReaderThemeDark() ? 0xFF263A50 : 0xFFD9ECFF);
-    const alpha = Math.round(((fill >>> 24) & 0xFF) * 0.6);
-    return ((alpha << 24) | (fill & 0x00FFFFFF)) >>> 0;
+  /**
+   * Comment / 本章说 bubbles take their shape, colours and ornament from the theme's emphasis-bubble style. Colours
+   * and the corner style a source sets explicitly still win.
+   */
+  readerCommentBubbleStyle(): ReaderCommentBubbleStyle {
+    const style = ReaderCommentBubbleStyles.resolve(this.readerCommentBubbleTheme().bubbleStyleId,
+      this.isReaderThemeDark());
+    const sourceTextColor = this.readerSourceColorSetting('段评字体颜色', '');
+    const sourceFillColor = this.readerSourceColorSetting('段评填充颜色', '');
+    if (sourceTextColor) style.text = ReaderV2Color.parse(sourceTextColor, style.text);
+    if (sourceFillColor) {
+      style.fill = ReaderV2Color.parse(sourceFillColor, style.fill);
+      style.stroke = 0;
+    }
+    if (this.readerSourceSettingValue('段评样式')) style.radiusPx = this.toMeasurePx(this.readerV2CommentRadius());
+    return style;
   }
 
   getRegexTextSlices(text: string): ReadTextSlice[] {
@@ -12717,20 +12766,10 @@ struct ReadBookPage {
     input.bodyFontFamily = this.getBodyReaderFontFamily();
     input.titleFontFamily = this.getTitleReaderFontFamily();
     input.textColor = ReaderV2Color.parse(this.getTextColor(), 0xFF202124);
-    // Comment / 本章说 pills follow the theme's emphasis bubble; colours the source sets explicitly still win.
-    const commentTheme = this.readerCommentBubbleTheme();
-    const sourceCommentTextColor = this.readerSourceColorSetting('段评字体颜色', '');
-    const sourceCommentFillColor = this.readerSourceColorSetting('段评填充颜色', '');
-    input.commentTextColor = ReaderV2Color.parse(sourceCommentTextColor || commentTheme.textColor,
-      this.isReaderThemeDark() ? 0xFFB8D6FF : 0xFF2A6FCC);
-    input.commentBackgroundColor = sourceCommentFillColor ?
-      ReaderV2Color.parse(sourceCommentFillColor, this.isReaderThemeDark() ? 0x66263A50 : 0x142A6FCC) :
-      this.readerCommentThemeFill(commentTheme);
-    input.commentIconStyleId = commentTheme.bubbleStyleId;
+    input.commentBubble = this.readerCommentBubbleStyle();
     const commentLarge = this.readerSourceSettingEnabled('气泡增大');
     input.commentFontSizePx = this.toMeasureFontPx(commentLarge ?
       Math.max(12, this.readerFontSize - 2) : Math.max(10, this.readerFontSize - 5));
-    input.commentRadiusPx = this.toMeasurePx(this.readerV2CommentRadius());
     input.commentHitSlopXPx = this.toMeasurePx(this.readerSourceActionHitSlopX);
     input.commentHitSlopYPx = this.toMeasurePx(this.readerSourceActionHitSlopY);
     input.commentsEnabled = true;
@@ -12743,8 +12782,7 @@ struct ReadBookPage {
   }
 
   readerV2CommentRadius(): number {
-    const style = this.readerSourceSettingValue('段评样式');
-    if (!style) return ThemeRuntime.bubbleRadius();
+    const style = this.readerSourceSettingValue('段评样式') || '0';
     if (style === '3' || style === '4') return 3;
     if (style === '0' || style === '2') return 6;
     return 9;
@@ -13171,10 +13209,6 @@ struct ReadBookPage {
           }, (segment: ReaderV2RegexBubbleSegment) =>
             `reader_v2_bubble_caps_${segment.styleId}_${segment.rect.left}_${segment.rect.top}_` +
             `${segment.rect.right}_${segment.rect.bottom}_${segment.leading ? 'l' : ''}${segment.trailing ? 'r' : ''}`)
-          ForEach(fragment.commentIconSegments, (icon: ReaderV2CommentIconSegment) => {
-            this.readerV2CommentIcon(icon)
-          }, (icon: ReaderV2CommentIconSegment) =>
-            `reader_v2_comment_icon_${icon.styleId}_${icon.rect.left}_${icon.rect.top}`)
         }, (fragment: ReaderV2PageFragment) => `reader_v2_bubble_fragment_${fragment.blockId}_` +
           `${fragment.displayStart}_${fragment.displayEnd}`)
     }
@@ -13182,16 +13216,6 @@ struct ReadBookPage {
     .height('100%')
     .zIndex(1)
     .hitTestBehavior(HitTestMode.None)
-  }
-
-  @Builder
-  readerV2CommentIcon(icon: ReaderV2CommentIconSegment) {
-    Image(ThemeAssetRegistry.commentBubbleIcon(icon.styleId))
-      .width(px2vp(icon.rect.width()))
-      .height(px2vp(icon.rect.height()))
-      .objectFit(ImageFit.Contain)
-      .position({ x: px2vp(icon.rect.left), y: px2vp(icon.rect.top) })
-      .hitTestBehavior(HitTestMode.None)
   }
 
   @Builder
@@ -14016,8 +14040,7 @@ struct ReadBookPage {
     if (!layout) return READER_V2_NO_FRAGMENTS;
     let result: ReaderV2PageFragment[] = READER_V2_NO_FRAGMENTS;
     for (const fragment of layout.fragments) {
-      if (imagesOnly ? !fragment.imageSource :
-        fragment.regexBubbleSegments.length === 0 && fragment.commentIconSegments.length === 0) continue;
+      if (imagesOnly ? !fragment.imageSource : fragment.regexBubbleSegments.length === 0) continue;
       if (result === READER_V2_NO_FRAGMENTS) result = [];
       result.push(fragment);
     }
@@ -14159,10 +14182,6 @@ struct ReadBookPage {
         }, (segment: ReaderV2RegexBubbleSegment) =>
           `reader_continuous_v2_caps_${segment.styleId}_${segment.rect.left}_${segment.rect.top}_` +
           `${segment.rect.right}_${segment.rect.bottom}_${segment.leading ? 'l' : ''}${segment.trailing ? 'r' : ''}`)
-        ForEach(fragment.commentIconSegments, (icon: ReaderV2CommentIconSegment) => {
-          this.readerV2CommentIcon(icon)
-        }, (icon: ReaderV2CommentIconSegment) =>
-          `reader_continuous_v2_comment_icon_${icon.styleId}_${icon.rect.left}_${icon.rect.top}`)
       }, (fragment: ReaderV2PageFragment) => `reader_continuous_v2_bubble_${fragment.blockId}_` +
         `${fragment.displayStart}_${fragment.displayEnd}`)
       ForEach(this.readerContinuousV2TtsRects(index, text, this.readerV2TtsPaintVersion),
@@ -14314,11 +14333,17 @@ struct ReadBookPage {
       `${source.length}_${this.hashText(source)}`;
   }
 
+  // 预排版去重键用的视口部分。完成的预排版会一直占着去重标记，键里不带视口的话，进出小窗/分屏后
+  // 相邻章节永远不会按新视口重新预排，跨章时只能现排，页数从 1/1 开始一路跳。
+  readerPaginationViewportIdentity(): string {
+    return `${this.pageViewWidth}_${this.getReaderPaginationViewportHeight()}_${this.isLandscapeDoublePageActive()}`;
+  }
+
   readerTypographyCacheIdentity(): string {
     const regexIdentity = `${this.readerRegexFontEnabled}_${this.readerRegexFontRulesRaw}_` +
       `${this.readerRegexFontPattern}_${this.readerRegexFontMode}_${this.readerRegexFontFamily}_` +
       `${this.readerRegexFontSize}_${this.readerRegexShadowColor}_${this.themeRevision}_` +
-      `${this.themeRegexEmphasisMode()}_${this.themeRegexBubbleStyleId()}_reader_action_layout_v6`;
+      `${this.themeRegexEmphasisMode()}_${this.themeRegexBubbleStyleId()}_reader_action_layout_v7`;
     return `${this.readerFontSize}_${this.readerLetterSpacing}_${this.readerTextAlign}_${this.readerLineHeight}_${this.readerParagraphSpacing}_` +
       `${this.keepParagraphIndent}_` +
       `${this.readerMarginLeft}_${this.readerMarginRight}_${this.readerMarginTop}_${this.readerMarginBottom}_` +
@@ -14464,6 +14489,10 @@ struct ReadBookPage {
           this.publishCurrentReaderPagination(result);
           this.persistReaderPagination(chapterIndex, key, result);
           this.updateReaderComicPaginationProgress(chapterIndex, result);
+          if (!this.isPageTurning && this.pageTurnQueue.hasPendingForward()) {
+            // 章末等排版的那次向后翻页（见 runPageTurnAnimation）。
+            setTimeout(() => this.runQueuedPageTurnLater(), 0);
+          }
           return;
         }
         this.updateReaderComicPaginationProgress(chapterIndex, result);
@@ -14572,7 +14601,9 @@ struct ReadBookPage {
   isReaderPaginationInteractionBusy(): boolean {
     const deferredPreviousTurn = this.pageTurnQueue.hasPendingBackward() &&
       this.currentPageIndex <= 0 && !this.isPreviousChapterTurnReady();
-    const queuedTurnBusy = !deferredPreviousTurn && this.pendingRestorePageIndex < 0 &&
+    // 章末等本章排完的向后翻页同理：排队中的翻页正是在等这条补排链，不能反过来把它卡住。
+    const deferredNextTurn = this.pageTurnQueue.hasPendingForward() && this.isForwardChapterTurnWaitingForPagination();
+    const queuedTurnBusy = !deferredPreviousTurn && !deferredNextTurn && this.pendingRestorePageIndex < 0 &&
       this.pageTurnQueue.hasPending();
     return this.showReaderCommentPanel || this.isPageTurning || this.readerPanActive || this.readerTouchActive ||
       this.readerComicPanMoved || this.readerComicBoundaryDirection !== 0 || this.readerComicChapterSwitching ||
@@ -14669,6 +14700,7 @@ struct ReadBookPage {
     const targetChapterIndex = sourceChapterIndex + 1;
     const sessionBookUrl = this.book?.bookUrl || this.bookUrl;
     const activeKey = `${sessionBookUrl}_${sourceChapterIndex}_${targetChapterIndex}_` +
+      `${this.readerPaginationViewportIdentity()}_` +
       `${this.readerTypographyCacheIdentity()}_${this.readerParagraphCommentPaginationIdentity()}`;
     if (this.adjacentPaginationPreloadActiveSerial === this.adjacentPaginationPreloadSerial &&
       this.adjacentPaginationPreloadActiveKey === activeKey) return;
@@ -14777,6 +14809,7 @@ struct ReadBookPage {
     if (!this.readerPreloadEnabled && !this.readerEngine().hasCachedContent(targetChapterIndex)) return;
     const sessionBookUrl = this.book?.bookUrl || this.bookUrl;
     const activeKey = `${sessionBookUrl}_${sourceChapterIndex}_${targetChapterIndex}_` +
+      `${this.readerPaginationViewportIdentity()}_` +
       `${this.readerTypographyCacheIdentity()}_${this.readerParagraphCommentPaginationIdentity()}`;
     // Page 2/3 hooks can request the same previous chapter repeatedly. Restarting the retained V2 session on
     // every local turn prevented it from ever reaching the real last page before the user swiped backwards.
@@ -15090,6 +15123,13 @@ struct ReadBookPage {
     return true;
   }
 
+  // 已在本章已知的最后一页，下一章存在，但本章分页还没排完（进出小窗、分屏等视口变化后要整章重排）。
+  // 只读状态，不像 canTurnPage 那样顺手补排。
+  isForwardChapterTurnWaitingForPagination(): boolean {
+    return this.currentPageIndex + this.getReaderPageTurnStep() >= this.contentPages.length &&
+      this.currentChapterIndex < this.chapters.length - 1 && !this.isCurrentReaderPaginationComplete();
+  }
+
   isPreviousChapterTurnReady(): boolean {
     if (!this.hasPagedReaderArea() || this.currentChapterIndex <= 0) return true;
     if (!this.isCurrentReaderEngineBook()) return false;
@@ -15153,8 +15193,15 @@ struct ReadBookPage {
 
   ensureCurrentReaderPaginationAhead(requiredPageCount: number): void {
     if (!this.pagedContentText) return;
-    const result = this.currentReaderPaginationResult();
-    if (!result) return;
+    let result = this.currentReaderPaginationResult();
+    if (!result) {
+      if (!this.hasPagedReaderArea()) return;
+      // 当前键下没有本章的分页会话（被相邻章节挤出缓存，或分页键在页面不可见时变了却没重排）。
+      // 不补建的话本章永远不算排完，章末向后翻页会被一直静默拒绝。新会话在后台排完后才替换可见页面。
+      console.warn(`[ReaderPagination] 本章分页会话缺失，重建 chapter=${this.currentChapterIndex} ` +
+        `page=${this.currentPageIndex}/${this.contentPages.length}`);
+      result = this.getOrCreateReaderPagination(this.currentChapterIndex, this.pagedContentText);
+    }
     if (!result.complete && result.pages.length < requiredPageCount) {
       // Normally the idle worker stays well ahead. This is only a boundary fallback for exceptionally fast input.
       this.appendReaderPaginationBatch(result, this.currentChapterIndex,
@@ -15346,6 +15393,14 @@ struct ReadBookPage {
       return;
     }
     if (!this.canTurnPage(direction)) {
+      if (direction > 0 && this.isForwardChapterTurnWaitingForPagination()) {
+        // 章末向后翻页要等本章排完才知道是不是真的最后一页。先记下这次翻页，确保后台补排链在跑，
+        // 排完时 scheduleReaderPaginationCompletion 会接着执行；以前这里直接丢弃，章末怎么点都没反应。
+        this.resetSlidePageEffect();
+        this.enqueueReaderPageTurn(direction, style, releaseVelocity);
+        this.resumeCurrentReaderPaginationCompletion();
+        return;
+      }
       this.pageTurnQueue.reset();
       this.resetSlidePageEffect();
       if (direction > 0 && this.chapters.length > 0 &&
@@ -15354,6 +15409,10 @@ struct ReadBookPage {
         HdsFeedback.showToast('本书已阅读完成');
       }
       return;
+    }
+    if (direction < 0 && this.pageTurnQueue.hasPendingForward()) {
+      // 用户已经往回翻了，章末那次等排版的向后翻页作废，免得排完后突然自己翻一页。
+      this.pageTurnQueue.reset();
     }
     const turnRequestStartedAt = Date.now();
     const resumeMirroredTtsAfterTurn = this.isMirroringActiveTtsForCurrentBook();
