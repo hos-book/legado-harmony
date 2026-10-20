@@ -12,7 +12,6 @@ import { ImmersiveMaterialSurface } from './ImmersiveMaterialSurface';
 const PANEL_CONTROL_SIZE: number = 40;
 const SECONDARY_TIMER: string = 'timer';
 const SECONDARY_SPEED: string = 'speed';
-const SECONDARY_VOICE: string = 'voice';
 const SECONDARY_CATALOG: string = 'catalog';
 const SECONDARY_STOP: string = 'stop';
 
@@ -45,6 +44,9 @@ export struct ReaderTtsPlayerPanel {
   @Prop hostPlaying: boolean = false;
   @Prop hostStatusText: string = '';
   @Prop hostBusy: boolean = false;
+  @Prop hostVoiceTitles: string[] = [];
+  @Prop hostVoiceIndex: number = 0;
+  onSelectHostVoice: (index: number) => void = () => {};
 
   @StorageLink('globalTtsPaused') globalTtsPaused: boolean = false;
   @StorageLink('globalTtsBookName') globalTtsBookName: string = '';
@@ -70,6 +72,7 @@ export struct ReaderTtsPlayerPanel {
   @StorageLink('globalTtsStatusText') globalTtsStatusText: string = '';
   @StorageLink('globalTtsBusy') globalTtsBusy: boolean = false;
   @State optionsPanel: number = 0;
+  @State audioVoiceMenuRevision: number = 0;
   private textScroller: ListScroller = new ListScroller();
 
   aboutToAppear(): void {
@@ -105,7 +108,7 @@ export struct ReaderTtsPlayerPanel {
             this.readingCard()
           }
 
-          if (this.statusText()) {
+          if (!this.isAudio() && this.statusText()) {
             this.statusLine()
           }
 
@@ -257,6 +260,15 @@ export struct ReaderTtsPlayerPanel {
       .layoutWeight(1)
       .width('100%')
       .scrollBar(BarState.Off)
+
+      if (this.statusText()) {
+        this.statusLine()
+      }
+
+      Row() {
+        this.audioVoiceSelect()
+      }
+      .width('100%')
     }
     .layoutWeight(1)
     .width('100%')
@@ -458,15 +470,12 @@ export struct ReaderTtsPlayerPanel {
     })
   }
 
-  /** 底部一排：定时、倍速、音色（听书）、目录、停止；开启的选项用主题色，停止用警示色。 */
+  /** 底部一排：定时、倍速、目录、停止；音色统一使用内容下方的整行下拉框。 */
   @Builder
   secondaryActions() {
     Row() {
       this.secondaryItem(SECONDARY_TIMER)
       this.secondaryItem(SECONDARY_SPEED)
-      if (this.isAudio()) {
-        this.secondaryItem(SECONDARY_VOICE)
-      }
       this.secondaryItem(SECONDARY_CATALOG)
       this.secondaryItem(SECONDARY_STOP)
     }
@@ -627,6 +636,104 @@ export struct ReaderTtsPlayerPanel {
   }
 
   @Builder
+  audioVoiceSelect() {
+    if (deviceInfo.sdkApiVersion >= 26) {
+      // The API 26 Select paints its own component surface, so the speaker mark has to
+      // sit inside that surface instead of beside it, matching the shelf sort chip.
+      Stack({ alignContent: Alignment.Start }) {
+        this.audioVoiceSelectControl(34, ThemeRuntime.softFillColor(this.darkMode))
+        SymbolGlyph($r('sys.symbol.speaker_wave_3'))
+          .fontSize(17)
+          .fontColor([this.accentColor])
+          .width(22)
+          .margin({ left: AppSpacing.LG })
+          .hitTestBehavior(HitTestMode.None)
+      }
+      .layoutWeight(1)
+      .width('100%')
+      .height(44)
+    } else {
+      Row({ space: AppSpacing.MD }) {
+        SymbolGlyph($r('sys.symbol.speaker_wave_3'))
+          .fontSize(17)
+          .fontColor([this.accentColor])
+          .width(24)
+        this.audioVoiceSelectControl(0, Color.Transparent)
+      }
+      .layoutWeight(1)
+      .width('100%')
+      .height(44)
+      .padding({ left: AppSpacing.LG, right: AppSpacing.MD })
+      .borderRadius(ThemeRuntime.mediumRadius())
+      .backgroundColor(ThemeRuntime.softFillColor(this.darkMode))
+      .border({ width: ThemeRuntime.glassBorderWidth('button'),
+        color: ThemeRuntime.glassBorderColor(this.darkMode, 'button') })
+    }
+  }
+
+  @Builder
+  audioVoiceSelectControl(leadingInset: number, surfaceColor: ResourceColor) {
+    Select(this.audioVoiceOptions())
+      .id(`shared_audio_voice_${this.globalTtsVoiceRevision}_${this.audioVoiceMenuRevision}_${this.audioVoiceSelectedIndex()}`)
+      .selected(this.audioVoiceSelectedIndex())
+      .value(this.hostAudioPage ? (this.hostVoiceTitles[this.hostVoiceIndex] || '默认') : this.globalTtsVoiceCode)
+      .font({ size: AppFontSize.BODY })
+      .fontColor(this.primaryTextColor)
+      // The API 26 branch fills its Stack by width; inside the legacy Row the
+      // layoutWeight owns the main axis and this width is ignored, so both
+      // branches can share one definition.
+      .width('100%')
+      .layoutWeight(1)
+      .height(44)
+      .padding({ left: leadingInset, right: 0 })
+      .backgroundColor(surfaceColor)
+      .borderRadius(ThemeRuntime.mediumRadius())
+      .border({ width: 0 })
+      .optionBgColor(Color.Transparent)
+      .divider(null)
+      .optionFontColor(this.primaryTextColor)
+      .selectedOptionFontColor(this.accentColor)
+      .selectedOptionBgColor(ThemeRuntime.accentSurfaceColor(this.darkMode))
+      // This menu floats over the page image, so it needs a genuinely frosted
+      // surface: the opaque card color used by the settings dropdowns hides
+      // the API 26 menu material completely, and the translucent tint alone
+      // reads as see-through. Keep the translucent dropdown tint used by every
+      // other menu (so menuSystemMaterial can frost the page behind it) and add
+      // an explicit component blur so the frost also works on devices where the
+      // immersive menu material is unavailable.
+      .menuBackgroundColor(ThemeRuntime.dropdownPanelColor(this.darkMode, ''))
+      .menuBackgroundBlurStyle(ThemeRuntime.glassEnabled() ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+      .attributeModifier(ImmersiveMaterialRuntime.selectMenuModifier())
+      .onSelect((index: number) => this.selectAudioVoiceOption(index))
+  }
+
+  audioVoiceOptions(): SelectOption[] {
+    const options = this.audioVoiceTitles().map((title: string): SelectOption => ({ value: title }));
+    options.push({ value: '自定义音色代码…' });
+    return options;
+  }
+
+  selectAudioVoiceOption(index: number): void {
+    if (index === this.audioVoiceTitles().length) {
+      // 仅重设原生控件的当前值，不通过 ForEach 销毁、重建菜单节点。
+      this.audioVoiceMenuRevision++;
+      this.onOpenVoice();
+    } else if (this.hostAudioPage) {
+      this.onSelectHostVoice(index);
+    } else {
+      ReaderTtsFloatingSession.selectTtsVoice(index);
+    }
+  }
+
+  audioVoiceTitles(): string[] {
+    return this.hostAudioPage ? this.hostVoiceTitles : ReaderTtsFloatingSession.ttsVoiceTitles();
+  }
+
+  audioVoiceSelectedIndex(): number {
+    return this.hostAudioPage ? this.hostVoiceIndex : ReaderTtsFloatingSession.ttsVoiceIndex();
+  }
+
+  @Builder
   audioProgress() {
     Column({ space: AppSpacing.XXS }) {
       Slider({ value: this.globalTtsAudioPositionMs, min: 0,
@@ -702,7 +809,6 @@ export struct ReaderTtsPlayerPanel {
   secondaryIcon(kind: string): Resource {
     if (kind === SECONDARY_TIMER) return $r('sys.symbol.timer');
     if (kind === SECONDARY_SPEED) return $r('sys.symbol.hourglass');
-    if (kind === SECONDARY_VOICE) return $r('sys.symbol.speaker_wave_3');
     if (kind === SECONDARY_CATALOG) return $r('sys.symbol.list_bullet');
     return $r('sys.symbol.stop_circle');
   }
@@ -713,7 +819,6 @@ export struct ReaderTtsPlayerPanel {
         `${Math.max(1, Math.ceil(this.globalTtsTimerRemainingSeconds / 60))}分` : '定时';
     }
     if (kind === SECONDARY_SPEED) return `${this.globalTtsSpeed.toFixed(1)}x`;
-    if (kind === SECONDARY_VOICE) return this.globalTtsVoiceCode ? `音色 ${this.globalTtsVoiceCode}` : '音色';
     if (kind === SECONDARY_CATALOG) return '目录';
     return '停止';
   }
@@ -735,8 +840,6 @@ export struct ReaderTtsPlayerPanel {
       this.optionsPanel = this.optionsPanel === 1 ? 0 : 1;
     } else if (kind === SECONDARY_SPEED) {
       this.optionsPanel = this.optionsPanel === 2 ? 0 : 2;
-    } else if (kind === SECONDARY_VOICE) {
-      this.onOpenVoice();
     } else if (kind === SECONDARY_CATALOG) {
       this.onOpenCatalog();
     } else {
