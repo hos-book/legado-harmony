@@ -15,13 +15,14 @@
 
 ## 测试方法
 
-应用内提供三种验证手段，建议按顺序使用：
+应用内提供以下验证手段，建议先调试单源，再批量校验与实际验收：
 
 | 手段 | 入口 | 用途 |
 | --- | --- | --- |
 | 单书源调试 | 书源管理 → 操作菜单 → 调试，或书源编辑页 | 按搜索、发现、详情、目录、正文或全链路单独运行，查看每一步的请求、规则匹配数、输出预览和错误。 |
 | 批量校验 | 书源管理 → 校验 | “搜索能力”模式快速检查搜索；“发现/阅读链路”模式走完发现、详情、目录和正文抽样。 |
 | 应用内验收 | 搜索、发现、阅读页 | 按书源开发文档的[应用内验收清单](https://github.com/wip3l/harmony-book-source-engine/blob/main/docs/book-source-development.md#应用内验收清单)逐项确认。 |
+| 后台脚本线程验证 | 其他设置 → 兼容与诊断 → 脚本引擎迁移 | 检查原生 QuickJS 后台线程的响应、超时取消、并发及 JS 函数库用例；不验证实际网站链路。 |
 
 调试和校验的细节见书源开发文档的[单书源调试](https://github.com/wip3l/harmony-book-source-engine/blob/main/docs/book-source-development.md#单书源调试)和[批量书源校验状态](https://github.com/wip3l/harmony-book-source-engine/blob/main/docs/book-source-development.md#批量书源校验状态)。
 
@@ -29,6 +30,18 @@
 
 - 修改并保存书源后，该源的发现缓存会立即失效，不需要等待缓存过期。
 - 校验通过只说明抽样链路可用，不能代替登录、付费章节、漫画和有声书等场景的人工验收。
+
+原生书源新增 `js` / `script` 时，还需检查返回值与字段规则是否匹配、目录/正文是否由脚本完成分页，以及登录、按钮、动态选项和网页验证。搜索与发现中的 `browser.verify` 应提示“去验证”；完成后重新发起请求。兼容书源的“书源脚本回归测试”和迁移开关不控制原生 JS。
+
+从本仓库根目录运行相关内核回归：
+
+```powershell
+node --experimental-strip-types harmony-book-source-engine/scripts/native-source-check.mjs
+node --experimental-strip-types harmony-book-source-engine/scripts/native-js-check.mjs
+node --experimental-strip-types harmony-book-source-engine/scripts/native-script-check.mjs
+```
+
+这些检查在 Node 替身中运行，不连接真实内容站点，也不能代替真机 QuickJS 与界面操作验收。
 
 ## 提交问题时
 

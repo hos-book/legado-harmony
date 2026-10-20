@@ -11,11 +11,18 @@
 > 本项目不内置、不托管、不分发小说正文、章节、封面、付费资源或书源订阅。应用仅处理用户自行导入且具备合法使用权限的书源规则与本地文件。使用前请确认内容授权、目标站点协议及所在地法律法规要求。
 
 <p align="center">
-  <img src="docs/images/app-intro-01.png" width="19%" alt="应用介绍 1" />
-  <img src="docs/images/app-intro-02.png" width="19%" alt="应用介绍 2" />
-  <img src="docs/images/app-intro-03.png" width="19%" alt="应用介绍 3" />
-  <img src="docs/images/app-intro-04.png" width="19%" alt="应用介绍 4" />
-  <img src="docs/images/app-intro-05.png" width="19%" alt="应用介绍 5" />
+  <a href="docs/images/app-intro-01.png"><img src="docs/images/app-intro-01.png" width="19%" alt="书架：小说、漫画、有声书与视频统一管理" /></a>
+  <a href="docs/images/app-intro-02.png"><img src="docs/images/app-intro-02.png" width="19%" alt="搜索：多书源搜索与分类结果" /></a>
+  <a href="docs/images/app-intro-03.png"><img src="docs/images/app-intro-03.png" width="19%" alt="发现：频道、分类与榜单" /></a>
+  <a href="docs/images/app-intro-04.png"><img src="docs/images/app-intro-04.png" width="19%" alt="详情：书籍信息与目录" /></a>
+  <a href="docs/images/app-intro-05.png"><img src="docs/images/app-intro-05.png" width="19%" alt="段评：阅读中的评论气泡与面板" /></a>
+</p>
+<p align="center">
+  <a href="docs/images/app-intro-06.png"><img src="docs/images/app-intro-06.png" width="19%" alt="翻页：仿真与 3D 仿真阅读" /></a>
+  <a href="docs/images/app-intro-07.png"><img src="docs/images/app-intro-07.png" width="19%" alt="漫画：条漫与单页阅读" /></a>
+  <a href="docs/images/app-intro-08.png"><img src="docs/images/app-intro-08.png" width="19%" alt="朗读：音色、逐句高亮与后台播放" /></a>
+  <a href="docs/images/app-intro-09.png"><img src="docs/images/app-intro-09.png" width="19%" alt="媒体：有声书与视频播放" /></a>
+  <a href="docs/images/app-intro-10.png"><img src="docs/images/app-intro-10.png" width="19%" alt="主题：封面、启动页与阅读配色" /></a>
 </p>
 
 | 项目 | 信息 |
@@ -44,7 +51,8 @@
 ### 书架与本地书籍
 
 - 统一管理普通书、漫画、有声书和视频：继续阅读、分组、排序、置顶、换源和批量操作，封面角标区分类型。
-- 书架顶部按类型分类（全部、小说、漫画、有声书、视频，只显示有书的类型），可按来源（网络/本地）和状态（已完结/连载中）多选筛选；分组从标题下拉切换。
+- 书架顶部按类型分类（全部、小说、漫画、有声书、视频，只显示有书的类型），分组从标题下拉切换。筛选支持来源、连载状态、阅读进度、有更新、最近阅读时间、标签和书源；同组多选取并集，不同组取交集。
+- 从筛选菜单打开“搜索书架”，按书名、作者、书源或标签查找已有书籍，可与分类、分组和筛选条件叠加。
 - 隐私书架：从最后一个分类继续左滑进入，可设密码，隐私书籍不出现在桌面卡片、最近阅读快捷方式、局域网阅读和阅读统计中。
 - 平铺、紧凑、宽松三种布局，可显示封面、简介、标签、阅读进度、最新章节和更新时间。
 - 「我的 → 书籍导入」统一提供本地导入、OPDS 书库和 WebDAV 服务三个入口；本地导入可一次多选 TXT/EPUB，使用应用自身的文件访问能力，不扫描公共目录。
@@ -56,7 +64,7 @@
 
 - 对已启用书源并发搜索、增量出结果，支持停止、精准搜索、作者匹配、分组筛选和单书源搜索；单个书源超过 60 秒未完成即放弃并让出并发槽。
 - 搜索结果按小说、漫画、有声、视频分段查看，各类型分别计结果上限；同名结果可聚合，且不跨类型合并。
-- 发现页读取书源的站点、分类和榜单入口：书源从弹出层选择（可搜索、按分组切换），模式与站内分类合并为一条频道栏，筛选条件收进筛选按钮；首次打开后常驻，切换页签回来不重新加载，结果带缓存。
+- 发现页读取书源的站点、分类和榜单入口：书源从弹出层选择（可搜索、按分组切换），模式与站内分类合并为一条频道栏，筛选条件收进筛选按钮。分类较多时可打开“全部分类”面板，按分组浏览或搜索，记住每个书源的最近使用和上次停留分类；首次打开后常驻，切换页签回来不重新加载，结果带缓存。
 - 搜索页未搜索时直接列出搜索历史；搜索与发现结果可切换列表或平铺（平铺列数随宽度自适应），列表行以模糊封面作底。书架、发现、搜索列表上滑时收起标题行。
 - 详情页以封面氛围背景展示书籍信息，图标操作行提供加入书架、目录/选集、换源和同作者；可直接查看完整目录、点击作者搜索、换源（并发数跟随搜索并发数设置）；有声书直接进入听书页。未入库的书也能临时试读，退出时再决定是否加入书架。
 
@@ -65,6 +73,7 @@
 - 从 URL、剪贴板、本地 JSON/文本文件或系统“打开方式”导入；可一次选择多个文件，合并后统一勾选写入，读取失败的文件单独跳过并提示文件名。
 - 导入保留标准字段、原始 JSON 和未知字段，导出时合并，尽量保持与 Android 阅读的往返完整性。
 - 编辑、分组、锁定、导出、删除，以及批量启用/禁用搜索与发现；列表可按全部、原生、兼容筛选。原生书源有独立的编辑页和“书源设置”页（变量、音色、账号登录、动作按钮），书源管理和发现页的长按菜单都能进入。
+- 原生书源支持 QuickJS 函数库与后台脚本阶段，可组合请求、保存变量和登录凭据、弹出提示、刷新发现缓存，以及打开网页验证。设置页支持脚本提供动态选项、按钮执行状态和多步登录。
 - 两种校验模式（搜索能力、发现/阅读链路），结果区分“通过、失败、无结果、需要验证、暂时异常”，只有明确失败项可批量禁用或删除。
 - 单书源调试页可按搜索、发现、详情、目录、正文或全链路运行，查看请求、规则匹配、输出和错误，并导出脱敏报告。
 - 支持动态 `loginUi`、登录检测 JS、网页验证、同站点 Cookie 同步和登录状态持久化；证书错误可由用户按精确主机选择信任。
@@ -78,6 +87,7 @@
 - 字号、行距、段距、边距、对齐方式、自定义字体、背景、深色模式、沉浸式布局和段首缩进。
 - 书签、章节评论/段评、替换净化（可直接导入 Android 阅读与 YueDu 导出的规则，Java 正则自动转换；每条规则带超时保护，超时跳过并保留原文）。
 - EPUB 图文混排：随文图片与整页插图分别排版；图片加载时原位显示加载动画，本地插图解码后保留在内存，翻页与跨章不再闪白。
+- 网络正文插图先下载到本地缓存再显示，避免远程图片地址直接交给图片组件后持续空白。
 - 分卷第一章在章节名前显示卷名小标题和卷首插图；正文首行与章节名重复时自动去掉。
 - 滚动阅读与漫画条漫的列表接上相邻章节，滚过章节边界自动切换当前章，无需上滑加载。
 - 漫画专用阅读界面：条漫或单页翻页（从左往右、从右往左，宽屏自动双页），阅读方式按书保存；画面设置可调背景、页间距、适应宽度/屏幕、信息条和预加载张数；双击与双指缩放；长按图片保存、分享或重新加载，图片地址过期时自动重新获取本话。支持携带书源请求头、Cookie 或解密规则的远程图片。
@@ -130,11 +140,19 @@
 | 登录 | 动态登录面板、`startBrowserAwait`、登录页脚本、验证码跳转和跨地址 Cookie 同步。 |
 | 内容类型 | 普通文本、漫画、有声书识别；正文中的显式网页操作、图片和媒体标记；`data:` / Base64 地址。 |
 
-以上是兼容书源（Android 阅读格式）的能力，这种格式已过时，仅为存量书源保留。新书源请使用开源轻页自己的原生书源格式：不执行 JavaScript，用声明式规则和自定表达式语言编写，支持视频播放页、听书音色列表、分卷、目录与正文的列表分页并发抓取（正文最多 200 页）、详情与正文的附加请求、账号密码登录（可发验证码）、书源设置页动作按钮、漫画图片解密和加密封面解密（`coverDecode`）。
+以上是兼容书源（Android 阅读格式）的能力，这种格式已过时，仅为存量书源保留。新书源推荐使用开源轻页的原生格式：声明式规则、表达式与 `lib` 函数库负责常规解析，顶层 `js` 提供 JavaScript 函数；需要按程序组织请求时，在相应阶段声明 `script: "函数名"`。
+
+| 原生 JS 用法 | 执行方式与边界 |
+| --- | --- |
+| 表达式调用 `js` 函数 | 在 `= sign(...)` 或 `{{sign(...)}}` 中按名调用，用于签名、解密和数据整理。主线程同步 QuickJS，只做计算，不支持异步返回、网络或状态写入；单次调用最多 300 ms。 |
+| 阶段 `script` | 搜索、发现、详情、目录、正文可交给后台 QuickJS；通过 `http`、`vars`、`cache`、`cookie`、`login` 等受控接口执行请求和保存状态，返回值继续交给选择器与字段规则处理。默认每次最多 30 个请求、计算 2 秒、总时长 60 秒。 |
+| 设置与交互 | `login.script`、`login.sendCode.script`、`actions[].script` 和 `vars[].optionsScript` 使用同一后台脚本能力。轻页已接入 `ui.toast`、`ui.refreshExplore`、`browser.verify/open`；搜索和发现中的验证需由用户点“去验证”后重试。 |
+
+原生书源还支持视频播放页、听书音色列表、分卷、目录与正文的声明式列表分页并发抓取（正文最多 200 页）、附加请求、漫画图片解密和加密封面解密（`coverDecode`）。目录或正文启用 `script` 后，分页由脚本处理，不再跟随 `nextUrl`。原生 JS 与兼容书源的 QuickJS 影子/灰度迁移是两条独立路径，无需开启迁移模式才能使用。
 
 书源规则由书源解析内核 [harmony-book-source-engine](https://github.com/wip3l/harmony-book-source-engine) 实现，开源轻页与简听共用同一份规则定义。
 
-两种格式的完整字段、请求格式、解析语法、调试方法和迁移建议见 [书源开发文档](https://github.com/wip3l/harmony-book-source-engine/blob/main/docs/book-source-development.md)：第一部分是原生书源，第二部分是兼容书源。
+两种格式的完整字段、请求格式、解析语法、调试方法和迁移建议见子模块中的[公共书源开发文档](harmony-book-source-engine/docs/book-source-development.md)：第一部分是原生书源，第二部分是兼容书源。轻页的接入情况与 JS 开发路线见[本项目书源开发入口](docs/book-source-development.md)；本地文档随当前内核提交固定，在线主分支可能更新得更快。
 
 ## 项目结构
 
@@ -182,6 +200,8 @@ legado-harmony/
 | `JavaRegexCompat` / `BudgetedRegexReplace` | Android 正则方言转换（含 `\w`、`\d`、`\b` 的 Unicode 语义），以及带时间预算的净化替换。 |
 | `BookSourceRuntimeRouter` / `BookSourceStageWebRuntime` / `BookSourceHeaderRuntime` | 复杂 JavaScript 的分阶段运行、受控桥接与 `@js:` 动态请求头。 |
 | `QuickJsScriptRuntime` / `QuickJsRuntimeStatus` | QuickJS 自检、资源限制和纯表达式影子比对。 |
+| `NativeJsLibrary` / `NativeScriptSessions` / `NativeScriptHost`（内核） | 原生书源 JS 函数库、后台脚本会话、宿主接口与执行预算。 |
+| `AppSourceInteraction` / `NativeSourceSettings` | 原生脚本提示、发现缓存失效、网页验证，以及设置页动态选项、登录与动作按钮。 |
 | `WebBookFetchRuntime` | 书源显式声明的 `webView: true` / `webJs` 页面抓取。 |
 | `BookSourceLoginWebRuntime` | 登录面板、WebView、Cookie、加密和状态持久化。 |
 | `ReaderV2Document` / `ReaderV2Paginator` / `ReaderV2RenderNode` / `ReaderV2Interaction` | 阅读器 V2 文档建模、增量分页、原生选区、动作命中和朗读高亮。 |
@@ -201,6 +221,8 @@ legado-harmony/
 | `BookCoverCache` | 封面下载、缓存与并发限制；带 `SourceCoverUrl` 标记的加密封面经内核 `SourceCoverLoader` 解密后落盘，界面在解密完成前显示占位，局域网阅读转发的也是解密后的图片。 |
 | `AppDatabase` | 书源、书籍、章节、搜索历史、分页缓存和本地配置；启动时通过 `BookSourceRuntimeStore.install` 注入内核，内核本身不访问数据库。 |
 | `NativeSourceRunner` / `NativeSourceService`（内核） | 原生书源各阶段执行与请求层接入；轻页不安装内核的可选宿主端口 `SourceEngineHost`。 |
+
+轻页在启动时独立安装 `NativeSourceInteraction` 界面处理器；它与上表中的可选 `SourceEngineHost` 适配器不是同一个接入点。
 
 ## 开发与构建
 
@@ -292,6 +314,16 @@ node --experimental-strip-types scripts/audio-rule-support-check.mjs
 
 书源解析内核的回归检查在子模块里（HTTP 认证、页码候选、原生书源、请求支撑、脚本运行时、宿主端口等），用法见 [harmony-book-source-engine/README.md](harmony-book-source-engine/README.md)：
 
+原生 JS 相关检查可从本仓库根目录运行：
+
+```powershell
+node --experimental-strip-types harmony-book-source-engine/scripts/native-source-check.mjs
+node --experimental-strip-types harmony-book-source-engine/scripts/native-js-check.mjs
+node --experimental-strip-types harmony-book-source-engine/scripts/native-script-check.mjs
+```
+
+这些脚本使用 Node 替身验证规则和宿主协议；真机 QuickJS、线程响应和网页交互还应在“其他设置 → 兼容与诊断 → 脚本引擎迁移 → 后台脚本线程验证”及实际书源链路中检查。
+
 ```bash
 for f in harmony-book-source-engine/scripts/*-check.mjs; do node --experimental-strip-types "$f" || exit 1; done
 ```
@@ -339,7 +371,8 @@ for f in harmony-book-source-engine/scripts/*-check.mjs; do node --experimental-
 ## 已知限制
 
 - 书源兼容层不是完整的 Android Java/WebView 环境；分阶段 ArkWeb 只开放受控桥接，`fetch`、`XMLHttpRequest`、`WebSocket`、任意 Java 导入、文件、进程、反射和系统组件不会自动可用。
-- QuickJS 只接受无主机副作用的短纯表达式，默认影子校验；选择器、网络、Cookie、书源变量和复杂阶段脚本仍由现有解析器或 ArkWeb 执行。
+- 兼容书源的 QuickJS 迁移只接管符合条件的短纯表达式，默认影子校验。原生书源的 `js` / `script` 已直接使用 QuickJS；网络和状态操作必须经后台脚本的受控宿主接口，不能照搬 Android `java.*` 或浏览器 `fetch`。
+- 原生脚本不能绘制任意设置界面，也不能刷新已打开的目录或正文；`keep` 仅允许详情阶段写书籍变量。脚本阶段的请求次数、返回数据和运行时间均有上限，详见公共开发文档。
 - 规则单次求值最多保留 50000 条结果、JSON 遍历最多 200000 个节点，超出部分被截断。
 - 替换净化规则单条最多执行 3 秒、整章 8 秒，超时的规则会被跳过；`\w`、`\d`、`\b` 按 Android 的 Unicode 语义匹配，与浏览器中的 ASCII 语义不同。
 - `webView: true` 仅支持书源明确给出的 HTTP(S) GET/POST 地址，不承诺自动通过交互式验证码、证书错误、浏览器指纹或反自动化挑战。
@@ -352,7 +385,7 @@ for f in harmony-book-source-engine/scripts/*-check.mjs; do node --experimental-
 ## 文档
 
 - [使用说明书](docs/manual/index.html)：面向用户的功能说明，纯静态页面，可直接部署；应用内「我的 → 帮助」加载的是同一份内容（`entry/src/main/resources/rawfile/manual`），修改时两处需同步。
-- [书源开发文档](https://github.com/wip3l/harmony-book-source-engine/blob/main/docs/book-source-development.md)：第一部分原生书源（推荐），第二部分兼容书源（已过时）。在内核仓库统一维护，本仓库 [docs/book-source-development.md](docs/book-source-development.md) 只保留入口与轻页的宿主说明
+- [书源开发入口](docs/book-source-development.md)：轻页的宿主接入、原生 JS 开发路线与排错；完整规范在子模块的[公共书源开发文档](harmony-book-source-engine/docs/book-source-development.md)统一维护。
 - [书源内核接入说明](https://github.com/wip3l/harmony-book-source-engine/blob/main/sourceengine/README.md)：HAR 入口、宿主必须接入的部分与可选宿主端口
 - [主题开发指南](docs/theme-development.md)
 
