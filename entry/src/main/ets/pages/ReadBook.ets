@@ -98,6 +98,7 @@ import { ReaderCacheDialogContent } from '../components/reader/ReaderCacheDialog
 import { ReaderTxtCharsetDialogContent, ReaderTxtCharsets } from '../components/reader/ReaderTxtCharsetDialogContent';
 import { ReaderLayoutElementSettingsPanel } from '../components/reader/ReaderLayoutElementSettingsPanel';
 import { ReaderTocPanel, ReaderTocPanelController } from '../components/reader/ReaderTocPanel';
+import { ReaderFloatingMaterialBar } from '../components/reader/ReaderFloatingMaterialBar';
 import { ReaderContinuousDataSource, ReaderScrollItem, ReaderScrollSegment } from '../core/reader/ReaderDataSources';
 import { ReaderComicImageItem, ReaderComicView } from '../components/reader/ReaderComicView';
 import { ReaderComicPagedController, ReaderComicPagedView } from '../components/reader/ReaderComicPagedView';
@@ -2760,7 +2761,7 @@ struct ReadBookPage {
 
       if (this.showMenu && !this.showToc && !this.showSettings && this.chapters.length > 0) {
         if (this.supportsReaderImmersiveMaterial()) {
-          this.readerHdsFloatingBottomMenu()
+          this.readerMaterialFloatingBottomMenu()
         } else {
           this.readerFloatingBottomMenu()
         }
@@ -2773,7 +2774,7 @@ struct ReadBookPage {
       if (this.showToc) {
         this.readerFloatingTocPanel()
         if (this.supportsReaderImmersiveMaterial()) {
-          this.readerHdsFloatingActionBar(true)
+          this.readerMaterialFloatingActionBar(true)
         }
       }
 
@@ -2783,7 +2784,7 @@ struct ReadBookPage {
           this.ttsVoiceDropdownPanel()
         }
         if (this.supportsReaderImmersiveMaterial()) {
-          this.readerHdsFloatingActionBar(false, true)
+          this.readerMaterialFloatingActionBar(false, true)
         }
       }
 
@@ -3011,18 +3012,18 @@ struct ReadBookPage {
   }
 
   supportsReaderImmersiveMaterial(): boolean {
-    return ImmersiveMaterialRuntime.supportsHdsMaterial();
+    return ImmersiveMaterialRuntime.supportsHds() || ImmersiveMaterialRuntime.supportsHdsMaterial();
   }
 
   @Builder
-  readerHdsFloatingBottomMenu() {
+  readerMaterialFloatingBottomMenu() {
     Column({ space: AppSpacing.XS }) {
       if (this.isReaderComicModeActive()) {
-        this.readerHdsChapterTabBar(true)
+        this.readerMaterialChapterBar(true)
       } else if (this.readerUseChapterQuickJump) {
-        this.readerHdsChapterTabBar()
+        this.readerMaterialChapterBar()
       }
-      this.readerHdsActionBar(false)
+      this.readerMaterialActionBar(false)
     }
     .width('100%')
     .height(this.readerBottomMenuOverlayHeight())
@@ -3037,70 +3038,89 @@ struct ReadBookPage {
   }
 
   @Builder
-  readerHdsChapterTabBar(comicPages: boolean = false) {
+  readerMaterialChapterBar(comicPages: boolean = false) {
     Stack({ alignContent: Alignment.Center }) {
-      HdsTabs({ barPosition: BarPosition.End, index: 0 }) {
-        TabContent() {
-          Column()
+      if (ImmersiveMaterialRuntime.supportsHds()) {
+        ReaderFloatingMaterialBar({
+          barWidth: this.readerFloatingBarWidth(),
+          tintColor: this.readerGlassPanelColor()
+        }) {
+          this.readerHdsProgressBarContent(comicPages)
         }
-        .height(56)
-        .tabBar(this.readerHdsProgressBarContent(comicPages))
+      } else {
+        this.readerHdsChapterTabBar(comicPages)
       }
-      .key(`reader_hds_chapter_bar_${comicPages ? 'comic' : 'chapter'}_${this.themeRevision}_` +
-        `${this.isReaderThemeDark() ? 'dark' : 'light'}`)
-      .barBackgroundColor(this.readerGlassPanelColor())
-      .barMode(BarMode.Fixed)
-      .barHeight(48)
-      .barOverlap(true)
-      .barFloatingStyle({
-        barWidth: {
-          smallWidth: this.readerFloatingBarWidth(),
-          mediumWidth: this.readerFloatingBarWidth(),
-          largeWidth: this.readerFloatingBarWidth()
-        },
-        systemMaterialEffect: {
-          materialType: ImmersiveMaterialRuntime.materialType(),
-          materialLevel: ImmersiveMaterialRuntime.materialLevel()
-        },
-        barSideMargin: 0,
-        barBottomMargin: 4,
-        gradientMask: {
-          maskColor: Color.Transparent,
-          maskHeight: 56
-        },
-        adaptToHandedness: false,
-        thermoCtrl: true,
-        barOpacity: 1
-      })
-      .scrollable(false)
-      .width('100%')
-      .height(56)
 
-      if (comicPages ? this.comicPageTooltipVisible : this.menuChapterTooltipVisible) {
-        Column({ space: AppSpacing.XXS }) {
-          Text(this.getChapterTitle(comicPages ? this.currentChapterIndex : this.getMenuChapterDisplayIndex()))
-            .fontSize(AppFontSize.CAPTION)
-            .fontColor('#FFFFFFFF')
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-          Text(comicPages ? `第 ${this.comicMenuPageIndex() + 1} / ${this.readerComicTotalPageCount()} 页` :
-            `${this.getMenuChapterDisplayIndex() + 1}/${this.chapters.length}`)
-            .fontSize(AppFontSize.CAPTION)
-            .fontColor('#CCFFFFFF')
-        }
-        .width(this.readerChapterTooltipWidth())
-        .height(44)
-        .padding({ left: 14, right: 14, top: 5, bottom: 5 })
-        .justifyContent(FlexAlign.Center)
-        .alignItems(HorizontalAlign.Center)
-        .borderRadius(22)
-        .backgroundColor(this.isReaderThemeDark() ? '#E63A3C40' : '#D94B4D52')
-        .shadow({ radius: 10, color: '#50000000', offsetX: 0, offsetY: 3 })
-        .position({ x: this.readerChapterTooltipCenteredLeft(), y: -48 })
-      }
+      this.readerChapterTooltip(comicPages)
     }
     .width('100%')
     .height(56)
+  }
+
+  @Builder
+  readerHdsChapterTabBar(comicPages: boolean) {
+    HdsTabs({ barPosition: BarPosition.End, index: 0 }) {
+      TabContent() {
+        Column()
+      }
+      .height(56)
+      .tabBar(this.readerHdsProgressBarContent(comicPages))
+    }
+    .key(`reader_hds_chapter_bar_${comicPages ? 'comic' : 'chapter'}_${this.themeRevision}_` +
+      `${this.isReaderThemeDark() ? 'dark' : 'light'}`)
+    .barBackgroundColor(this.readerGlassPanelColor())
+    .barMode(BarMode.Fixed)
+    .barHeight(48)
+    .barOverlap(true)
+    .barFloatingStyle({
+      barWidth: {
+        smallWidth: this.readerFloatingBarWidth(),
+        mediumWidth: this.readerFloatingBarWidth(),
+        largeWidth: this.readerFloatingBarWidth()
+      },
+      systemMaterialEffect: {
+        materialType: ImmersiveMaterialRuntime.materialType(),
+        materialLevel: ImmersiveMaterialRuntime.materialLevel()
+      },
+      barSideMargin: 0,
+      barBottomMargin: 4,
+      gradientMask: {
+        maskColor: Color.Transparent,
+        maskHeight: 56
+      },
+      adaptToHandedness: false,
+      thermoCtrl: true,
+      barOpacity: 1
+    })
+    .scrollable(false)
+    .width('100%')
+    .height(56)
+  }
+
+  @Builder
+  readerChapterTooltip(comicPages: boolean) {
+    if (comicPages ? this.comicPageTooltipVisible : this.menuChapterTooltipVisible) {
+      Column({ space: AppSpacing.XXS }) {
+        Text(this.getChapterTitle(comicPages ? this.currentChapterIndex : this.getMenuChapterDisplayIndex()))
+          .fontSize(AppFontSize.CAPTION)
+          .fontColor('#FFFFFFFF')
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Text(comicPages ? `第 ${this.comicMenuPageIndex() + 1} / ${this.readerComicTotalPageCount()} 页` :
+          `${this.getMenuChapterDisplayIndex() + 1}/${this.chapters.length}`)
+          .fontSize(AppFontSize.CAPTION)
+          .fontColor('#CCFFFFFF')
+      }
+      .width(this.readerChapterTooltipWidth())
+      .height(44)
+      .padding({ left: 14, right: 14, top: 5, bottom: 5 })
+      .justifyContent(FlexAlign.Center)
+      .alignItems(HorizontalAlign.Center)
+      .borderRadius(22)
+      .backgroundColor(this.isReaderThemeDark() ? '#E63A3C40' : '#D94B4D52')
+      .shadow({ radius: 10, color: '#50000000', offsetX: 0, offsetY: 3 })
+      .position({ x: this.readerChapterTooltipCenteredLeft(), y: -48 })
+    }
   }
 
   @Builder
@@ -3123,7 +3143,7 @@ struct ReadBookPage {
     .height(48)
     .padding({ left: AppSpacing.XS, right: AppSpacing.XS })
     .alignItems(VerticalAlign.Center)
-    .translate({ y: -2 })
+    .translate({ y: ImmersiveMaterialRuntime.supportsHds() ? 0 : -2 })
   }
 
   @Builder
@@ -3217,13 +3237,13 @@ struct ReadBookPage {
     .height(48)
     .padding({ left: AppSpacing.XS, right: AppSpacing.XS })
     .alignItems(VerticalAlign.Center)
-    .translate({ y: -2 })
+    .translate({ y: ImmersiveMaterialRuntime.supportsHds() ? 0 : -2 })
   }
 
   @Builder
-  readerHdsFloatingActionBar(fromToc: boolean, fromSettings: boolean = false) {
+  readerMaterialFloatingActionBar(fromToc: boolean, fromSettings: boolean = false) {
     Column() {
-      this.readerHdsActionBar(fromToc, fromSettings)
+      this.readerMaterialActionBar(fromToc, fromSettings)
     }
     .width('100%')
     .height(this.readerBottomActionOverlayHeight())
@@ -3234,6 +3254,52 @@ struct ReadBookPage {
       x: this.readerFloatingBarTranslateX(),
       y: -this.readerBottomActionOverlayHeight()
     })
+  }
+
+  @Builder
+  readerMaterialActionBar(fromToc: boolean, fromSettings: boolean = false) {
+    if (ImmersiveMaterialRuntime.supportsHds()) {
+      Stack({ alignContent: Alignment.Center }) {
+        ReaderFloatingMaterialBar({
+          barWidth: this.readerFloatingBarWidth(),
+          tintColor: this.readerGlassPanelColor()
+        }) {
+          this.readerMaterialActionBarContent(fromToc, fromSettings)
+        }
+      }
+      .width('100%')
+      .height(56)
+    } else {
+      this.readerHdsActionBar(fromToc, fromSettings)
+    }
+  }
+
+  @Builder
+  readerMaterialActionBarContent(fromToc: boolean, fromSettings: boolean) {
+    Row() {
+      ForEach([0, 1, 2], (index: number) => {
+        Stack({ alignContent: Alignment.Center }) {
+          this.readerHdsMenuItem(index === 0 ? $r('sys.symbol.list_bullet') : this.readerMenuActionIcon(index),
+            index === 0 ? fromToc :
+              fromSettings && this.settingsPanelTab === this.readerMenuActionSettingsTab(index))
+        }
+        .layoutWeight(1)
+        .height(48)
+        .accessibilityText(index === 0 ? '目录' : (index === 1 ?
+          (this.isReaderComicModeActive() ? '阅读方式' : '阅读设置') :
+          (this.isReaderComicModeActive() ? '画面设置' : '排版设置')))
+        .onClick(() => this.handleReaderHdsAction(index, this.showToc, this.showSettings))
+      }, (index: number) => `${index}`)
+
+      Stack() {
+        this.readerHdsDayNightMenuItem()
+      }
+      .layoutWeight(1)
+      .height(48)
+      .accessibilityText('切换日间或夜间模式，长按跟随系统')
+    }
+    .width('100%')
+    .height(48)
   }
 
   @Builder
@@ -3323,7 +3389,7 @@ struct ReadBookPage {
     .height(48)
     .opacity(enabled ? 1 : 0.32)
     .enabled(enabled)
-    .translate({ y: -2 })
+    .translate({ y: ImmersiveMaterialRuntime.supportsHds() ? 0 : -2 })
   }
 
   @Builder
