@@ -688,10 +688,15 @@ export class AppDatabase implements BookSourceRuntimePersistence {
       readConfig: JSON.stringify(book.readConfig),
       syncTime: book.syncTime,
       identityKey: book.identityKey,
-      pendingAddToShelf: book.pendingAddToShelf ? 1 : 0,
-      isPrivate: book.isPrivate ? 1 : 0,
-      shelfModifiedTime: book.shelfModifiedTime
+      isPrivate: book.isPrivate ? 1 : 0
     };
+    // Only insertion creates a pending trial read; removal deletes the record. A retained reader/player
+    // or background task may still save an older pending Book after the user has explicitly kept it.
+    // Such writes may update content/progress, but must never turn a shelf member back into a trial read.
+    if (!book.pendingAddToShelf) {
+      bucket.pendingAddToShelf = 0;
+      bucket.shelfModifiedTime = book.shelfModifiedTime;
+    }
 
     const predicates = new relationalStore.RdbPredicates('books');
     predicates.equalTo('bookUrl', book.bookUrl);

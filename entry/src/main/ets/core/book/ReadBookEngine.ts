@@ -73,7 +73,7 @@ export class ReadBookEngine {
     if (this.openBookTask && this.openBookTaskUrl === book.bookUrl) {
       ReaderOpenTrace.mark(book.bookUrl, 'engine-open-await-existing');
       await this.openBookTask;
-      if (this.book?.bookUrl === book.bookUrl) this.applyLatestReadingProgress(book);
+      if (this.book?.bookUrl === book.bookUrl) this.applyLatestBookState(book);
       return;
     }
     if (this.canReuseBookSession(book)) {
@@ -120,7 +120,7 @@ export class ReadBookEngine {
     try {
       ReaderOpenTrace.mark(bookUrl, 'prewarm-start');
       const preparedBook = bookHint?.bookUrl === bookUrl ? bookHint :
-        (this.getPreparedBook(bookUrl) || await appDb.getBook(bookUrl));
+        await appDb.getBook(bookUrl);
       if (!preparedBook) return;
       const preparedSource = preparedBook.origin && preparedBook.origin !== 'local' ?
         await appDb.getBookSource(preparedBook.origin) : null;
@@ -149,6 +149,8 @@ export class ReadBookEngine {
   }
 
   private async reuseBookSession(book: Book, sourceHint: BookSource | null): Promise<void> {
+    // Merge durable state before source initialization can write the retained Book back to the database.
+    this.applyLatestBookState(book);
     if (book.origin && book.origin !== 'local') {
       const latestSource = sourceHint?.bookSourceUrl === book.origin ? sourceHint :
         await appDb.getBookSource(book.origin);
@@ -159,14 +161,13 @@ export class ReadBookEngine {
         await this.initializeSourceInteractionIdentity(this.bookGeneration, this.book);
       }
     }
-    this.applyLatestReadingProgress(book);
     // External writers (shelf background caching, cache-range tasks) commit chapter content with
     // their own engine instances and never touch this retained session. Without a re-sync the
     // catalog's "已缓存" badges keep showing the state captured when this session was opened.
     await this.syncChapterCacheDates();
   }
 
-  private applyLatestReadingProgress(book: Book): void {
+  private applyLatestBookState(book: Book): void {
     this.curIdx = book.durChapterIndex;
     this.curPos = book.durChapterPos;
     if (!this.book || this.book.bookUrl !== book.bookUrl) return;
@@ -174,6 +175,11 @@ export class ReadBookEngine {
     this.book.durChapterPos = book.durChapterPos;
     this.book.durChapterTitle = book.durChapterTitle;
     this.book.durChapterTime = book.durChapterTime;
+    // Keeping a trial read updates a different Book instance on the detail page. The retained engine must
+    // adopt that shelf state as well as progress before any reader/player uses it for a full-record save.
+    this.book.pendingAddToShelf = book.pendingAddToShelf;
+    this.book.shelfModifiedTime = book.shelfModifiedTime;
+    this.book.isPrivate = book.isPrivate;
     // Page position alone is insufficient: V2 restores from the durable character offset stored in variable.
     // A retained engine session must not keep an older variable snapshot and reinterpret a saved last page as
     // page one when the reader is opened again from the retained bookshelf route.
