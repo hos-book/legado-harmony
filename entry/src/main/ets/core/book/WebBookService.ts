@@ -1518,7 +1518,7 @@ export class WebBookService {
     for (let start = 0; start < values.length; start += 4) {
       const batch = values.slice(start, start + 4);
       const paths = await Promise.all(batch.map((value: string): Promise<string> =>
-        ComicImagePipeline.materialize(this.http, source, value)));
+        ComicImagePipeline.materialize(this.http, source, value, true)));
       for (let index = 0; index < batch.length; index++) {
         resolved[batch[index]] = paths[index] || batch[index];
       }

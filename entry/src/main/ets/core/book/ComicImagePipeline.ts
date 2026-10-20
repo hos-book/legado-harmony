@@ -52,11 +52,12 @@ export class ComicImagePipeline {
     return spec;
   }
 
-  static async materialize(http: HttpClient, source: BookSource, raw: string): Promise<string> {
+  static async materialize(http: HttpClient, source: BookSource, raw: string,
+    forceLocal: boolean = false): Promise<string> {
     const spec = this.parse(raw);
     if (!/^https?:\/\//i.test(spec.url)) return spec.url || raw;
     const decodeRule = source.contentRule?.imageDecode || '';
-    if (!spec.hasOptions && !decodeRule) return spec.url;
+    if (!forceLocal && !spec.hasOptions && !decodeRule) return spec.url;
     const cacheDir = AppStorage.get<string>('appCacheDir') || '';
     if (!cacheDir) return spec.url;
     const dir = `${cacheDir}/comic_images`;
@@ -77,7 +78,10 @@ export class ComicImagePipeline {
       connectTimeout: 15000,
       readTimeout: 30000
     }, this.MAX_IMAGE_BYTES);
-    if (!response.success || response.data.length === 0) return spec.url;
+    if (!response.success || response.data.length === 0) {
+      console.warn(`[ComicImagePipeline] download failed status=${response.statusCode} error=${response.error || ''}`);
+      return spec.url;
+    }
 
     let bytes = response.data;
     if (spec.decodeAlgorithm && spec.decodeKey && !this.looksLikeImage(bytes)) {
