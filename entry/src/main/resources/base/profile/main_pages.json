@@ -23,6 +23,7 @@
     "pages/ExploreSourceSort",
     "pages/OtherSettings",
     "pages/QuickJsDiagnostics",
+    "pages/ScriptThreadProbe",
     "pages/QuickJsRegression",
     "pages/DataBackup",
     "pages/AppIconSettings",
