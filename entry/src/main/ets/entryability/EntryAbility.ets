@@ -10,6 +10,7 @@ import { AppThemeSettingsStore } from '../utils/AppThemeSettingsStore';
 import { GlassSettingsStore } from '../utils/GlassSettingsStore';
 import { AppThemeModeStore } from '../utils/AppThemeModeStore';
 import { AppIconSettingsStore } from '../utils/AppIconSettingsStore';
+import { AppIconManager } from '../utils/AppIconManager';
 import { ReaderFontBootstrap } from '../utils/ReaderFontBootstrap';
 import { ReaderSystemFontHelper } from '../utils/ReaderSystemFontHelper';
 import { TtsSettingsStore } from '../utils/TtsSettingsStore';
@@ -247,6 +248,7 @@ export default class EntryAbility extends UIAbility {
     });
     AppIconSettingsStore.load(this.context).then((settings) => {
       AppIconSettingsStore.applyToStorage(settings);
+      return AppIconManager.syncCurrentIcon(this.context);
     }).catch((e: Error) => {
       hilog.warn(0x0000, 'testTag', 'Sync app icon settings failed: %{public}s', JSON.stringify(e));
     });

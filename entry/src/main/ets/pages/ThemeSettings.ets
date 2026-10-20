@@ -1,5 +1,7 @@
 import { promptAction, router } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
+import { AppIconManager } from '../utils/AppIconManager';
+import { AppIconSettingsStore } from '../utils/AppIconSettingsStore';
 import { AppThemeSettings, AppThemeSettingsStore } from '../utils/AppThemeSettingsStore';
 import { ReaderSettingsStore } from '../utils/ReaderSettingsStore';
 import { ReaderFontBootstrap } from '../utils/ReaderFontBootstrap';
@@ -44,7 +46,7 @@ const STORE_COVER_MAX_HEIGHT = 340;
 // Detail pager: the focused pane leaves its neighbours peeking in on both sides.
 const STORE_PAGER_PANE_WIDTH_RATIO = 0.78;
 const STORE_PAGER_PANE_MAX_WIDTH = 420;
-const STORE_PAGE_FIXED_HEIGHT = 228;
+const STORE_PAGE_FIXED_HEIGHT = 256;
 const STORE_READER_PANE_LINE_HEIGHT = 17;
 const STARTUP_COPY_STRIP_HEIGHT = 40;
 const STORE_BOOK_COVER_RATIO = 46 / 64;
@@ -96,6 +98,7 @@ const MY_THEME_THUMB_COVER_HEIGHT = 76;
 class ThemeApplyChoice {
   applyLayout: boolean = false;
   applyCover: boolean = false;
+  applyIcon: boolean = false;
 
   static preserve(): ThemeApplyChoice {
     return new ThemeApplyChoice();
@@ -118,6 +121,7 @@ class ThemeListEntry {
 struct ThemeSettingsPage {
   @StorageLink('appDarkMode') appDarkMode: boolean = false;
   @StorageLink('appThemeId') appThemeId: string = AppThemeSettingsStore.DEFAULT_THEME_ID;
+  @StorageLink('appIconId') appIconId: string = AppIconSettingsStore.DEFAULT_ICON_ID;
   @StorageLink('appThemeBookCoverEnabled') themeBookCoverEnabled: boolean = false;
   @StorageLink('themeRevision') themeRevision: number = 0;
   @StorageLink('appCustomBaseThemeId') customBaseThemeId: string = AppThemeSettingsStore.DEFAULT_THEME_ID;
@@ -173,6 +177,7 @@ struct ThemeSettingsPage {
   @State applyDialogHasCover: boolean = false;
   @State applyDialogApplyLayout: boolean = false;
   @State applyDialogApplyCover: boolean = false;
+  @State applyDialogApplyIcon: boolean = true;
   private pendingApplyChoice: ((choice: ThemeApplyChoice | null) => void) | null = null;
   @State themeCatalog: ThemeCatalogItem[] = [];
   @State themeCatalogLoaded: boolean = false;
@@ -201,6 +206,9 @@ struct ThemeSettingsPage {
 
   onPageShow(): void {
     ThemeTrialManager.stopIfExpired();
+    AppIconManager.syncCurrentIcon(getContext(this)).catch((error: Error) => {
+      console.warn('同步桌面图标失败:', error);
+    });
     this.refreshCustomSchemes();
     this.syncBars();
   }
@@ -460,7 +468,21 @@ struct ThemeSettingsPage {
       ReaderFontBootstrap.applyApplicationFont(getContext(this), 'theme-settings');
       this.refreshRecentReadCard();
       this.syncBars();
-      HdsFeedback.showToast(choice.applyLayout ? `已应用「${theme.name}」主题` : `已应用「${theme.name}」主题，排版保持不变`);
+      let iconNotice = '';
+      if (choice.applyIcon) {
+        if (!AppIconManager.isSupported()) {
+          iconNotice = `；桌面图标未更换，${AppIconManager.UNSUPPORTED_MESSAGE}`;
+        } else {
+          try {
+            await AppIconManager.applyIcon(getContext(this), AppIconManager.optionForTheme(theme.id));
+          } catch (error) {
+            console.warn('应用主题桌面图标失败:', error);
+            iconNotice = '；桌面图标切换失败，可在图标设置中重试';
+          }
+        }
+      }
+      HdsFeedback.showToast((choice.applyLayout ? `已应用「${theme.name}」主题` :
+        `已应用「${theme.name}」主题，排版保持不变`) + iconNotice);
     } catch (e) {
       console.error('应用主题失败:', e);
       HdsFeedback.showToast('应用主题失败，请稍后重试');
@@ -477,6 +499,7 @@ struct ThemeSettingsPage {
     this.applyDialogApplyLayout = previous.themeApplyLayoutEnabled;
     // 主题带封面时默认勾选“应用主题封面”，不再沿用上次的选择。
     this.applyDialogApplyCover = this.applyDialogHasCover;
+    this.applyDialogApplyIcon = true;
     this.showThemeApplyDialog = true;
     return new Promise<ThemeApplyChoice | null>(
       (resolve: (choice: ThemeApplyChoice | null) => void) => {
@@ -488,6 +511,7 @@ struct ThemeSettingsPage {
     const choice = new ThemeApplyChoice();
     choice.applyLayout = this.applyDialogApplyLayout;
     choice.applyCover = this.applyDialogHasCover && this.applyDialogApplyCover;
+    choice.applyIcon = this.applyDialogApplyIcon;
     const resolve = this.pendingApplyChoice;
     this.closeThemeApplyDialog();
     if (resolve) {
@@ -856,31 +880,41 @@ struct ThemeSettingsPage {
       this.themePreviewPanes(theme, customSchemeId, true)
 
       Row({ space: AppSpacing.MD }) {
-        Text(theme.name)
-          .fontSize(AppFontSize.SUBTITLE)
-          .fontWeight(FontWeight.Bold)
-          .fontFamily(theme.typography.appFontFamily)
-          .fontColor(this.activeVariant(theme).colors.primaryTextColor)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .layoutWeight(1)
+        Image(AppIconManager.optionForTheme(theme.id).preview)
+          .width(52)
+          .height(52)
+          .borderRadius(13)
+          .objectFit(ImageFit.Cover)
+          .draggable(false)
+          .accessibilityText(`${theme.name}桌面图标预览`)
+        Column({ space: AppSpacing.XXS }) {
+          Text(theme.name)
+            .fontSize(AppFontSize.SUBTITLE)
+            .fontWeight(FontWeight.Bold)
+            .fontFamily(theme.typography.appFontFamily)
+            .fontColor(this.activeVariant(theme).colors.primaryTextColor)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          Text(theme.description)
+            .fontSize(AppFontSize.CAPTION)
+            .fontColor(this.activeVariant(theme).colors.subTextColor)
+            .maxLines(2)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
         this.storeThemeStatusPill(theme, customSchemeId)
       }
       .width('100%')
       .alignItems(VerticalAlign.Center)
 
       Row({ space: AppSpacing.MD }) {
-        Text(theme.description)
-          .fontSize(AppFontSize.CAPTION)
-          .fontColor(this.activeVariant(theme).colors.subTextColor)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .layoutWeight(1)
         Text(this.storeThemeCaption(theme))
           .fontSize(AppFontSize.CAPTION)
           .fontColor(this.activeVariant(theme).colors.accentColor)
       }
       .width('100%')
+      .justifyContent(FlexAlign.End)
       .alignItems(VerticalAlign.Center)
 
       this.storeNavInfoRow(theme)
@@ -1884,6 +1918,7 @@ struct ThemeSettingsPage {
         if (this.applyDialogHasCover) {
           this.themeApplyToggleRow('cover')
         }
+        this.themeApplyToggleRow('icon')
         Row({ space: AppSpacing.LG }) {
           Button('取消', { type: ButtonType.Normal })
             .layoutWeight(1)
@@ -1931,10 +1966,12 @@ struct ThemeSettingsPage {
   themeApplyToggleRow(category: string) {
     Row({ space: AppSpacing.LG }) {
       Column({ space: AppSpacing.XXS }) {
-        Text(category === 'layout' ? '应用主题排版' : '应用主题封面')
+        Text(category === 'layout' ? '应用主题排版' : category === 'cover' ? '应用主题封面' : '应用主题图标')
           .fontSize(AppFontSize.BODY_LARGE)
           .fontColor(this.primaryTextColor())
-        Text(category === 'layout' ? this.applyDialogLayoutHint : '书架使用主题封面与配套书籍边框')
+        Text(category === 'layout' ? this.applyDialogLayoutHint : category === 'cover' ?
+          '书架使用主题封面与配套书籍边框' : AppIconManager.isSupported() ?
+          '桌面图标同步更换为主题图标' : AppIconManager.UNSUPPORTED_MESSAGE)
           .fontSize(AppFontSize.CAPTION)
           .fontColor(this.subTextColor())
       }
@@ -1942,12 +1979,15 @@ struct ThemeSettingsPage {
       .alignItems(HorizontalAlign.Start)
 
       AdaptiveSwitch({
-        isOn: category === 'layout' ? this.applyDialogApplyLayout : this.applyDialogApplyCover,
+        isOn: category === 'layout' ? this.applyDialogApplyLayout :
+          category === 'cover' ? this.applyDialogApplyCover : this.applyDialogApplyIcon,
         onChange: (enabled: boolean) => {
           if (category === 'layout') {
             this.applyDialogApplyLayout = enabled;
-          } else {
+          } else if (category === 'cover') {
             this.applyDialogApplyCover = enabled;
+          } else {
+            this.applyDialogApplyIcon = enabled;
           }
         }
       })
@@ -2157,12 +2197,13 @@ struct ThemeSettingsPage {
   themeCard(theme: ThemePack, customSchemeId: string = '') {
     Column({ space: AppSpacing.LG }) {
       Row({ space: AppSpacing.MD }) {
-        Image(ThemeAssetRegistry.themeLogo(theme.id))
-          .width(42)
-          .height(42)
-          .borderRadius(theme.radius.medium)
-          .objectFit(ImageFit.Contain)
+        Image(AppIconManager.optionById(this.appIconId).preview)
+          .width(52)
+          .height(52)
+          .borderRadius(13)
+          .objectFit(ImageFit.Cover)
           .draggable(false)
+          .accessibilityText('当前桌面图标')
 
         Column({ space: AppSpacing.XXS }) {
           Text(theme.name)

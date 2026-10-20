@@ -408,10 +408,10 @@ for (const field of ['fontFamily', 'fontFilePath', 'fontSourceName', 'fontMode',
 }
 assert(/if \(activeFamily && AppStorage\.get<boolean>\('readerFontRegistered'\)\)\s*\{\s*return activeFamily;/.test(fontBootstrap),
   'A registered global font must take precedence over the theme application font');
-assert(themePage.includes('ThemeAssetRegistry.themeLogo(theme.id)') &&
+assert(themePage.includes('AppIconManager.optionById(this.appIconId).preview') &&
   !themePage.includes("Text('Aa')") &&
   !themePage.includes('颜色、阅读背景、正则气泡与悬浮底栏已统一'),
-  'Current theme summary must use the theme logo without the legacy description');
+  'Current theme summary must display the actual desktop icon without the legacy description');
 assert(runtime.includes('static accentSurfaceColor(darkMode: boolean)'),
   'Theme runtime does not expose a themed selected-surface color');
 assert(ttsSettingsPage.includes('? this.accentColor() : this.inputColor()') &&
@@ -519,7 +519,7 @@ const desktopThemeIcons = [
 ];
 for (const iconName of desktopThemeIcons) {
   const fileName = `ic_app_theme_${iconName}.png`;
-  const filePath = path.join(mediaRoot, fileName);
+  const filePath = path.join(root, 'AppScope/resources/base/media', fileName);
   assert(fs.existsSync(filePath), `Theme desktop icon is missing: ${fileName}`);
   const png = fs.readFileSync(filePath);
   assert(png.length < 500 * 1024, `Theme desktop icon exceeds 500 KB: ${fileName}`);

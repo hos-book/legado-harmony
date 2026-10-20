@@ -10,6 +10,17 @@
 
 `Resource`、背景图片、封面和图标由 `ThemeAssetRegistry` 按 ID 解析，不写入 Preferences。
 
+桌面图标由 `AppIconManager` 单独管理，使用 API 26 的 `bundleManager.getAlternateIcons()` /
+`setAlternateIcon()`，资源位于 `AppScope/resources/base/media`，并在 `app.json5` 的
+`alternateIcons` 中声明。新增主题时必须同时添加同名图标选项；现有图标 ID 保持稳定。
+应用主题弹窗的“应用主题图标”默认选中（自定义方案使用“自定义主题”图标），关闭则保留当前桌面图标。
+低于 API 26 的设备尝试切换时提示“该能力需要鸿蒙7及以上”，其余主题内容仍正常应用。
+主题详情显示配套图标预览，当前使用卡片显示系统实际启用的桌面图标。
+新增的 12 套主题桌面图标（含自定义主题）已使用即梦重绘为 1024×1024 PNG，直接注册到 `alternateIcons`，预览和桌面共用同一资源。
+星愿魔法来自 `dreamina` CLI，其余 11 套来自画布 CLI；模型、提示词、任务与资源标识、裁切和校验摘要记录在 `docs/theme-icon-generation.json`。
+`node scripts/generate-theme-desktop-icons.mjs` 仅生成缺少 PNG 的矢量回退资源；脚本会跳过已有 PNG 的主题，避免覆盖已重绘素材。
+运行 `node scripts/app-icon-check.mjs` 检查图标注册、主题覆盖、版本门控和切换状态。
+
 ## 目录与职责
 
 ```text

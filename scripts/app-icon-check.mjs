@@ -1,0 +1,146 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import vm from 'node:vm';
+import { stripTypeScriptTypes } from 'node:module';
+import { fileURLToPath } from 'node:url';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
+const source = (name) => stripTypeScriptTypes(
+  read(`entry/src/main/ets/${name}.ets`)
+    .replace(/^import\s+[\s\S]*?\s+from\s+['"][^'"]+['"];?\r?$/gm, '')
+    .replace(/\bexport /g, ''), { mode: 'transform' });
+let saved = 'default';
+let current = 'default';
+let enabled = '';
+let queries = 0;
+const calls = [];
+let failSet = false;
+let failSave = false;
+let deferredQuery = null;
+let deferredSet = null;
+const manifest = JSON.parse(read('AppScope/app.json5')).app.alternateIcons;
+const snapshot = () => manifest.map(({ name }, index) =>
+  ({ iconName: name, iconId: index + 1, enabled: name === enabled }));
+const sandbox = {
+  console: { warn() {} },
+  $r: (name) => name,
+  deviceInfo: { sdkApiVersion: 26 },
+  AppIconSettings: class { iconId = 'default'; },
+  AppIconSettingsStore: {
+    DEFAULT_ICON_ID: 'default',
+    normalizeIconId: (id) => id?.trim() || 'default',
+    applyToStorage: (settings) => { current = settings.iconId; },
+    save: async (_, settings) => {
+      if (failSave) throw new Error('disk unavailable');
+      saved = settings.iconId;
+    }
+  },
+  bundleManager: {
+    getAlternateIcons: async () => {
+      queries++;
+      if (deferredQuery) return deferredQuery;
+      return snapshot();
+    },
+    setAlternateIcon: async (name) => {
+      calls.push(name);
+      if (failSet) throw new Error('system rejected switch');
+      if (deferredSet) await deferredSet;
+      assert(name === '' || manifest.some((entry) => entry.name === name), 'Unregistered icon');
+      enabled = name;
+    }
+  }
+};
+vm.createContext(sandbox);
+vm.runInContext(source('theme/ThemeModels') + '\n' +
+  source('theme/BuiltinThemeRegistry') + '\n' + source('utils/AppIconManager') +
+  '\nglobalThis.manager = AppIconManager; globalThis.themes = BuiltinThemeRegistry.all();', sandbox);
+const manager = sandbox.manager;
+const option = (id) => manager.optionById(id);
+const files = fs.readdirSync(path.join(root, 'AppScope/resources/base/media'));
+const entryFiles = fs.readdirSync(path.join(root, 'entry/src/main/resources/base/media'));
+function assertResource(resource, appScopeOnly = true) {
+  const stem = resource.replace(/^\$media:|^app\.media\./, '');
+  const names = appScopeOnly ? files : [...files, ...entryFiles];
+  const file = names.find((name) => name.slice(0, name.lastIndexOf('.')) === stem);
+  assert(file, `Missing resource ${resource}`);
+  if (file.endsWith('.json')) {
+    const layered = JSON.parse(read(`AppScope/resources/base/media/${file}`))['layered-image'];
+    assertResource(layered.background);
+    assertResource(layered.foreground);
+  }
+}
+assert.equal(new Set(manifest.map((entry) => entry.name)).size, manifest.length);
+assert.equal(manager.OPTIONS.length, manifest.length + 1);
+for (const entry of manifest) {
+  assert.equal(option(entry.name).id, entry.name);
+  assertResource(entry.icon);
+}
+for (const item of manager.OPTIONS) assertResource(item.preview, false);
+for (const theme of sandbox.themes) {
+  assert.equal(manager.optionForTheme(theme.id).title, theme.name, `Theme/icon name mismatch: ${theme.id}`);
+}
+assert.equal(manager.optionForTheme('custom').title, '自定义主题');
+
+// Old devices must never call the new APIs, including the default-icon path.
+sandbox.deviceInfo.sdkApiVersion = 25;
+await manager.syncCurrentIcon({});
+await assert.rejects(manager.applyIcon({}, option('theme_cat_pipi')), /该能力需要鸿蒙7及以上/);
+await assert.rejects(manager.applyIcon({}, option('default')), /该能力需要鸿蒙7及以上/);
+assert.equal(queries, 0);
+assert.equal(calls.length, 0);
+assert.equal(current, 'default');
+sandbox.deviceInfo.sdkApiVersion = 26;
+
+await manager.applyIcon({}, option('theme_cat_pipi'));
+assert.equal(enabled, 'theme_cat_pipi');
+assert.equal(current, enabled);
+assert.equal(saved, enabled);
+failSet = true;
+await assert.rejects(manager.applyIcon({}, option('theme_warm_paper')));
+assert.equal(current, 'theme_cat_pipi', 'Failed switches must not publish the requested icon');
+failSet = false;
+await manager.applyIcon({}, option('default'));
+assert.equal(enabled, '');
+assert.equal(current, 'default');
+const callsBeforeReset = calls.length;
+await manager.applyIcon({}, option('default'));
+assert.equal(calls.length, callsBeforeReset, 'Resetting the default icon must be a no-op');
+
+enabled = 'theme_rose_letter';
+await manager.syncCurrentIcon({});
+assert.equal(current, enabled, 'System state must replace stale saved state');
+let finishQuery;
+deferredQuery = new Promise((resolve) => { finishQuery = resolve; });
+const staleSnapshot = snapshot();
+const sync = manager.syncCurrentIcon({});
+await manager.applyIcon({}, option('theme_starwish_magic'));
+finishQuery(staleSnapshot);
+await sync;
+assert.equal(current, 'theme_starwish_magic', 'A stale query must not undo a successful switch');
+deferredQuery = null;
+
+let finishSet;
+deferredSet = new Promise((resolve) => { finishSet = resolve; });
+const change = manager.applyIcon({}, option('theme_crimson_archive'));
+await assert.rejects(manager.applyIcon({}, option('theme_ink_wash')), /正在切换/);
+await manager.syncCurrentIcon({});
+finishSet();
+await change;
+assert.equal(current, 'theme_crimson_archive');
+deferredSet = null;
+failSave = true;
+await manager.applyIcon({}, option('theme_forest_mist'));
+assert.equal(current, 'theme_forest_mist', 'Successful system state survives disk failure');
+assert.equal(enabled, current);
+
+const page = read('entry/src/main/ets/pages/ThemeSettings.ets');
+assert(page.indexOf("this.themeApplyToggleRow('icon')") > page.indexOf("this.themeApplyToggleRow('cover')"));
+assert(page.includes('this.applyDialogApplyIcon = true;'));
+assert(page.includes('choice.applyIcon = this.applyDialogApplyIcon;'));
+assert(page.includes('if (choice.applyIcon)'));
+assert(page.includes('AppIconManager.optionById(this.appIconId).preview'));
+assert(page.includes('AppIconManager.optionForTheme(theme.id).preview'));
+assert(!read('entry/src/main/ets/utils/AppIconManager.ets').includes('@kit.AppGalleryKit'));
+console.log(`App icon checks passed: ${manifest.length} alternate icons, ${sandbox.themes.length} themes, API gating, failure/reset/reconciliation/concurrency paths.`);
