@@ -1036,6 +1036,7 @@ export struct BookshelfPage {
 
   /** 标题行收起量，0 为完整显示，CollapsingHeader.DISTANCE 为完全收起；类型页签不收起。 */
   @State shelfHeaderCollapse: number = 0;
+  onHeaderCollapseChange: (progress: number) => void = () => {};
   private shelfListScroller: ListScroller = new ListScroller();
   private shelfTileScroller: Scroller = new Scroller();
 
@@ -1114,6 +1115,10 @@ export struct BookshelfPage {
         .width('100%')
         .height(56 + this.statusBarHeight - this.shelfHeaderCollapseValue())
         .clip(true)
+        .onAreaChange((_oldArea: Area, newArea: Area) => {
+          this.onHeaderCollapseChange((56 + this.statusBarHeight - Number(newArea.height)) /
+            CollapsingHeader.DISTANCE);
+        })
 
         if (this.shelfSearchActive) {
           this.shelfSearchBar()

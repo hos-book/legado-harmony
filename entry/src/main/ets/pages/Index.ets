@@ -2,7 +2,7 @@ import { window } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { webview } from '@kit.ArkWeb';
 import { WebRuntimeAvailability } from '../utils/WebRuntimeAvailability';
-import { HdsTabs } from '@kit.UIDesignKit';
+import { HdsTabs, HdsTabsController } from '@kit.UIDesignKit';
 import { Book, BookChapter, BookSourceStageWebRuntime } from '@legado/sourceengine';
 import { AppDatabase } from '../model/data/AppDatabase';
 import { WebBookFetchRuntimeHost } from '../components/WebBookFetchRuntimeHost';
@@ -45,6 +45,11 @@ struct Index {
   @State hdsMaterialRenderBranch: boolean = false;
   @State bookshelfMultiSelectActive: boolean = false;
   @State bookshelfActiveGroupId: number = 0;
+  private immersiveTabsController: HdsTabsController = new HdsTabsController();
+  private compatTabsController: TabsController = new TabsController();
+  // 每页单独保存进度，常驻的搜索/发现页不能改变当前页的底栏。
+  private tabHeaderCollapseProgress: number[] = [0, 0, 0, 0];
+  @State bottomBarCollapseProgress: number = 0;
   @StorageLink('themeRevision') @Watch('onThemeRevisionChanged') themeRevision: number = 0;
   @StorageProp('statusBarHeight') statusBarHeight: number = 0;
   @StorageProp('navBarHeight') navBarHeight: number = 0;
@@ -202,6 +207,34 @@ struct Index {
   onCurrentIndexChanged(): void {
     if (this.currentIndex === 1) {
       this.exploreTabMounted = true;
+    }
+    // 书架和“我的”在切走后销毁，重新进入时标题和底栏都从展开状态开始。
+    if (this.currentIndex === 0 || this.currentIndex === 3) {
+      this.tabHeaderCollapseProgress[this.currentIndex] = 0;
+    }
+    this.syncBottomBarCollapse();
+  }
+
+  onTabHeaderCollapseChange(index: number, progress: number): void {
+    if (!Number.isFinite(progress)) return;
+    this.tabHeaderCollapseProgress[index] = Math.max(0, Math.min(1, progress));
+    if (index === this.currentIndex) {
+      this.syncBottomBarCollapse();
+    }
+  }
+
+  syncBottomBarCollapse(): void {
+    this.bottomBarCollapseProgress = this.tabHeaderCollapseProgress[this.currentIndex] || 0;
+    // 只移动导航栏，不改变内容区高度，避免列表在收起/展开时跳动。
+    if (this.supportsImmersiveTabs()) {
+      this.immersiveTabsController.setTabBarTranslate({
+        y: (56 + this.floatingBarBottomMargin() + 16) * this.bottomBarCollapseProgress
+      });
+    } else {
+      this.compatTabsController.setTabBarTranslate({
+        y: (56 + this.compatTabSafeHeight()) * this.bottomBarCollapseProgress
+      });
+      this.compatTabsController.setTabBarOpacity(1 - this.bottomBarCollapseProgress);
     }
   }
 
@@ -637,14 +670,15 @@ struct Index {
 
   @Builder
   immersiveTabs() {
-    HdsTabs({ barPosition: BarPosition.End, index: this.currentIndex }) {
+    HdsTabs({ barPosition: BarPosition.End, index: this.currentIndex, controller: this.immersiveTabsController }) {
       TabContent() {
         if (this.currentIndex === 0) {
           BookshelfPage({
             statusBarHeight: this.statusBarHeight,
             navBarHeight: this.navBarHeight,
             isBookMultiSelect: $bookshelfMultiSelectActive,
-            activeShelfGroupId: $bookshelfActiveGroupId
+            activeShelfGroupId: $bookshelfActiveGroupId,
+            onHeaderCollapseChange: (progress: number) => this.onTabHeaderCollapseChange(0, progress)
           })
             .transition(this.homeTabEnterTransition())
         } else {
@@ -660,7 +694,8 @@ struct Index {
           ExplorePage({
             statusBarHeight: this.statusBarHeight,
             navBarHeight: this.navBarHeight,
-            isActive: this.currentIndex === 1
+            isActive: this.currentIndex === 1,
+            onHeaderCollapseChange: (progress: number) => this.onTabHeaderCollapseChange(1, progress)
           })
             .transition(this.homeTabEnterTransition())
             // 常驻后切回来不会再触发出现转场，与搜索页一样用隐式动画做进入效果。
@@ -679,7 +714,8 @@ struct Index {
         SearchPage({
           statusBarHeight: this.statusBarHeight,
           navBarHeight: this.navBarHeight,
-          isActive: this.currentIndex === 2
+          isActive: this.currentIndex === 2,
+          onHeaderCollapseChange: (progress: number) => this.onTabHeaderCollapseChange(2, progress)
         })
           // 搜索页常驻不重建，没有出现转场，用透明度和位移的隐式动画做同样的进入效果。
           .opacity(this.currentIndex === 2 ? 1 : 0)
@@ -692,7 +728,11 @@ struct Index {
 
       TabContent() {
         if (this.currentIndex === 3) {
-          SettingsPage({ statusBarHeight: this.statusBarHeight, navBarHeight: this.navBarHeight })
+          SettingsPage({
+            statusBarHeight: this.statusBarHeight,
+            navBarHeight: this.navBarHeight,
+            onHeaderCollapseChange: (progress: number) => this.onTabHeaderCollapseChange(3, progress)
+          })
             .transition(this.homeTabEnterTransition())
         } else {
           BlankTabPage()
@@ -722,9 +762,10 @@ struct Index {
       },
       adaptToHandedness: true,
       thermoCtrl: true,
-      barOpacity: this.bookshelfMultiSelectActive ? 0 : 1
+      barOpacity: this.bookshelfMultiSelectActive ? 0 : 1 - this.bottomBarCollapseProgress
     })
     .scrollable(false)
+    .onAppear(() => this.syncBottomBarCollapse())
     .onChange((index: number) => {
       this.homeTabEnterOffset = index >= this.currentIndex ? Index.TAB_ENTER_DISTANCE : -Index.TAB_ENTER_DISTANCE;
       this.currentIndex = index;
@@ -738,14 +779,15 @@ struct Index {
 
   @Builder
   compatTabs() {
-    Tabs({ barPosition: BarPosition.End, index: this.currentIndex }) {
+    Tabs({ barPosition: BarPosition.End, index: this.currentIndex, controller: this.compatTabsController }) {
       TabContent() {
         if (this.currentIndex === 0) {
           BookshelfPage({
             statusBarHeight: this.statusBarHeight,
             navBarHeight: this.navBarHeight,
             isBookMultiSelect: $bookshelfMultiSelectActive,
-            activeShelfGroupId: $bookshelfActiveGroupId
+            activeShelfGroupId: $bookshelfActiveGroupId,
+            onHeaderCollapseChange: (progress: number) => this.onTabHeaderCollapseChange(0, progress)
           })
             .transition(this.homeTabEnterTransition())
         } else {
@@ -761,7 +803,8 @@ struct Index {
           ExplorePage({
             statusBarHeight: this.statusBarHeight,
             navBarHeight: this.navBarHeight,
-            isActive: this.currentIndex === 1
+            isActive: this.currentIndex === 1,
+            onHeaderCollapseChange: (progress: number) => this.onTabHeaderCollapseChange(1, progress)
           })
             .transition(this.homeTabEnterTransition())
             // 常驻后切回来不会再触发出现转场，与搜索页一样用隐式动画做进入效果。
@@ -780,7 +823,8 @@ struct Index {
         SearchPage({
           statusBarHeight: this.statusBarHeight,
           navBarHeight: this.navBarHeight,
-          isActive: this.currentIndex === 2
+          isActive: this.currentIndex === 2,
+          onHeaderCollapseChange: (progress: number) => this.onTabHeaderCollapseChange(2, progress)
         })
           // 搜索页常驻不重建，没有出现转场，用透明度和位移的隐式动画做同样的进入效果。
           .opacity(this.currentIndex === 2 ? 1 : 0)
@@ -793,7 +837,11 @@ struct Index {
 
       TabContent() {
         if (this.currentIndex === 3) {
-          SettingsPage({ statusBarHeight: this.statusBarHeight, navBarHeight: this.navBarHeight })
+          SettingsPage({
+            statusBarHeight: this.statusBarHeight,
+            navBarHeight: this.navBarHeight,
+            onHeaderCollapseChange: (progress: number) => this.onTabHeaderCollapseChange(3, progress)
+          })
             .transition(this.homeTabEnterTransition())
         } else {
           BlankTabPage()
@@ -808,6 +856,7 @@ struct Index {
     .barHeight(this.bookshelfMultiSelectActive ? 0 : 56 + this.compatTabSafeHeight())
     .barBackgroundColor(ThemeRuntime.cardColor(this.appDarkMode))
     .scrollable(false)
+    .onAppear(() => this.syncBottomBarCollapse())
     .onChange((index: number) => {
       this.homeTabEnterOffset = index >= this.currentIndex ? Index.TAB_ENTER_DISTANCE : -Index.TAB_ENTER_DISTANCE;
       this.currentIndex = index;

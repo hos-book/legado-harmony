@@ -114,6 +114,7 @@ export struct ExplorePage {
   private exploreChannelScroller: Scroller = new Scroller();
   /** 标题行收起量，0 为完整显示，CollapsingHeader.DISTANCE 为完全收起。 */
   @State exploreHeaderCollapse: number = 0;
+  onHeaderCollapseChange: (progress: number) => void = () => {};
   private hasLoaded: boolean = false;
   private hasRestoredExploreSelection: boolean = false;
   private shelfStatusVersion: number = 0;
@@ -479,6 +480,10 @@ export struct ExplorePage {
           .width('100%')
           .height(56 + this.statusBarHeight - this.exploreHeaderCollapseValue())
           .clip(true)
+          .onAreaChange((_oldArea: Area, newArea: Area) => {
+            this.onHeaderCollapseChange((56 + this.statusBarHeight - Number(newArea.height)) /
+              CollapsingHeader.DISTANCE);
+          })
 
           if (this.showsExploreChannelBar()) {
             this.exploreChannelBar()

@@ -5,12 +5,16 @@ import { ThemeRuntime } from '../../theme/ThemeRuntime';
 import { CloudSyncSettingsStore } from '../../account/CloudSyncSettingsStore';
 import { AppFontSize } from '../../theme/AppFontSize';
 import { AppSpacing } from '../../theme/AppSpacing';
+import { CollapsingHeader } from '../../utils/CollapsingHeader';
 
 /** 首页"我的"页签：设置入口列表。 */
 @Component
 export struct SettingsPage {
   @Prop statusBarHeight: number = 0;
   @Prop navBarHeight: number = 0;
+  @State headerCollapse: number = 0;
+  private scroller: Scroller = new Scroller();
+  onHeaderCollapseChange: (progress: number) => void = () => {};
   @StorageLink('appDarkMode') appDarkMode: boolean = false;
   @StorageLink('themeRevision') themeRevision: number = 0;
   @StorageLink('accountLoggedIn') accountLoggedIn: boolean = false;
@@ -24,7 +28,7 @@ export struct SettingsPage {
 
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
-      Scroll() {
+      Scroll(this.scroller) {
         Column({ space: AppSpacing.LG }) {
           Row()
             .width('100%')
@@ -108,19 +112,42 @@ export struct SettingsPage {
       .align(Alignment.TopStart)
       .backgroundColor(this.pageColor())
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
+      .onDidScroll((_xOffset: number, yOffset: number) => {
+        this.headerCollapse = CollapsingHeader.next(this.headerCollapse, yOffset,
+          this.scroller.currentOffset().yOffset);
+      })
+      .onScrollStop(() => {
+        const target = CollapsingHeader.settle(this.headerCollapse, this.scroller.currentOffset().yOffset);
+        if (target !== this.headerCollapse) {
+          animateTo({ duration: 200, curve: Curve.FastOutSlowIn }, () => {
+            this.headerCollapse = target;
+          });
+        }
+      })
 
-      Row() {
-        Text('我的')
-          .fontSize(AppFontSize.DISPLAY)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(this.primaryTextColor())
-          .layoutWeight(1)
+      Column() {
+        Row() {
+          Text('我的')
+            .fontSize(AppFontSize.DISPLAY)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.primaryTextColor())
+            .layoutWeight(1)
+        }
+        .width('100%')
+        .height(56 + this.statusBarHeight)
+        .alignItems(VerticalAlign.Center)
+        .padding({ left: AppSpacing.XL, top: this.statusBarHeight })
+        .opacity(CollapsingHeader.contentOpacity(this.headerCollapse))
+        .hitTestBehavior(CollapsingHeader.acceptsTouch(this.headerCollapse) ? HitTestMode.Default : HitTestMode.None)
       }
       .width('100%')
-      .height(56 + this.statusBarHeight)
-      .alignItems(VerticalAlign.Center)
-      .padding({ left: AppSpacing.XL, top: this.statusBarHeight })
+      .height(56 + this.statusBarHeight - this.headerCollapse)
+      .clip(true)
       .linearGradient(ThemeRuntime.topBarBackground(this.appDarkMode, 56 + this.statusBarHeight))
+      .onAreaChange((_oldArea: Area, newArea: Area) => {
+        this.onHeaderCollapseChange((56 + this.statusBarHeight - Number(newArea.height)) /
+          CollapsingHeader.DISTANCE);
+      })
     }
     .width('100%')
     .height('100%')

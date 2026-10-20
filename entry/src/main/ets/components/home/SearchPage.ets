@@ -104,6 +104,7 @@ export struct SearchPage {
   private searchResultScroller: ListScroller = new ListScroller();
   /** 分类栏以上（标题行、搜索框、状态行）的收起量，0 为完整显示；结果分类栏不收起。 */
   @State searchHeaderCollapse: number = 0;
+  onHeaderCollapseChange: (progress: number) => void = () => {};
   private searchSessionId: number = 0;
   private readonly NO_SOURCE_GROUPS_SELECTED: string = '__NO_SOURCE_GROUPS_SELECTED__';
   private readonly NO_SOURCES_SELECTED: string = '__NO_SOURCES_SELECTED__';
@@ -616,6 +617,9 @@ export struct SearchPage {
           .width('100%')
           .height(this.searchCollapsibleHeight() - this.searchHeaderCollapseValue())
           .clip(true)
+          .onAreaChange((_oldArea: Area, newArea: Area) => {
+            this.onHeaderCollapseChange(1 - Number(newArea.height) / this.searchCollapsibleHeight());
+          })
 
           if (this.showSearchCategoryBar()) {
             this.searchCategoryBar()
