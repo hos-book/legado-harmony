@@ -28,7 +28,7 @@
 | 项目 | 信息 |
 | --- | --- |
 | 应用包名 | `io.legado.read` |
-| 当前版本 | `4.1.924`（以 `AppScope/app.json5` 为准） |
+| 当前版本 | `4.2.925`（以 `AppScope/app.json5` 为准） |
 | 支持设备 | `phone`、`tablet`、`2in1` |
 | 最低 / 目标 API | HarmonyOS 6.0.0（API 20）/ API 26 |
 | 开源协议 | GPL-3.0 |
@@ -235,8 +235,8 @@ legado-harmony/
 | 配置 | 值 |
 | --- | --- |
 | 主模块 / 入口 Ability | `entry` / `EntryAbility` |
-| `versionName` | `4.1.924` |
-| `versionCode` / `buildVersion` | `4010924` |
+| `versionName` | `4.2.925` |
+| `versionCode` / `buildVersion` | `4020925` |
 | `minAPIVersion` / `targetAPIVersion` | `20` / `26` |
 | 权限 | `INTERNET`、`GET_NETWORK_INFO`、`KEEP_BACKGROUND_RUNNING`、`CAMERA`（仅在用户启用眼动翻页时请求） |
 
@@ -408,3 +408,11 @@ for f in harmony-book-source-engine/scripts/*-check.mjs; do node --experimental-
 - 源码地址：https://github.com/wip3l/legado-harmony
 
 项目包含的 QuickJS、ohos_quickjs 及 OpenHarmony/Huawei N-API 封装代码继续适用各自的 MIT 或 Apache-2.0 许可证，详见 [第三方开源软件声明](THIRD_PARTY_NOTICES.md)。相关完整许可文本同时打包进入 HAP，并可在应用“关于 → 开源许可”中查看。
+
+### 4.2.925 界面与图标补充
+
+- 搜索与发现的“封面模糊背景”可在搜索/发现设置中关闭。首页顶部与底部导航栏跟随列表滚动收起和展开。
+- API 26 及以上支持主题桌面图标，主题应用与图标设置可使用对应的重绘图标资源。
+- 视频播放恢复跟随系统旋转；正文插图先下载缓存再显示；手动选择的全局字体重启后继续保留。
+
+- 「我的 → 加入交流群」可打开 QQ 交流群入口。
