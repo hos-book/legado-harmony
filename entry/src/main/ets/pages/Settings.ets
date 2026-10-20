@@ -1056,12 +1056,12 @@ struct SettingsPage {
     return 0;
   }
 
-  saveReaderChromeSettings(): void {
+  saveReaderChromeSettings(headerEnabled: boolean, footerEnabled: boolean, infoBarConfig: string): void {
     ReaderSettingsStore.saveReaderChromeSettings(
       getContext(this),
-      this.readerHeaderEnabled,
-      this.readerFooterEnabled,
-      this.readerInfoBarConfig
+      headerEnabled,
+      footerEnabled,
+      infoBarConfig
     ).catch((e: Error) => {
       console.warn('保存页眉页脚设置失败:', e);
     });
@@ -2290,7 +2290,9 @@ struct SettingsPage {
       menuColor: ThemeRuntime.dropdownPanelColor(this.appDarkMode),
       cardStyle: true,
       dividerColor: this.settingsDividerColor(),
-      onChanged: (): void => this.saveReaderChromeSettings()
+      onChanged: (headerEnabled: boolean, footerEnabled: boolean, infoBarConfig: string): void => {
+        this.saveReaderChromeSettings(headerEnabled, footerEnabled, infoBarConfig);
+      }
     })
   }
 

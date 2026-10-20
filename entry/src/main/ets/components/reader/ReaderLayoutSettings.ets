@@ -6,6 +6,13 @@ import { ReaderInfoBarConfig, ReaderInfoItem, ReaderInfoProgressBar } from '../.
 import { AppFontSize } from '../../theme/AppFontSize';
 import { AppSpacing } from '../../theme/AppSpacing';
 
+interface ReaderHeaderFooterSwitchOptions {
+  title: string;
+  description: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}
+
 /** 排版参数在草稿数组里的下标。 */
 export class ReaderTypographyField {
   static readonly FONT_SIZE: number = 0;
@@ -176,7 +183,7 @@ export struct ReaderTypographyStepper {
 
 /**
  * 页眉页脚设置组：两个总开关、六个内容槽位和外观项，直接绑定全局设置。
- * 阅读页监听同一组设置，负责保存并按需重排正文；设置页没有这层监听，通过 onChanged 自行保存。
+ * 操作回调直接提交完整设置；页面监听只负责更新正文，避免依赖跨组件监听的通知时机保存。
  * cardStyle 为 true 时使用设置页的卡片行样式。
  */
 @Component
@@ -189,7 +196,7 @@ export struct ReaderHeaderFooterSettings {
   @Prop menuColor: string = '#FFFFFF';
   @Prop cardStyle: boolean = false;
   @Prop dividerColor: string = '#00000000';
-  onChanged: () => void = (): void => {
+  onChanged: (headerEnabled: boolean, footerEnabled: boolean, infoBarConfig: string) => void = () => {
   };
   @StorageLink('readerHeaderEnabled') readerHeaderEnabled: boolean = false;
   @StorageLink('readerFooterEnabled') readerFooterEnabled: boolean = true;
@@ -212,7 +219,11 @@ export struct ReaderHeaderFooterSettings {
 
   private commit(config: ReaderInfoBarConfig): void {
     this.readerInfoBarConfig = config.serialize();
-    this.onChanged();
+    this.notifyChanged();
+  }
+
+  private notifyChanged(): void {
+    this.onChanged(this.readerHeaderEnabled, this.readerFooterEnabled, this.readerInfoBarConfig);
   }
 
   private slotIndex(slot: number): number {
@@ -285,51 +296,55 @@ export struct ReaderHeaderFooterSettings {
 
   build() {
     Column({ space: AppSpacing.XS }) {
-      this.switchItem('显示页眉', '正文顶部显示书名、章节、时间等', this.readerHeaderEnabled,
-        (checked: boolean) => {
+      this.switchItem({ title: '显示页眉', description: '正文顶部显示书名、章节、时间等',
+        checked: this.readerHeaderEnabled, onChange: (checked: boolean) => {
           this.readerHeaderEnabled = checked;
-          this.onChanged();
-        })
+          this.notifyChanged();
+        } })
 
       if (this.readerHeaderEnabled) {
         this.slotItem('页眉左侧', ReaderHeaderFooterSettings.SLOT_HEADER_LEFT, 'reader_header_left_select')
         this.slotItem('页眉中间', ReaderHeaderFooterSettings.SLOT_HEADER_CENTER, 'reader_header_center_select')
         this.slotItem('页眉右侧', ReaderHeaderFooterSettings.SLOT_HEADER_RIGHT, 'reader_header_right_select')
         this.stepperItem('页眉下移', ReaderHeaderFooterSettings.STEPPER_HEADER_OFFSET)
-        this.switchItem('页眉分隔线', '页眉下方的细线', this.config().headerDivider, (checked: boolean) => {
-          const config = this.config();
-          config.headerDivider = checked;
-          this.commit(config);
+        this.switchItem({ title: '页眉分隔线', description: '页眉下方的细线',
+          checked: this.config().headerDivider, onChange: (checked: boolean) => {
+            const config = this.config();
+            config.headerDivider = checked;
+            this.commit(config);
+          }
         })
       }
 
-      this.switchItem('显示页脚', '正文底部显示章节信息和进度', this.readerFooterEnabled,
-        (checked: boolean) => {
+      this.switchItem({ title: '显示页脚', description: '正文底部显示章节信息和进度',
+        checked: this.readerFooterEnabled, onChange: (checked: boolean) => {
           this.readerFooterEnabled = checked;
-          this.onChanged();
-        })
+          this.notifyChanged();
+        } })
 
       if (this.readerFooterEnabled) {
         this.slotItem('页脚左侧', ReaderHeaderFooterSettings.SLOT_FOOTER_LEFT, 'reader_footer_left_select')
         this.slotItem('页脚中间', ReaderHeaderFooterSettings.SLOT_FOOTER_CENTER, 'reader_footer_center_select')
         this.slotItem('页脚右侧', ReaderHeaderFooterSettings.SLOT_FOOTER_RIGHT, 'reader_footer_right_select')
         this.stepperItem('页脚上移', ReaderHeaderFooterSettings.STEPPER_FOOTER_OFFSET)
-        this.switchItem('页脚分隔线', '页脚上方的细线', this.config().footerDivider, (checked: boolean) => {
-          const config = this.config();
-          config.footerDivider = checked;
-          this.commit(config);
+        this.switchItem({ title: '页脚分隔线', description: '页脚上方的细线',
+          checked: this.config().footerDivider, onChange: (checked: boolean) => {
+            const config = this.config();
+            config.footerDivider = checked;
+            this.commit(config);
+          }
         })
       }
 
       if (this.readerHeaderEnabled || this.readerFooterEnabled) {
         this.stepperItem('页眉页脚字号', ReaderHeaderFooterSettings.STEPPER_FONT_SIZE)
         this.stepperItem('页眉页脚不透明度', ReaderHeaderFooterSettings.STEPPER_OPACITY)
-        this.switchItem('边距跟随正文', '页眉页脚的左右边距与正文一致', this.config().followMargin,
-          (checked: boolean) => {
+        this.switchItem({ title: '边距跟随正文', description: '页眉页脚的左右边距与正文一致',
+          checked: this.config().followMargin, onChange: (checked: boolean) => {
             const config = this.config();
             config.followMargin = checked;
             this.commit(config);
-          })
+          } })
         this.selectItem('进度条', '显示在页眉下方或页脚上方', ReaderInfoProgressBar.LABELS,
           Math.max(0, ReaderInfoProgressBar.VALUES.indexOf(this.config().progressBar)),
           (index: number) => {
@@ -372,13 +387,13 @@ export struct ReaderHeaderFooterSettings {
   }
 
   @Builder
-  switchItem(title: string, description: string, checked: boolean, onChange: (checked: boolean) => void) {
+  switchItem($$: ReaderHeaderFooterSwitchOptions) {
     Row() {
-      this.itemLabel(title, description)
+      this.itemLabel($$.title, $$.description)
       AdaptiveSwitch({
-        isOn: checked,
+        isOn: $$.checked,
         selectedColor: this.switchColor,
-        onChange: (value: boolean) => onChange(value)
+        onChange: (value: boolean) => $$.onChange(value)
       })
     }
     .width(this.cardStyle ? 'calc(100% - 32vp)' : '100%')

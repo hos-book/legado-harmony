@@ -53,7 +53,7 @@ function harness() {
   globalThis.receiveReaderPreferences = receive;`), context);
   const { ReaderSettingsStore: settings, ReaderSettings, ReaderInfoBarConfig: Config } = context.api;
   settings.applyToStorage(new ReaderSettings());
-  return { settings, Config, values, disk, sync: context.api.ReaderPreferencesSync,
+  return { settings, Config, values, disk, context, sync: context.api.ReaderPreferencesSync,
     receive: context.receiveReaderPreferences,
     get syncMarks() { return syncMarks; },
     pauseNextAccess() {
@@ -64,7 +64,76 @@ function harness() {
   };
 }
 
+// Execute the real panel event callbacks without ArkUI watchers or a panel-close event.
+function openChromePanel(h) {
+  const source = read('components/reader/ReaderLayoutSettings.ets');
+  const page = read('pages/ReadBook.ets');
+  function balanced(text, start, open, close) {
+    let depth = 0;
+    for (let i = start; i < text.length; i++) {
+      if (text[i] === open) depth++;
+      if (text[i] === close && --depth === 0) return text.slice(start, i + 1);
+    }
+    throw new Error('Unbalanced source snippet');
+  }
+  function method(text, name) {
+    const start = text.indexOf(`  ${name}(`);
+    assert(start >= 0, name);
+    const body = text.indexOf('{', start);
+    return text.slice(start, body) + balanced(text, body, '{', '}');
+  }
+  const calls = [...source.matchAll(/this\.switchItem\(/g)].map(match => {
+    const start = match.index + 'this.switchItem'.length;
+    return `this.switchItem${balanced(source, start, '(', ')')};`;
+  });
+  assert.equal(calls.length, 5);
+  h.context.getContext = () => ({});
+  vm.runInContext(compile(`{
+    const page = { ${method(page, 'saveReaderChromeSettings')} };
+    class Panel {
+      readerHeaderEnabled = AppStorage.get('readerHeaderEnabled');
+      readerFooterEnabled = AppStorage.get('readerFooterEnabled');
+      readerInfoBarConfig = AppStorage.get('readerInfoBarConfig');
+      options = new Map();
+      onChanged = (header, footer, raw) => page.saveReaderChromeSettings(header, footer, raw);
+      switchItem(options) { this.options.set(options.title, options); }
+      ${method(source, 'private config').replace('private ', '')}
+      ${method(source, 'private commit').replace('private ', '')}
+      ${method(source, 'private notifyChanged').replace('private ', '')}
+      buildOptions() { ${calls.join('\n')} }
+    }
+    globalThis.panel = new Panel();
+    globalThis.panel.buildOptions();
+  }`), h.context);
+  return h.context.panel;
+}
+
 const tests = {
+  async 'open panel switches persist immediately across day/night rebuilds'() {
+    const h = harness();
+    const switches = [['显示页眉', true], ['页眉分隔线', true],
+      ['页脚分隔线', true], ['边距跟随正文', false], ['显示页脚', false]];
+    for (const [name, value] of switches) {
+      const panel = openChromePanel(h);
+      panel.options.get(name).onChange(value);
+      h.values.set('appDarkMode', !h.values.get('appDarkMode'));
+      // A color-mode refresh rebuilds the controls while the panel remains open.
+      const rebuilt = openChromePanel(h);
+      assert.equal(rebuilt.options.get(name).checked, value, name);
+      const loaded = await h.settings.reload({});
+      assert.equal(loaded.readerHeaderEnabled, h.values.get('readerHeaderEnabled'));
+      assert.equal(loaded.readerFooterEnabled, h.values.get('readerFooterEnabled'));
+      assert.equal(loaded.readerInfoBarConfig, h.values.get('readerInfoBarConfig'));
+    }
+    const loaded = await h.settings.reload({});
+    assert.equal(loaded.readerHeaderEnabled, true);
+    assert.equal(loaded.readerFooterEnabled, false);
+    const config = h.Config.parse(loaded.readerInfoBarConfig);
+    assert.equal(config.headerDivider, true);
+    assert.equal(config.footerDivider, true);
+    assert.equal(config.followMargin, false);
+    assert.equal(h.syncMarks, 0);
+  },
   async 'all themes use the reading-preference sync scope'() {
     const coordinator = read('account/CloudSyncCoordinator.ets');
     stripTypeScriptTypes(coordinator, { mode: 'strip' });

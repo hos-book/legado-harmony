@@ -3491,6 +3491,8 @@ struct ReadBookPage {
   }
 
   applyReaderThemeMode(nextMode: string): void {
+    // 先提交面板草稿，再触发系统配色更新；不依赖关闭面板或稍后的 Watch 通知。
+    this.flushPendingReaderLayoutChange(false);
     const context = getContext(this) as common.UIAbilityContext;
     const systemDarkMode =
       context.config.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK;
@@ -7387,7 +7389,6 @@ struct ReadBookPage {
     if (this.readerEntryInitializing) return;
     if (!layoutChanged) {
       // 只换了显示内容或颜色、边距等不占正文高度的外观，不需要重新分页。
-      this.saveReaderChromeSettings();
       return;
     }
     const readingOffset = this.getReaderStableReflowOffset();
@@ -7408,7 +7409,6 @@ struct ReadBookPage {
     }
     this.preloadNextChapterPaginationLater();
     this.preloadPreviousChapterPaginationLater();
-    this.saveReaderChromeSettings();
     this.saveReadingProgress();
   }
 
@@ -9085,15 +9085,21 @@ struct ReadBookPage {
       this.readerHeaderFooterSettingsPanel()
       this.readerFontEntryItem()
 
-      this.readerSwitchSettingItem('正文扩展至状态栏', '隐藏状态栏，正文延伸到屏幕顶部', this.readerExtendToStatusBar,
-        (checked: boolean) => {
+      ReaderSettingSwitchRow({
+        title: '正文扩展至状态栏', description: '隐藏状态栏，正文延伸到屏幕顶部',
+        checked: this.readerExtendToStatusBar, textColor: this.getTextColor(), subTextColor: this.getSubTextColor(),
+        onChange: (checked: boolean) => {
           this.setReaderExtendToStatusBar(checked);
-        })
+        }
+      })
 
-      this.readerSwitchSettingItem('保留段首缩进', '章节开头与页首保留原文的全角空格缩进', this.keepParagraphIndent,
-        (checked: boolean) => {
+      ReaderSettingSwitchRow({
+        title: '保留段首缩进', description: '章节开头与页首保留原文的全角空格缩进',
+        checked: this.keepParagraphIndent, textColor: this.getTextColor(), subTextColor: this.getSubTextColor(),
+        onChange: (checked: boolean) => {
           this.setKeepParagraphIndent(checked);
-        })
+        }
+      })
 
     }
     .width('100%')
@@ -9140,7 +9146,10 @@ struct ReadBookPage {
       subTextColor: this.getSubTextColor(),
       accentColor: this.accentColor(),
       switchColor: this.buttonColor(),
-      menuColor: ThemeRuntime.dropdownPanelColor(this.isReaderThemeDark(), this.getBackgroundColor())
+      menuColor: ThemeRuntime.dropdownPanelColor(this.isReaderThemeDark(), this.getBackgroundColor()),
+      onChanged: (headerEnabled: boolean, footerEnabled: boolean, infoBarConfig: string): void => {
+        this.saveReaderChromeSettings(headerEnabled, footerEnabled, infoBarConfig);
+      }
     })
   }
 
@@ -11167,12 +11176,12 @@ struct ReadBookPage {
     }
   }
 
-  saveReaderChromeSettings(): void {
+  saveReaderChromeSettings(headerEnabled: boolean, footerEnabled: boolean, infoBarConfig: string): void {
     ReaderSettingsStore.saveReaderChromeSettings(
       getContext(this),
-      this.readerHeaderEnabled,
-      this.readerFooterEnabled,
-      this.readerInfoBarConfigRaw
+      headerEnabled,
+      footerEnabled,
+      infoBarConfig
     ).catch((e: Error) => {
       console.warn('保存阅读页眉页脚设置失败:', e);
     });
