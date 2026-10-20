@@ -245,6 +245,12 @@ struct Index {
       this.closeGlobalTtsPanel();
       return true;
     }
+    // 书架搜索栏开着时，返回键先清空关键词并收起它。
+    if (this.currentIndex === 0 && AppStorage.get<boolean>('bookshelfSearchActive')) {
+      AppStorage.setOrCreate('bookshelfSearchKeyword', '');
+      AppStorage.setOrCreate('bookshelfSearchActive', false);
+      return true;
+    }
     if (this.currentIndex !== 0) {
       this.bookshelfMultiSelectActive = false;
       this.currentIndex = 0;
