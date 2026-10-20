@@ -6,6 +6,7 @@ import { HdsFeedback } from '../utils/HdsFeedback';
 import { AppFontSize } from '../theme/AppFontSize';
 import { AppSpacing } from '../theme/AppSpacing';
 import { PageScaffold } from '../components/common/PageScaffold';
+import { CommunityGroup } from '../utils/CommunityGroup';
 
 @Entry
 @Component
@@ -127,9 +128,8 @@ struct AboutPage {
         this.openUri('mailto:i@icynol.com', '未找到可用的邮件应用');
       })
 
-      this.feedbackRow('QQ群', '345769197', () => {
-        this.openUri('mqqapi://card/show_pslcard?src_type=internal&version=1&uin=345769197&card_type=group&source=qrcode',
-          '未找到 QQ 或无法打开群资料');
+      this.feedbackRow('QQ群', CommunityGroup.QQ_GROUP_NUMBER, () => {
+        CommunityGroup.open(getContext(this) as common.UIAbilityContext);
       })
     }
     .width('100%')

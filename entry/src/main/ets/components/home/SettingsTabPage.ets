@@ -1,4 +1,5 @@
 import { router } from '@kit.ArkUI';
+import { common } from '@kit.AbilityKit';
 import { BookSource } from '@legado/sourceengine';
 import { SearchExploreSettings } from '../../utils/SearchExploreSettingsStore';
 import { ThemeRuntime } from '../../theme/ThemeRuntime';
@@ -6,6 +7,7 @@ import { CloudSyncSettingsStore } from '../../account/CloudSyncSettingsStore';
 import { AppFontSize } from '../../theme/AppFontSize';
 import { AppSpacing } from '../../theme/AppSpacing';
 import { CollapsingHeader } from '../../utils/CollapsingHeader';
+import { CommunityGroup } from '../../utils/CommunityGroup';
 
 /** 首页"我的"页签：设置入口列表。 */
 @Component
@@ -89,8 +91,11 @@ export struct SettingsPage {
             this.menuItem($r('sys.symbol.questionmark_circle'), '帮助', true, () => {
               router.pushUrl({ url: 'pages/Help' });
             })
-            this.menuItem($r('sys.symbol.info_circle'), '关于', false, () => {
+            this.menuItem($r('sys.symbol.info_circle'), '关于', true, () => {
               router.pushUrl({ url: 'pages/About' });
+            })
+            this.menuItem($r('sys.symbol.person_2'), '加入交流群', false, () => {
+              CommunityGroup.open(getContext(this) as common.UIAbilityContext);
             })
           }
           .width('100%')
