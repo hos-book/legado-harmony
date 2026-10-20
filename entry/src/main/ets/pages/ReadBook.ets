@@ -7653,6 +7653,7 @@ struct ReadBookPage {
   }
 
   onReaderColorModeChanged(): void {
+    if (!this.readerEntryInitializing) this.flushPendingReaderLayoutChange(false);
     this.scheduleReaderThemeRefresh();
   }
 

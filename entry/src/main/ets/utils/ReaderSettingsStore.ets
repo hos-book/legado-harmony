@@ -163,6 +163,7 @@ export class ReaderSettingsStore {
   private static readerFontStyleSaveQueue: Promise<void> = Promise.resolve();
   private static layoutElementSaveQueue: Promise<void> = Promise.resolve();
   private static readerChromeSaveQueue: Promise<void> = Promise.resolve();
+  private static readerLayoutSaveQueue: Promise<void> = Promise.resolve();
 
   static async load(context: Context): Promise<ReaderSettings> {
     const activeThemeId = ReaderSettingsStore.activeThemeId();
@@ -434,6 +435,8 @@ export class ReaderSettingsStore {
   static async reload(context: Context): Promise<ReaderSettings> {
     await ReaderSettingsStore.waitForReaderFontStyleSaves();
     await ReaderSettingsStore.waitForLayoutElementSaves();
+    await ReaderSettingsStore.waitForReaderLayoutSaves();
+    await ReaderSettingsStore.waitForReaderChromeSaves();
     ReaderSettingsStore.cachedSettings = null;
     ReaderSettingsStore.cachedThemeId = '';
     return await ReaderSettingsStore.load(context);
@@ -441,6 +444,10 @@ export class ReaderSettingsStore {
 
   static async switchThemeProfile(context: Context, previousThemeId: string,
     nextThemeId: string): Promise<ReaderSettings> {
+    await ReaderSettingsStore.waitForReaderFontStyleSaves();
+    await ReaderSettingsStore.waitForLayoutElementSaves();
+    await ReaderSettingsStore.waitForReaderLayoutSaves();
+    await ReaderSettingsStore.waitForReaderChromeSaves();
     const store = await preferences.getPreferences(context, ReaderSettingsStore.STORE_NAME);
     const previousId = ReaderSettingsStore.normalizeThemeProfileId(previousThemeId);
     const nextId = ReaderSettingsStore.normalizeThemeProfileId(nextThemeId);
@@ -464,7 +471,7 @@ export class ReaderSettingsStore {
     return ReaderSettingsStore.clone(next);
   }
 
-  static async saveLayoutSettings(
+  static saveLayoutSettings(
     context: Context,
     fontSize: number,
     lineHeight: number,
@@ -488,6 +495,27 @@ export class ReaderSettingsStore {
     settings.marginBottom = ReaderSettingsStore.normalizeVerticalMargin(marginBottom);
     ReaderSettingsStore.cachedSettings = ReaderSettingsStore.clone(settings);
     ReaderSettingsStore.applyLayoutToStorage(settings);
+    const snapshot = ReaderSettingsStore.clone(settings);
+    const themeId = ReaderSettingsStore.activeThemeId();
+    const previous = ReaderSettingsStore.readerLayoutSaveQueue.catch(() => {
+    });
+    const next = previous.then(async () => {
+      await ReaderSettingsStore.persistLayoutSettings(context, snapshot, themeId);
+    });
+    ReaderSettingsStore.readerLayoutSaveQueue = next;
+    return next;
+  }
+
+  private static async waitForReaderLayoutSaves(): Promise<void> {
+    try {
+      await ReaderSettingsStore.readerLayoutSaveQueue;
+    } catch (e) {
+      console.warn('等待阅读排版设置保存失败:', e);
+    }
+  }
+
+  private static async persistLayoutSettings(context: Context, settings: ReaderSettings,
+    themeId: string): Promise<void> {
     const store = await preferences.getPreferences(context, ReaderSettingsStore.STORE_NAME);
     await store.put(ReaderSettingsStore.KEY_FONT_SIZE, settings.fontSize);
     await store.put(ReaderSettingsStore.KEY_LETTER_SPACING, settings.letterSpacing);
@@ -499,7 +527,7 @@ export class ReaderSettingsStore {
     await store.put(ReaderSettingsStore.KEY_MARGIN_RIGHT, settings.marginRight);
     await store.put(ReaderSettingsStore.KEY_MARGIN_TOP, settings.marginTop);
     await store.put(ReaderSettingsStore.KEY_MARGIN_BOTTOM, settings.marginBottom);
-    await ReaderSettingsStore.persistActiveThemeProfile(store, settings);
+    await ReaderSettingsStore.persistThemeProfile(store, themeId, settings);
     await store.flush();
   }
 
@@ -553,6 +581,7 @@ export class ReaderSettingsStore {
     await store.put(ReaderSettingsStore.KEY_DARK_CUSTOM_THEME_TEXT_COLOR, settings.darkCustomThemeTextColor);
     await store.put(ReaderSettingsStore.KEY_CUSTOM_THEMES_RAW, settings.customThemesRaw);
     await ReaderSettingsStore.persistActiveThemeProfile(store, settings);
+    CloudSyncChangeTracker.markPreferenceChanged();
     await store.flush();
   }
 
@@ -712,12 +741,39 @@ export class ReaderSettingsStore {
 
   static async saveReaderFontStyleSettings(context: Context, settings: ReaderSettings): Promise<void> {
     const current = ReaderSettingsStore.cachedSettings || ReaderSettingsStore.fromStorage();
+    const previousRules = ReaderSettingsStore.fontRulesKey(current);
     current.fontSize = ReaderSettingsStore.normalizeFontSize(settings.fontSize || current.fontSize);
     current.bodyFontMode = ReaderSettingsStore.normalizeFontMode(settings.bodyFontMode);
     current.bodyFontFamily = settings.bodyFontFamily || '';
     current.titleFontMode = ReaderSettingsStore.normalizeFontMode(settings.titleFontMode);
     current.titleFontFamily = settings.titleFontFamily || '';
     current.titleFontSize = ReaderSettingsStore.normalizeFontSize(settings.titleFontSize);
+    ReaderSettingsStore.updateFontRules(current, settings);
+    ReaderSettingsStore.cachedSettings = ReaderSettingsStore.clone(current);
+    ReaderSettingsStore.applyLayoutToStorage(current);
+    ReaderSettingsStore.applyReaderFontStyleToStorage(current);
+    const snapshot = ReaderSettingsStore.clone(current);
+    await ReaderSettingsStore.enqueueReaderFontStyleSave(context, snapshot);
+    if (previousRules !== ReaderSettingsStore.fontRulesKey(snapshot)) {
+      CloudSyncChangeTracker.markPreferenceChanged();
+    }
+  }
+
+  /** 云端只允许更新字体规则，不触碰正文、标题字号或设备字体选择。 */
+  static async saveReaderFontRuleSettings(context: Context, settings: ReaderSettings): Promise<void> {
+    const current = ReaderSettingsStore.cachedSettings || ReaderSettingsStore.fromStorage();
+    const previousRules = ReaderSettingsStore.fontRulesKey(current);
+    ReaderSettingsStore.updateFontRules(current, settings);
+    ReaderSettingsStore.cachedSettings = ReaderSettingsStore.clone(current);
+    ReaderSettingsStore.applyRegexFontToStorage(current);
+    const snapshot = ReaderSettingsStore.clone(current);
+    await ReaderSettingsStore.enqueueReaderFontStyleSave(context, snapshot, true);
+    if (previousRules !== ReaderSettingsStore.fontRulesKey(snapshot)) {
+      CloudSyncChangeTracker.markPreferenceChanged();
+    }
+  }
+
+  private static updateFontRules(current: ReaderSettings, settings: ReaderSettings): void {
     current.regexFontEnabled = settings.regexFontEnabled;
     current.regexFontPattern = settings.regexFontPattern || '';
     current.regexFontMode = ReaderSettingsStore.normalizeFontMode(settings.regexFontMode);
@@ -725,19 +781,20 @@ export class ReaderSettingsStore {
     current.regexFontSize = ReaderSettingsStore.normalizeFontSize(settings.regexFontSize);
     current.regexShadowColor = settings.regexShadowColor || '';
     current.regexFontRulesRaw = settings.regexFontRulesRaw || '';
-    ReaderSettingsStore.cachedSettings = ReaderSettingsStore.clone(current);
-    ReaderSettingsStore.applyLayoutToStorage(current);
-    ReaderSettingsStore.applyReaderFontStyleToStorage(current);
-    const snapshot = ReaderSettingsStore.clone(current);
-    await ReaderSettingsStore.enqueueReaderFontStyleSave(context, snapshot);
   }
 
-  private static enqueueReaderFontStyleSave(context: Context, settings: ReaderSettings): Promise<void> {
+  private static fontRulesKey(settings: ReaderSettings): string {
+    return JSON.stringify([settings.regexFontEnabled, settings.regexFontPattern, settings.regexFontMode,
+      settings.regexFontFamily, settings.regexFontSize, settings.regexShadowColor, settings.regexFontRulesRaw]);
+  }
+
+  private static enqueueReaderFontStyleSave(context: Context, settings: ReaderSettings,
+    rulesOnly: boolean = false): Promise<void> {
     const themeId = ReaderSettingsStore.activeThemeId();
     const previous = ReaderSettingsStore.readerFontStyleSaveQueue.catch(() => {
     });
     const next = previous.then(async () => {
-      await ReaderSettingsStore.persistReaderFontStyleSettings(context, settings, themeId);
+      await ReaderSettingsStore.persistReaderFontStyleSettings(context, settings, themeId, rulesOnly);
     });
     ReaderSettingsStore.readerFontStyleSaveQueue = next;
     return next;
@@ -752,14 +809,16 @@ export class ReaderSettingsStore {
   }
 
   private static async persistReaderFontStyleSettings(context: Context, current: ReaderSettings,
-    themeId: string): Promise<void> {
+    themeId: string, rulesOnly: boolean): Promise<void> {
     const store = await preferences.getPreferences(context, ReaderSettingsStore.STORE_NAME);
-    await store.put(ReaderSettingsStore.KEY_FONT_SIZE, current.fontSize);
-    await store.put(ReaderSettingsStore.KEY_BODY_FONT_MODE, current.bodyFontMode);
-    await store.put(ReaderSettingsStore.KEY_BODY_FONT_FAMILY, current.bodyFontFamily);
-    await store.put(ReaderSettingsStore.KEY_TITLE_FONT_MODE, current.titleFontMode);
-    await store.put(ReaderSettingsStore.KEY_TITLE_FONT_FAMILY, current.titleFontFamily);
-    await store.put(ReaderSettingsStore.KEY_TITLE_FONT_SIZE, current.titleFontSize);
+    if (!rulesOnly) {
+      await store.put(ReaderSettingsStore.KEY_FONT_SIZE, current.fontSize);
+      await store.put(ReaderSettingsStore.KEY_BODY_FONT_MODE, current.bodyFontMode);
+      await store.put(ReaderSettingsStore.KEY_BODY_FONT_FAMILY, current.bodyFontFamily);
+      await store.put(ReaderSettingsStore.KEY_TITLE_FONT_MODE, current.titleFontMode);
+      await store.put(ReaderSettingsStore.KEY_TITLE_FONT_FAMILY, current.titleFontFamily);
+      await store.put(ReaderSettingsStore.KEY_TITLE_FONT_SIZE, current.titleFontSize);
+    }
     await store.put(ReaderSettingsStore.KEY_REGEX_FONT_ENABLED, current.regexFontEnabled);
     await store.put(ReaderSettingsStore.KEY_REGEX_FONT_PATTERN, current.regexFontPattern);
     await store.put(ReaderSettingsStore.KEY_REGEX_FONT_MODE, current.regexFontMode);
@@ -828,6 +887,14 @@ export class ReaderSettingsStore {
     });
     ReaderSettingsStore.readerChromeSaveQueue = next;
     return next;
+  }
+
+  private static async waitForReaderChromeSaves(): Promise<void> {
+    try {
+      await ReaderSettingsStore.readerChromeSaveQueue;
+    } catch (e) {
+      console.warn('等待阅读页眉页脚设置保存失败:', e);
+    }
   }
 
   static async savePageTurnAnimationType(context: Context, type: number): Promise<void> {
@@ -984,6 +1051,10 @@ export class ReaderSettingsStore {
     AppStorage.setOrCreate(ReaderSettingsStore.KEY_TITLE_FONT_MODE, settings.titleFontMode);
     AppStorage.setOrCreate(ReaderSettingsStore.KEY_TITLE_FONT_FAMILY, settings.titleFontFamily);
     AppStorage.setOrCreate(ReaderSettingsStore.KEY_TITLE_FONT_SIZE, settings.titleFontSize);
+    ReaderSettingsStore.applyRegexFontToStorage(settings);
+  }
+
+  private static applyRegexFontToStorage(settings: ReaderSettings): void {
     AppStorage.setOrCreate(ReaderSettingsStore.KEY_REGEX_FONT_ENABLED, settings.regexFontEnabled);
     AppStorage.setOrCreate(ReaderSettingsStore.KEY_REGEX_FONT_PATTERN, settings.regexFontPattern);
     AppStorage.setOrCreate(ReaderSettingsStore.KEY_REGEX_FONT_MODE, settings.regexFontMode);
@@ -1123,12 +1194,15 @@ export class ReaderSettingsStore {
     settings: ReaderSettings): Promise<void> {
     await ReaderSettingsStore.persistThemeProfile(store, ReaderSettingsStore.activeThemeId(), settings);
     ReaderSettingsStore.cachedThemeId = ReaderSettingsStore.activeThemeId();
-    CloudSyncChangeTracker.markPreferenceChanged();
   }
 
   private static async persistThemeProfile(store: preferences.Preferences, themeId: string,
     settings: ReaderSettings): Promise<void> {
-    await store.put(ReaderSettingsStore.themeProfileKey(themeId), JSON.stringify(ReaderSettingsStore.clone(settings)));
+    // 各类设置可能异步交错保存；较早的整份快照不能覆盖同主题已经更新的排版和页眉页脚。
+    const latest = ReaderSettingsStore.cachedSettings &&
+      ReaderSettingsStore.cachedThemeId === ReaderSettingsStore.normalizeThemeProfileId(themeId) ?
+      ReaderSettingsStore.cachedSettings : settings;
+    await store.put(ReaderSettingsStore.themeProfileKey(themeId), JSON.stringify(ReaderSettingsStore.clone(latest)));
   }
 
   private static async getNumber(

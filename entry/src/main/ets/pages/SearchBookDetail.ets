@@ -1,5 +1,5 @@
 import { router } from '@kit.ArkUI';
-import { Book, BookChapter, BookFieldSanitizer, BookTypeSupport, BookUrlResolver } from '@legado/sourceengine';
+import { Book, SearchBook, BookChapter, BookFieldSanitizer, BookTypeSupport, BookUrlResolver } from '@legado/sourceengine';
 import { AppDatabase } from '../model/data/AppDatabase';
 import { WebBookService } from '../core/book/WebBookService';
 import { syncSystemBars } from '../utils/SystemBars';
@@ -466,14 +466,14 @@ struct SearchBookDetailPage {
     .alignItems(VerticalAlign.Center)
   }
 
-  /** 加入书架单独成一个构建函数：直接读 isInShelf，加入后图标与颜色能跟着刷新。 */
+  /** 书架操作直接读取 isInShelf，加入或移出后同步刷新按钮。 */
   @Builder
   detailShelfAction() {
     Column({ space: AppSpacing.SM }) {
       SymbolGlyph(this.isInShelf ? $r('sys.symbol.bookshelf_badge_checkmark_fill') : $r('sys.symbol.bookshelf'))
         .fontSize(24)
         .fontColor([this.isInShelf ? this.accentColor() : this.primaryTextColor()])
-      Text(this.isInShelf ? '已在书架' : (this.isSaving ? '加入中' : '加入书架'))
+      Text(this.isSaving ? (this.isInShelf ? '移出中' : '加入中') : (this.isInShelf ? '移出书架' : '加入书架'))
         .fontSize(AppFontSize.CAPTION)
         .fontColor(this.isInShelf ? this.accentColor() : this.secondaryTextColor())
         .maxLines(1)
@@ -481,9 +481,12 @@ struct SearchBookDetailPage {
     .layoutWeight(1)
     .justifyContent(FlexAlign.Center)
     .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.96 })
-    .accessibilityText(this.isInShelf ? '已在书架' : '加入书架')
+    .accessibilityText(this.isInShelf ? '移出书架' : '加入书架')
     .onClick(() => {
-      if (!this.isInShelf && !this.isSaving) {
+      if (this.isSaving) return;
+      if (this.isInShelf) {
+        this.removeFromShelf();
+      } else {
         this.addToShelf();
       }
     })
@@ -642,6 +645,27 @@ struct SearchBookDetailPage {
     } catch (e) {
       console.error('检查书架失败:', e);
       this.isInShelf = false;
+    }
+  }
+
+  async removeFromShelf(): Promise<void> {
+    if (this.isSaving || !this.isInShelf) return;
+    this.isSaving = true;
+    try {
+      const book = new SearchBook();
+      book.bookUrl = this.bookUrl;
+      book.origin = this.origin;
+      await SearchBookShelfHelper.removeFromShelf(getContext(this), book);
+      this.isInShelf = false;
+      this.promptAddToShelfAfterRead = false;
+      this.pendingAddToShelfBookUrl = '';
+      this.shelfCheckKey = '';
+      this.shelfCheckVersion = -1;
+    } catch (e) {
+      console.error('移出书架失败:', e);
+      HdsFeedback.showToast('移出书架失败');
+    } finally {
+      this.isSaving = false;
     }
   }
 

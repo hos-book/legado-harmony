@@ -149,7 +149,7 @@ struct DataSyncPage {
         })
         SettingSwitchRow({
           title: '阅读偏好',
-          description: '字号、边距、字体规则、替换规则、主题',
+          description: '字体规则、替换规则、主题；排版仅保存在本机',
           isOn: this.readingPreferencesEnabled,
           onChange: (value: boolean) => {
             this.setScopeEnabled(false, value);
@@ -157,7 +157,7 @@ struct DataSyncPage {
         })
         SettingSwitchRow({
           title: '应用偏好',
-          description: '显示模式、书架布局、搜索显示、自定义主题',
+          description: '显示模式、书架布局、搜索显示',
           isOn: this.applicationPreferencesEnabled,
           showDivider: false,
           onChange: (value: boolean) => {

@@ -1,7 +1,6 @@
 import { Context } from '@kit.AbilityKit';
 import { Book, SearchBook, BookFieldSanitizer, BookTypeSupport } from '@legado/sourceengine';
 import { AppDatabase } from '../model/data/AppDatabase';
-import { WebBookService } from '../core/book/WebBookService';
 import { BookCoverCache } from './BookCoverCache';
 import { BookDisplayHelper } from './BookDisplayHelper';
 import { BookIdentity } from './BookIdentity';
@@ -125,46 +124,8 @@ export class SearchBookShelfHelper {
     }
 
     const book = SearchBookShelfHelper.toBook(searchBook);
-    const fallbackCoverUrl = book.coverUrl;
-    const source = book.origin ? await db.getBookSource(book.origin) : null;
-    if (source) {
-      const service = new WebBookService();
-      const fullBook = await service.getBookInfo(source, book);
-      book.bookUrl = fullBook.bookUrl || book.bookUrl;
-      book.tocUrl = fullBook.tocUrl || book.tocUrl;
-      book.name = fullBook.name || book.name;
-      book.author = fullBook.author || book.author;
-      book.kind = BookFieldSanitizer.prefer(fullBook.kind, book.kind);
-      book.status = BookFieldSanitizer.prefer(fullBook.status, book.status);
-      book.coverUrl = CoverUrlNormalizer.prefer(fallbackCoverUrl, fullBook.coverUrl || book.coverUrl);
-      book.intro = BookFieldSanitizer.prefer(fullBook.intro, book.intro);
-      book.updateTime = BookFieldSanitizer.prefer(fullBook.updateTime, book.updateTime);
-      book.latestChapterTitle = BookFieldSanitizer.prefer(fullBook.latestChapterTitle, book.latestChapterTitle);
-      book.wordCount = BookFieldSanitizer.prefer(fullBook.wordCount, book.wordCount);
-      book.variable = fullBook.variable || book.variable;
-    }
-
+    // 结果信息已足够入架；详情、目录和书源变量由首次阅读时补齐，避免收藏等待网络。
     const resolvedKey = BookIdentity.keyOfBook(book);
-    if (resolvedKey && resolvedKey !== searchKey) {
-      const resolvedExisting = await SearchBookShelfHelper.findShelfBookByKey(resolvedKey, true);
-      if (resolvedExisting) {
-        const nextCoverUrl = CoverUrlNormalizer.prefer(book.coverUrl, resolvedExisting.coverUrl);
-        if (nextCoverUrl && resolvedExisting.coverUrl !== nextCoverUrl) {
-          resolvedExisting.coverUrl = nextCoverUrl;
-        }
-        resolvedExisting.kind = BookFieldSanitizer.prefer(book.kind, resolvedExisting.kind);
-        resolvedExisting.status = BookFieldSanitizer.prefer(book.status, resolvedExisting.status);
-        resolvedExisting.intro = BookFieldSanitizer.prefer(book.intro, resolvedExisting.intro);
-        resolvedExisting.updateTime = BookFieldSanitizer.prefer(book.updateTime, resolvedExisting.updateTime);
-        resolvedExisting.latestChapterTitle = BookFieldSanitizer.prefer(book.latestChapterTitle, resolvedExisting.latestChapterTitle);
-        resolvedExisting.wordCount = BookFieldSanitizer.prefer(book.wordCount, resolvedExisting.wordCount);
-        SearchExplorePendingBook.clearPendingAddToShelf(resolvedExisting);
-        await db.updateBook(resolvedExisting, true, 'search_result_explicit_add_resolved');
-        SearchBookShelfHelper.markShelfChanged();
-        HdsFeedback.showToast('已在书架');
-        return new SearchBookShelfChange(searchKey, resolvedKey);
-      }
-    }
 
     await db.insertBook(book, 'search_result_explicit_add');
     const shelfKey = resolvedKey || searchKey;
@@ -212,7 +173,8 @@ export class SearchBookShelfHelper {
     book.type = searchBook.type || 0;
     BookTypeSupport.applyBookType(book);
     book.canUpdate = true;
-    book.lastCheckTime = Date.now();
+    // 尚未请求详情，不能标记为近期已解析，否则阅读器可能跳过书源变量初始化。
+    book.lastCheckTime = 0;
     book.latestChapterTime = Date.now();
     return book;
   }

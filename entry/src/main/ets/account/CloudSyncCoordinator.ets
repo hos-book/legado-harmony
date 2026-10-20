@@ -24,7 +24,8 @@ import {
 } from './CloudSyncStateStore';
 import { AppDatabase } from '../model/data/AppDatabase';
 import { Book, BookGroup, BookInfoRule, BookListRule, BookSource, Bookmark, ContentRule, ExploreRule, ReadConfig, SearchRule, TocRule } from '@legado/sourceengine';
-import { ReaderSettings, ReaderSettingsStore } from '../utils/ReaderSettingsStore';
+import { ReaderSettingsStore } from '../utils/ReaderSettingsStore';
+import { ReaderPreferencesSync, ReaderPreferencesSyncPayload } from './ReaderPreferencesSync';
 import {
   ReaderReplaceRule,
   ReaderReplaceRuleStore
@@ -193,10 +194,7 @@ export class CloudSyncCoordinator {
   private static readonly MAX_RATE_LIMIT_RETRIES: number = 3;
   private static protectedLocalBooksDuringSync: number = 0;
   private static protectedLocalBookEntityIdsDuringSync: Set<string> = new Set<string>();
-  // Older reader_settings payloads predate eye-turn support. Keep track of a
-  // compatibility merge so the normalized payload is uploaded after the
-  // current remote-apply transaction finishes instead of silently resetting
-  // the device and leaving the cloud object on the old schema forever.
+  // 将旧版完整阅读设置回填为仅含字体规则和主题的同步数据。
   private static readerSettingsBackfillPending: boolean = false;
 
   static async syncNow(context: Context, conflictPolicy: string = 'cloud'): Promise<CloudSyncRunResult> {
@@ -587,16 +585,7 @@ export class CloudSyncCoordinator {
     }
 
     const readerSettings = await ReaderSettingsStore.load(context);
-    const safeReaderSettings = JSON.parse(JSON.stringify(readerSettings)) as ReaderSettings;
-    // Global font selection and the local font catalog are device-local. Keep
-    // these fields deterministic so changing the global font neither uploads a
-    // new reader-settings revision nor changes another device's selection.
-    safeReaderSettings.fontFamily = '';
-    safeReaderSettings.fontFilePath = '';
-    safeReaderSettings.fontSourceName = '系统默认';
-    safeReaderSettings.fontMode = 'system';
-    safeReaderSettings.systemFontFamily = '';
-    safeReaderSettings.customFontsRaw = '';
+    const safeReaderSettings = ReaderPreferencesSync.toPayload(readerSettings);
     result.push(CloudSyncCoordinator.entity(
       'reader_settings', 'global', safeReaderSettings, 'global'));
 
@@ -608,6 +597,7 @@ export class CloudSyncCoordinator {
 
     const themeSettings = await AppThemeSettingsStore.load(context);
     const safeThemeSettings = JSON.parse(JSON.stringify(themeSettings)) as AppThemeSettings;
+    safeThemeSettings.themeApplyLayoutEnabled = false;
     safeThemeSettings.customLightReaderBackgroundAssetId = '';
     safeThemeSettings.customDarkReaderBackgroundAssetId = '';
     safeThemeSettings.customLightStartupImagePath = '';
@@ -642,6 +632,7 @@ export class CloudSyncCoordinator {
     const schemesPayload = new CustomThemeSchemesSyncPayload();
     schemesPayload.schemes = themeSchemes.map((scheme: CustomThemeScheme) => {
       const safeScheme = JSON.parse(JSON.stringify(scheme)) as CustomThemeScheme;
+      safeScheme.settings.themeApplyLayoutEnabled = false;
       safeScheme.settings.customLightReaderBackgroundAssetId = '';
       safeScheme.settings.customDarkReaderBackgroundAssetId = '';
       safeScheme.settings.customLightStartupImagePath = '';
@@ -955,59 +946,18 @@ export class CloudSyncCoordinator {
       entityState.localKey = source.bookSourceUrl;
       CloudSyncCoordinator.notifyBookSourcesChanged();
     } else if (entityType === 'reader_settings') {
-      const readerSettings = JSON.parse(raw) as ReaderSettings;
-      // Global font settings are device-local and deliberately excluded from
-      // sync. Always restore them from this device before saving the remaining
-      // remote reader preferences.
-      const localReaderSettings = await ReaderSettingsStore.load(context);
-      readerSettings.fontFamily = localReaderSettings.fontFamily;
-      readerSettings.fontFilePath = localReaderSettings.fontFilePath;
-      readerSettings.fontSourceName = localReaderSettings.fontSourceName;
-      readerSettings.fontMode = localReaderSettings.fontMode;
-      readerSettings.systemFontFamily = localReaderSettings.systemFontFamily;
-      readerSettings.customFontsRaw = localReaderSettings.customFontsRaw;
-      let needsEyeTurnBackfill = false;
-      if (typeof readerSettings.eyeTurnEnabled !== 'boolean') {
-        readerSettings.eyeTurnEnabled = localReaderSettings.eyeTurnEnabled;
-        needsEyeTurnBackfill = true;
-      }
-      if (typeof readerSettings.eyeTurnPortraitCalibration !== 'string') {
-        readerSettings.eyeTurnPortraitCalibration = localReaderSettings.eyeTurnPortraitCalibration;
-        needsEyeTurnBackfill = true;
-      }
-      if (typeof readerSettings.eyeTurnLandscapeCalibration !== 'string') {
-        readerSettings.eyeTurnLandscapeCalibration = localReaderSettings.eyeTurnLandscapeCalibration;
-        needsEyeTurnBackfill = true;
-      }
-      if (typeof readerSettings.eyeTurnPreviousEnabled !== 'boolean') {
-        readerSettings.eyeTurnPreviousEnabled = localReaderSettings.eyeTurnPreviousEnabled;
-        needsEyeTurnBackfill = true;
-      }
-      if (typeof readerSettings.eyeTurnNextEnabled !== 'boolean') {
-        readerSettings.eyeTurnNextEnabled = localReaderSettings.eyeTurnNextEnabled;
-        needsEyeTurnBackfill = true;
-      }
-      if (typeof readerSettings.eyeTurnPreviousDwellMs !== 'number') {
-        readerSettings.eyeTurnPreviousDwellMs = localReaderSettings.eyeTurnPreviousDwellMs;
-        needsEyeTurnBackfill = true;
-      }
-      if (typeof readerSettings.eyeTurnNextDwellMs !== 'number') {
-        readerSettings.eyeTurnNextDwellMs = localReaderSettings.eyeTurnNextDwellMs;
-        needsEyeTurnBackfill = true;
-      }
-      if (typeof readerSettings.readerInfoBarConfig !== 'string' || !readerSettings.readerInfoBarConfig) {
-        // 云端数据来自还没有页眉页脚槽位配置的旧版本：保留本机配置，稍后回填上传。
-        readerSettings.readerInfoBarConfig = localReaderSettings.readerInfoBarConfig;
-        needsEyeTurnBackfill = true;
-      }
-      if (needsEyeTurnBackfill) {
+      const remote = JSON.parse(raw) as ReaderPreferencesSyncPayload;
+      const local = await ReaderSettingsStore.load(context);
+      const merged = ReaderPreferencesSync.merge(local, remote);
+      await ReaderSettingsStore.saveReaderFontRuleSettings(context, merged);
+      await ReaderSettingsStore.saveThemeSettings(context, merged.lightThemeIndex, merged.darkThemeIndex,
+        merged.lightCustomThemeBackgroundColor, merged.lightCustomThemeTextColor,
+        merged.darkCustomThemeBackgroundColor, merged.darkCustomThemeTextColor,
+        AppStorage.get<boolean>('appDarkMode') || false, merged.customThemesRaw);
+      if (remote.syncVersion !== 2) {
+        // 下一轮将旧版完整设置替换为精简数据；旧排版字段不会写回本机。
         CloudSyncCoordinator.readerSettingsBackfillPending = true;
       }
-      await ReaderSettingsStore.saveAll(
-        context,
-        readerSettings,
-        AppStorage.get<boolean>('appDarkMode') || false
-      );
       entityState.localKey = 'global';
     } else if (entityType === 'replace_rule') {
       const remoteRule = JSON.parse(raw) as ReaderReplaceRule;
@@ -1019,6 +969,7 @@ export class CloudSyncCoordinator {
     } else if (entityType === 'theme_settings') {
       const themeSettings = JSON.parse(raw) as AppThemeSettings;
       const localThemeSettings = await AppThemeSettingsStore.load(context);
+      themeSettings.themeApplyLayoutEnabled = localThemeSettings.themeApplyLayoutEnabled;
       themeSettings.customLightStartupImagePath = localThemeSettings.customLightStartupImagePath;
       themeSettings.customDarkStartupImagePath = localThemeSettings.customDarkStartupImagePath;
       await AppThemeSettingsStore.save(context, themeSettings);
@@ -1459,13 +1410,13 @@ export class CloudSyncCoordinator {
     }
     if (entityType === 'reader_settings' ||
       entityType === 'replace_rule' ||
-      entityType === 'theme_settings') {
+      entityType === 'theme_settings' ||
+      entityType === 'custom_theme_schemes') {
       return settings.readingPreferencesEnabled;
     }
     if (entityType === 'appearance_mode' ||
       entityType === 'bookshelf_display' ||
-      entityType === 'search_preferences' ||
-      entityType === 'custom_theme_schemes') {
+      entityType === 'search_preferences') {
       return settings.applicationPreferencesEnabled;
     }
     return false;

@@ -441,6 +441,13 @@ export struct SearchBookResultList {
     })
   }
 
+  private toggleShelfFromSwipe(book: SearchBook): void {
+    if (SearchBookShelfHelper.isBusy(book, this.busyBookKeys)) return;
+    // 先收起横滑菜单，避免菜单一直停留到入架完成。
+    this.scroller.closeAllSwipeActions();
+    this.onToggleShelf(book);
+  }
+
   private searchResultSwipeActions(book: SearchBook): HdsSwipeActionOptions {
     const options: HdsSwipeActionOptions = {
       icons: [
@@ -452,7 +459,7 @@ export struct SearchBookResultList {
             accessibilityText: SearchBookShelfHelper.isInShelf(book, this.shelfBookKeys) ? '移出书架' : '加入书架'
           },
           onAction: () => {
-            this.onToggleShelf(book);
+            this.toggleShelfFromSwipe(book);
           }
         },
         {
@@ -491,7 +498,7 @@ export struct SearchBookResultList {
       .justifyContent(FlexAlign.Center)
       .alignItems(HorizontalAlign.Center)
       .backgroundColor(ThemeRuntime.buttonColor(this.isDarkMode()))
-      .onClick(() => this.onToggleShelf(book))
+      .onClick(() => this.toggleShelfFromSwipe(book))
 
       Column({ space: AppSpacing.XS }) {
         SymbolGlyph($r('sys.symbol.book'))
