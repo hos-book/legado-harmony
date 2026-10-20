@@ -97,6 +97,8 @@ struct VideoPlayerPage {
   private resumeSec: number = 0;
   private retried: boolean = false;
   private lastSavedSec: number = -1;
+  private playerPageVisible: boolean = false;
+  private orientationSerial: number = 0;
   // 从书架带开书动画进来时，书架那层“正在打开书籍”要等这里通知才会收起，否则返回后一直转圈。
   private openedWithShelfAnimation: boolean = false;
   private openedBookUrl: string = '';
@@ -108,11 +110,12 @@ struct VideoPlayerPage {
       Number(params.chapterIndex) : -1;
     this.openedWithShelfAnimation = !!params && params.shelfBookOpening === 'true';
     this.openedBookUrl = bookUrl;
-    this.enterImmersive();
     this.loadBook(bookUrl, requestedIndex);
   }
 
   aboutToDisappear(): void {
+    this.playerPageVisible = false;
+    this.orientationSerial++;
     this.loadSerial++;
     this.clearHideTimer();
     this.saveProgress(true);
@@ -120,7 +123,15 @@ struct VideoPlayerPage {
     this.requestShelfCloseAnimation();
   }
 
+  onPageShow(): void {
+    this.playerPageVisible = true;
+    this.enterImmersive();
+    this.applyPreferredOrientation(window.Orientation.AUTO_ROTATION_RESTRICTED);
+  }
+
   onPageHide(): void {
+    this.playerPageVisible = false;
+    this.orientationSerial++;
     this.controller.pause();
     this.saveProgress(true);
   }
@@ -149,6 +160,7 @@ struct VideoPlayerPage {
 
   private enterImmersive(): void {
     window.getLastWindow(getContext(this)).then((mainWindow: window.Window): void => {
+      if (!this.playerPageVisible) return;
       mainWindow.setWindowLayoutFullScreen(true);
       mainWindow.setWindowSystemBarEnable([]);
       mainWindow.setWindowKeepScreenOn(true);
@@ -160,8 +172,11 @@ struct VideoPlayerPage {
   private leaveImmersive(): void {
     const dark = this.appDarkMode;
     window.getLastWindow(getContext(this)).then((mainWindow: window.Window): void => {
+      if (this.playerPageVisible) return;
       mainWindow.setWindowKeepScreenOn(false);
-      mainWindow.setPreferredOrientation(window.Orientation.UNSPECIFIED);
+      mainWindow.setPreferredOrientation(window.Orientation.AUTO_ROTATION_RESTRICTED).catch((error: Error): void => {
+        console.warn('[VideoPlayer] restore orientation failed:', error.message);
+      });
       syncSystemBars(getContext(this), dark, ThemeRuntime.pageColor(dark));
     }).catch((error: Error): void => {
       console.warn('[VideoPlayer] leave immersive failed:', error.message);
@@ -169,14 +184,20 @@ struct VideoPlayerPage {
   }
 
   private setLandscape(enabled: boolean): void {
-    this.landscape = enabled;
-    window.getLastWindow(getContext(this)).then((mainWindow: window.Window): void => {
-      mainWindow.setPreferredOrientation(enabled ? window.Orientation.AUTO_ROTATION_LANDSCAPE :
-        window.Orientation.UNSPECIFIED);
+    // 手动切换立即生效，之后仍可跟随系统旋转，不能把窗口永久限制在横屏或竖屏。
+    this.applyPreferredOrientation(enabled ? window.Orientation.USER_ROTATION_LANDSCAPE :
+      window.Orientation.USER_ROTATION_PORTRAIT);
+    this.scheduleHideControls();
+  }
+
+  private applyPreferredOrientation(preferred: window.Orientation): void {
+    const serial = ++this.orientationSerial;
+    window.getLastWindow(getContext(this)).then((mainWindow: window.Window) => {
+      if (!this.playerPageVisible || serial !== this.orientationSerial) return;
+      return mainWindow.setPreferredOrientation(preferred);
     }).catch((error: Error): void => {
       console.warn('[VideoPlayer] rotate failed:', error.message);
     });
-    this.scheduleHideControls();
   }
 
   private async loadBook(bookUrl: string, requestedIndex: number): Promise<void> {
@@ -592,5 +613,10 @@ struct VideoPlayerPage {
     .height('100%')
     .backgroundColor(Color.Black)
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .onSizeChange((_oldValue: SizeOptions, newValue: SizeOptions) => {
+      const width = Number(newValue.width);
+      const height = Number(newValue.height);
+      if (width > 0 && height > 0) this.landscape = width > height;
+    })
   }
 }

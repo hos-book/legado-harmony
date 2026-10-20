@@ -7582,7 +7582,8 @@ struct ReadBookPage {
   applyReaderScreenOrientation(orientation: string = this.readerScreenOrientation): void {
     const normalized = ReaderSettingsStore.normalizeScreenOrientation(orientation);
     const serial = ++this.readerScreenOrientationSerial;
-    let preferred = window.Orientation.UNSPECIFIED;
+    // “跟随系统”需要显式启用自动旋转；UNSPECIFIED 在直板手机上通常固定竖屏。
+    let preferred = window.Orientation.AUTO_ROTATION_RESTRICTED;
     if (normalized === ReaderSettingsStore.SCREEN_ORIENTATION_PORTRAIT) {
       preferred = window.Orientation.PORTRAIT;
     } else if (normalized === ReaderSettingsStore.SCREEN_ORIENTATION_LANDSCAPE) {
