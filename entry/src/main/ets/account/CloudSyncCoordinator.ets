@@ -147,6 +147,7 @@ class AppearanceModeSyncPayload {
 
 class SearchPreferencesSyncPayload {
   showResultCover: boolean = true;
+  showResultCoverBackground: boolean = true;
   useBookshelfCoverGallery: boolean = false;
   showResultTags: boolean = true;
   aggregateSearchResults: boolean = true;
@@ -626,6 +627,7 @@ export class CloudSyncCoordinator {
     const searchSettings = await SearchExploreSettingsStore.load(context);
     const searchPreferences = new SearchPreferencesSyncPayload();
     searchPreferences.showResultCover = searchSettings.showResultCover;
+    searchPreferences.showResultCoverBackground = searchSettings.showResultCoverBackground;
     searchPreferences.useBookshelfCoverGallery = searchSettings.useBookshelfCoverGallery;
     searchPreferences.showResultTags = searchSettings.showResultTags;
     searchPreferences.aggregateSearchResults = searchSettings.aggregateSearchResults;
@@ -1035,6 +1037,7 @@ export class CloudSyncCoordinator {
       const remoteSearch = JSON.parse(raw) as SearchPreferencesSyncPayload;
       const searchSettings = await SearchExploreSettingsStore.load(context);
       searchSettings.showResultCover = remoteSearch.showResultCover !== false;
+      searchSettings.showResultCoverBackground = remoteSearch.showResultCoverBackground !== false;
       searchSettings.useBookshelfCoverGallery = remoteSearch.useBookshelfCoverGallery === true;
       searchSettings.showResultTags = remoteSearch.showResultTags !== false;
       searchSettings.aggregateSearchResults = remoteSearch.aggregateSearchResults !== false;

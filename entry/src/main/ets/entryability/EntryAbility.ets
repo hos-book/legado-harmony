@@ -166,6 +166,7 @@ export default class EntryAbility extends UIAbility {
     PersistentStorage.persistProp('bookshelfIgnoreSourceCover', false);
     PersistentStorage.persistProp('bookshelfCoverMode', 'sequence');
     PersistentStorage.persistProp('searchExploreShowResultCover', true);
+    PersistentStorage.persistProp('searchExploreShowResultCoverBackground', true);
     PersistentStorage.persistProp('searchExploreUseBookshelfCoverGallery', false);
     PersistentStorage.persistProp('searchExploreShowResultTags', true);
     PersistentStorage.persistProp('searchExploreAggregateResults', true);

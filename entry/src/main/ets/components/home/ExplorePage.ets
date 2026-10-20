@@ -101,6 +101,7 @@ export struct ExplorePage {
   @StorageLink('appDarkMode') appDarkMode: boolean = false;
   @StorageLink('themeRevision') themeRevision: number = 0;
   @StorageLink('searchExploreShowResultCover') searchExploreShowResultCover: boolean = true;
+  @StorageLink('searchExploreShowResultCoverBackground') searchExploreShowResultCoverBackground: boolean = true;
   @StorageLink('searchExploreUseBookshelfCoverGallery') searchExploreUseBookshelfCoverGallery: boolean = false;
   @StorageLink('searchExploreShowResultTags') searchExploreShowResultTags: boolean = true;
   @StorageLink('searchExplorePromptAddToShelfOnBack') searchExplorePromptAddToShelfOnBack: boolean = true;
@@ -539,6 +540,7 @@ export struct ExplorePage {
           showLoadingMore: this.isLoadingMore,
           showKind: true,
           showResultCover: this.searchExploreShowResultCover,
+          showResultCoverBackground: this.searchExploreShowResultCoverBackground,
           useBookshelfCoverGallery: this.searchExploreUseBookshelfCoverGallery,
           showResultTags: this.searchExploreShowResultTags,
           showSourceLine: false,

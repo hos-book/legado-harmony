@@ -74,6 +74,7 @@ export struct SearchPage {
   @StorageLink('appDarkMode') appDarkMode: boolean = false;
   @StorageLink('themeRevision') themeRevision: number = 0;
   @StorageLink('searchExploreShowResultCover') searchExploreShowResultCover: boolean = true;
+  @StorageLink('searchExploreShowResultCoverBackground') searchExploreShowResultCoverBackground: boolean = true;
   @StorageLink('searchExploreUseBookshelfCoverGallery') searchExploreUseBookshelfCoverGallery: boolean = false;
   @StorageLink('searchExploreShowResultTags') searchExploreShowResultTags: boolean = true;
   @StorageLink('searchExploreAggregateResults') @Watch('onSearchAggregationChanged')
@@ -637,6 +638,7 @@ export struct SearchPage {
             busyBookKeys: this.addingShelfBookKeys,
             showLoadingMore: this.isSearching,
             showResultCover: this.searchExploreShowResultCover,
+            showResultCoverBackground: this.searchExploreShowResultCoverBackground,
             useBookshelfCoverGallery: this.searchExploreUseBookshelfCoverGallery,
             showResultTags: this.searchExploreShowResultTags,
             pageColor: this.pageColor(),
@@ -1687,6 +1689,7 @@ export struct SearchPage {
   saveSearchExploreSettings(): void {
     SearchExploreSettingsStore.load(getContext(this)).then((settings: SearchExploreSettings) => {
       settings.showResultCover = this.searchExploreShowResultCover;
+      settings.showResultCoverBackground = this.searchExploreShowResultCoverBackground;
       settings.useBookshelfCoverGallery = this.searchExploreUseBookshelfCoverGallery;
       settings.showResultTags = this.searchExploreShowResultTags;
       settings.aggregateSearchResults = this.searchExploreAggregateResults;

@@ -55,6 +55,7 @@ export struct SearchBookResultList {
   @Prop showLoadingMore: boolean = false;
   @Prop showKind: boolean = false;
   @Prop showResultCover: boolean = true;
+  @Prop showResultCoverBackground: boolean = true;
   @Prop useBookshelfCoverGallery: boolean = false;
   @Prop showResultTags: boolean = true;
   @Prop showSourceLine: boolean = true;
@@ -346,7 +347,8 @@ export struct SearchBookResultList {
     // 尾随闭包形式的自定义组件后面不能再接属性，圆角、边框、点击等挂在外层 Column 上。
     Column() {
       CoverBackdropCard({
-        cover: this.showResultCover ? this.backdropCover(book) : '',
+        cover: this.showResultCover && this.showResultCoverBackground ? this.backdropCover(book) : '',
+        showBackdrop: this.showResultCoverBackground,
         accentColor: this.accentColor(),
         cardColor: this.cardColor,
         darkMode: this.isDarkMode()

@@ -4,6 +4,7 @@ import { CloudSyncChangeTracker } from '../account/CloudSyncChangeTracker';
 
 export class SearchExploreSettings {
   showResultCover: boolean = true;
+  showResultCoverBackground: boolean = true;
   useBookshelfCoverGallery: boolean = false;
   showResultTags: boolean = true;
   aggregateSearchResults: boolean = true;
@@ -21,6 +22,7 @@ export class SearchExploreSettings {
 
 export class SearchExploreSettingsStore {
   static readonly KEY_SHOW_RESULT_COVER: string = 'searchExploreShowResultCover';
+  static readonly KEY_SHOW_RESULT_COVER_BACKGROUND: string = 'searchExploreShowResultCoverBackground';
   static readonly KEY_USE_BOOKSHELF_COVER_GALLERY: string = 'searchExploreUseBookshelfCoverGallery';
   static readonly KEY_SHOW_RESULT_TAGS: string = 'searchExploreShowResultTags';
   static readonly KEY_AGGREGATE_SEARCH_RESULTS: string = 'searchExploreAggregateResults';
@@ -49,6 +51,8 @@ export class SearchExploreSettingsStore {
     const settings = new SearchExploreSettings();
     settings.showResultCover = await SearchExploreSettingsStore.getBoolean(
       store, SearchExploreSettingsStore.KEY_SHOW_RESULT_COVER, true);
+    settings.showResultCoverBackground = await SearchExploreSettingsStore.getBoolean(
+      store, SearchExploreSettingsStore.KEY_SHOW_RESULT_COVER_BACKGROUND, true);
     settings.useBookshelfCoverGallery = await SearchExploreSettingsStore.getBoolean(
       store, SearchExploreSettingsStore.KEY_USE_BOOKSHELF_COVER_GALLERY, false);
     settings.showResultTags = await SearchExploreSettingsStore.getBoolean(
@@ -91,6 +95,7 @@ export class SearchExploreSettingsStore {
     SearchExploreSettingsStore.cachedSettings = SearchExploreSettingsStore.clone(settings);
     const store = await preferences.getPreferences(context, SearchExploreSettingsStore.STORE_NAME);
     await store.put(SearchExploreSettingsStore.KEY_SHOW_RESULT_COVER, settings.showResultCover);
+    await store.put(SearchExploreSettingsStore.KEY_SHOW_RESULT_COVER_BACKGROUND, settings.showResultCoverBackground);
     await store.put(SearchExploreSettingsStore.KEY_USE_BOOKSHELF_COVER_GALLERY, settings.useBookshelfCoverGallery);
     await store.put(SearchExploreSettingsStore.KEY_SHOW_RESULT_TAGS, settings.showResultTags);
     await store.put(SearchExploreSettingsStore.KEY_AGGREGATE_SEARCH_RESULTS, settings.aggregateSearchResults);
@@ -131,6 +136,8 @@ export class SearchExploreSettingsStore {
   static applyToStorage(settings: SearchExploreSettings): void {
     SearchExploreSettingsStore.cachedSettings = SearchExploreSettingsStore.clone(settings);
     AppStorage.setOrCreate(SearchExploreSettingsStore.KEY_SHOW_RESULT_COVER, settings.showResultCover);
+    AppStorage.setOrCreate(
+      SearchExploreSettingsStore.KEY_SHOW_RESULT_COVER_BACKGROUND, settings.showResultCoverBackground);
     AppStorage.setOrCreate(
       SearchExploreSettingsStore.KEY_USE_BOOKSHELF_COVER_GALLERY,
       settings.useBookshelfCoverGallery);
@@ -189,6 +196,7 @@ export class SearchExploreSettingsStore {
   private static clone(source: SearchExploreSettings): SearchExploreSettings {
     const settings = new SearchExploreSettings();
     settings.showResultCover = source.showResultCover;
+    settings.showResultCoverBackground = source.showResultCoverBackground !== false;
     settings.useBookshelfCoverGallery = source.useBookshelfCoverGallery;
     settings.showResultTags = source.showResultTags;
     settings.aggregateSearchResults = source.aggregateSearchResults !== false;
@@ -234,6 +242,7 @@ export class SearchExploreSettingsStore {
 
   private static syncFieldsChanged(left: SearchExploreSettings, right: SearchExploreSettings): boolean {
     return left.showResultCover !== right.showResultCover ||
+      left.showResultCoverBackground !== right.showResultCoverBackground ||
       left.useBookshelfCoverGallery !== right.useBookshelfCoverGallery ||
       left.showResultTags !== right.showResultTags ||
       left.aggregateSearchResults !== right.aggregateSearchResults ||

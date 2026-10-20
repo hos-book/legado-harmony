@@ -11,6 +11,7 @@
 @Component
 export struct CoverBackdropCard {
   @Prop cover: string = '';
+  @Prop showBackdrop: boolean = true;
   @Prop accentColor: string = '#007DFF';
   /** 卡片底色，遮罩在它的基础上加透明度。 */
   @Prop cardColor: string = '#FFFFFF';
@@ -24,7 +25,7 @@ export struct CoverBackdropCard {
 
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
-      if (this.contentHeight > 0) {
+      if (this.showBackdrop && this.contentHeight > 0) {
         Stack() {
           Column()
             .width('100%')
