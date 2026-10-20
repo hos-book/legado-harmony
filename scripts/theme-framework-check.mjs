@@ -390,7 +390,24 @@ assert(themeColorPage.includes('settings.themeId = ThemeIds.CUSTOM') &&
 assert(!otherSettingsPage.includes("router.pushUrl({ url: 'pages/ThemeColorSettings' })"),
   'Other settings still exposes the removed legacy theme-color entry');
 assert(themePage.includes('ReaderThemeHelper.APP_THEME_INDEX'), 'Theme selection does not enable the app reader theme');
-assert(themePage.includes('settings.fontFilePath'), 'Custom font override is not protected during theme selection');
+// Global fonts are preserved by the settings store when switching theme profiles.
+// The theme page delegates to that store and reapplies the selected application font.
+assert(themePage.includes('await ReaderSettingsStore.switchThemeProfile(') &&
+  themePage.includes('ReaderFontBootstrap.applyApplicationFont('),
+  'Theme selection must switch reader profiles and reapply the global application font');
+const switchThemeProfile = readerStore.match(/static async switchThemeProfile\b[\s\S]*?(?=\n  static async )/)?.[0] || '';
+const preserveFontsAt = switchThemeProfile.indexOf('ReaderSettingsStore.copyGlobalFontSettings(current, next)');
+assert(preserveFontsAt >= 0 &&
+  preserveFontsAt < switchThemeProfile.indexOf('ReaderSettingsStore.persistThemeProfile(store, nextId, next)') &&
+  preserveFontsAt < switchThemeProfile.indexOf('ReaderSettingsStore.applyToStorage(next)'),
+  'Theme profile switching must preserve global fonts before persisting or applying the next profile');
+const copyGlobalFontSettings = readerStore.match(/private static copyGlobalFontSettings\b[\s\S]*?(?=\n  private static )/)?.[0] || '';
+for (const field of ['fontFamily', 'fontFilePath', 'fontSourceName', 'fontMode', 'systemFontFamily', 'customFontsRaw']) {
+  assert(copyGlobalFontSettings.includes(`target.${field} = source.${field};`),
+    `Theme profile switching must preserve the global font setting: ${field}`);
+}
+assert(/if \(activeFamily && AppStorage\.get<boolean>\('readerFontRegistered'\)\)\s*\{\s*return activeFamily;/.test(fontBootstrap),
+  'A registered global font must take precedence over the theme application font');
 assert(themePage.includes('ThemeAssetRegistry.themeLogo(theme.id)') &&
   !themePage.includes("Text('Aa')") &&
   !themePage.includes('颜色、阅读背景、正则气泡与悬浮底栏已统一'),
