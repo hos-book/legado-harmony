@@ -120,8 +120,7 @@ export struct SettingsPage {
       .height(56 + this.statusBarHeight)
       .alignItems(VerticalAlign.Center)
       .padding({ left: AppSpacing.XL, top: this.statusBarHeight })
-      .backgroundColor(ThemeRuntime.topBarColor(this.appDarkMode))
-      .backdropBlur(ThemeRuntime.topBarBlur())
+      .linearGradient(ThemeRuntime.topBarBackground(this.appDarkMode, 56 + this.statusBarHeight))
     }
     .width('100%')
     .height('100%')

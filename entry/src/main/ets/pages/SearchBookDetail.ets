@@ -255,7 +255,6 @@ struct SearchBookDetailPage {
         .width('100%')
         .padding({ left: AppSpacing.XL, right: AppSpacing.XL, top: AppSpacing.MD, bottom: 12 + this.navBarHeight })
         .backgroundColor(ThemeRuntime.topBarColor(this.appDarkMode))
-        .backdropBlur(ThemeRuntime.topBarBlur())
       }
       .width('100%')
       .height('100%')
@@ -328,8 +327,7 @@ struct SearchBookDetailPage {
       Column()
         .width('100%')
         .height('100%')
-        .backgroundColor(ThemeRuntime.topBarColor(this.appDarkMode))
-        .backdropBlur(ThemeRuntime.topBarBlur())
+        .linearGradient(ThemeRuntime.topBarBackground(this.appDarkMode, 56 + this.statusBarHeight))
         .opacity(this.titleBarProgress())
 
       Row() {

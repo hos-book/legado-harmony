@@ -223,7 +223,6 @@ struct BookSourceEditPage {
         .height(56 + this.statusBarHeight)
         .padding({ top: this.statusBarHeight })
         .backgroundColor(ThemeRuntime.topBarColor(this.appDarkMode))
-        .backdropBlur(ThemeRuntime.topBarBlur())
         .alignItems(VerticalAlign.Center)
 
         // Tab栏

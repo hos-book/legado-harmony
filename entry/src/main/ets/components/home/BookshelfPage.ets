@@ -114,6 +114,8 @@ export struct BookshelfPage {
   @State shelfScope: string = 'all';
   /** 分类栏上已经点中、书籍列表还在切换动画里的目标页（类型或 'private'）；空串表示跟随当前页。 */
   @State shelfScopeTabSelection: string = '';
+  /** 悬浮顶栏的实测高度，用来把底色的渐隐段放在最下面。 */
+  @State topBarHeight: number = 0;
   /** 当前有书的类型，决定分类栏显示哪几项；“全部”总在第一位。 */
   @State shelfTypeTabIds: string[] = ['all'];
   /** 分类栏的实际宽度：沉浸材质底板需要具体数值。 */
@@ -1110,8 +1112,10 @@ export struct BookshelfPage {
         .width('100%')
         .position({ x: 0, y: 0 })
         .zIndex(4)
-        .backgroundColor(ThemeRuntime.topBarColor(this.appDarkMode))
-        .backdropBlur(ThemeRuntime.topBarBlur())
+        .linearGradient(ThemeRuntime.topBarBackground(this.appDarkMode, this.topBarHeight))
+        .onAreaChange((_oldArea: Area, newArea: Area) => {
+          this.topBarHeight = Number(newArea.height);
+        })
 
         if (this.isLoading) {
           Column() {

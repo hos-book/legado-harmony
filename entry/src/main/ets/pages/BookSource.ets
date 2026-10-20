@@ -96,6 +96,8 @@ struct BookSourcePage {
   @StorageLink('appLightButtonColor') appLightButtonColor: string = '#007DFF';
   @StorageLink('appDarkButtonColor') appDarkButtonColor: string = '#3F8CFF';
   @StorageProp('statusBarHeight') statusBarHeight: number = 0;
+  /** 悬浮顶栏的实测高度，用来把底色的渐隐段放在最下面。 */
+  @State topBarHeight: number = 0;
   @StorageProp('navBarHeight') navBarHeight: number = 0;
   @StorageLink('pendingBookSourceImportNonce') @Watch('onPendingBookSourceImportChanged')
   pendingBookSourceImportNonce: number = 0;
@@ -412,8 +414,10 @@ struct BookSourcePage {
           }
         }
         .width('100%')
-        .backgroundColor(ThemeRuntime.topBarColor(this.appDarkMode))
-        .backdropBlur(ThemeRuntime.topBarBlur())
+        .linearGradient(ThemeRuntime.topBarBackground(this.appDarkMode, this.topBarHeight))
+        .onAreaChange((_oldArea: Area, newArea: Area) => {
+          this.topBarHeight = Number(newArea.height);
+        })
         .zIndex(2)
 
         if (this.isLoading) {
@@ -1334,7 +1338,6 @@ struct BookSourcePage {
     .height(56 + this.statusBarHeight)
     .padding({ right: AppSpacing.XL, top: this.statusBarHeight })
     .backgroundColor(ThemeRuntime.topBarColor(this.appDarkMode))
-    .backdropBlur(ThemeRuntime.topBarBlur())
     .alignItems(VerticalAlign.Center)
     .position({ x: 0, y: 0 })
   }

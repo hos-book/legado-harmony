@@ -983,7 +983,6 @@ struct CustomTtsVoiceManagerPage {
     .height(56 + this.statusBarHeight)
     .padding({ right: AppSpacing.XL, top: this.statusBarHeight })
     .backgroundColor(ThemeRuntime.topBarColor(this.appDarkMode))
-    .backdropBlur(ThemeRuntime.topBarBlur())
     .alignItems(VerticalAlign.Center)
   }
 

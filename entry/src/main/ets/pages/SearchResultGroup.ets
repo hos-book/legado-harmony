@@ -112,8 +112,7 @@ struct SearchResultGroupPage {
       .height(56 + this.statusBarHeight)
       .padding({ left: AppSpacing.XS, right: AppSpacing.XL, top: this.statusBarHeight })
       .alignItems(VerticalAlign.Center)
-      .backgroundColor(ThemeRuntime.topBarColor(this.appDarkMode))
-      .backdropBlur(ThemeRuntime.topBarBlur())
+      .linearGradient(ThemeRuntime.topBarBackground(this.appDarkMode, 56 + this.statusBarHeight))
       .zIndex(2)
     }
     .width('100%')

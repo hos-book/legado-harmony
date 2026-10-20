@@ -185,7 +185,6 @@ struct BookChapterListPage {
     .padding({ right: AppSpacing.XL, top: this.statusBarHeight })
     .alignItems(VerticalAlign.Center)
     .backgroundColor(ThemeRuntime.topBarColor(this.appDarkMode))
-    .backdropBlur(ThemeRuntime.topBarBlur())
     .position({ x: 0, y: 0 })
   }
 

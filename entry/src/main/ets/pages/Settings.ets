@@ -102,12 +102,12 @@ struct SettingsPage {
   @State @Watch('onSystemDialogFlagChanged') showTapZoneSettings: boolean = false;
   @State customThemeNameDraft: string = '';
   private readerEyePermissionRequestSerial: number = 0;
+  /** 本页已注册过的字体：文件路径 -> 注册得到的 fontFamily。 */
+  private registeredFontFamilies: Map<string, string> = new Map();
 
+  // 设置和字体只在 onPageShow 里读：首次进入时它紧跟 aboutToAppear 执行，两处都读会把同样的活做两遍。
   aboutToAppear() {
     this.loadThemeMode();
-    this.loadReaderSettings();
-    this.reloadCustomFonts();
-    this.syncBars();
   }
 
   onPageShow(): void {
@@ -137,6 +137,10 @@ struct SettingsPage {
   async loadThemeMode(): Promise<void> {
     try {
       const mode = await AppThemeModeStore.load(getContext(this));
+      // 启动时已按保存的模式设过颜色模式；没变就别再 setColorMode，那会触发整个应用的配置刷新。
+      if (AppThemeModeStore.normalizeMode(mode) === this.appThemeMode) {
+        return;
+      }
       this.applyThemeMode(mode, false);
     } catch (e) {
       console.warn('读取主题模式失败:', e);
@@ -492,9 +496,10 @@ struct SettingsPage {
     }
   }
 
+  // 只为预览和列表注册，不改应用字体：全局字体由 registerSelectedReaderFont / selectCustomFont 决定。
   registerCustomFonts(): void {
     for (const item of this.customFonts) {
-      this.registerCustomFont(item);
+      this.registerCustomFont(item, false);
     }
     if (this.readerFontFamily && this.readerFontFilePath &&
       !this.hasCustomFont(this.customFonts, this.readerFontFamily, this.readerFontFilePath)) {
@@ -502,27 +507,39 @@ struct SettingsPage {
       item.familyName = this.readerFontFamily;
       item.filePath = this.readerFontFilePath;
       item.sourceName = this.readerFontSourceName || this.fileNameFromUri(this.readerFontFilePath);
-      this.registerCustomFont(item);
+      this.registerCustomFont(item, false);
     }
   }
 
-  registerCustomFont(item: ReaderCustomFontItem): string {
+  /**
+   * 注册字体并返回可用的 fontFamily。同一路径在本页只真正注册一次（预览在 build 里会反复调用）。
+   * activate 为 true 时同时把它记为当前应用字体，只有用户选定的全局字体才应该这样做。
+   */
+  registerCustomFont(item: ReaderCustomFontItem, activate: boolean = true): string {
     if (!item.filePath) {
       return '';
     }
-    const fontItem = new ReaderFontItem();
-    fontItem.familyName = item.familyName;
-    fontItem.filePath = item.filePath;
-    fontItem.sourceName = item.sourceName;
-    const result = ReaderFontHelper.registerFont(this.getUIContext(), fontItem);
-    if (result.registered) {
+    let family = this.registeredFontFamilies.get(item.filePath) || '';
+    if (!family) {
+      const fontItem = new ReaderFontItem();
+      fontItem.familyName = item.familyName;
+      fontItem.filePath = item.filePath;
+      fontItem.sourceName = item.sourceName;
+      const result = ReaderFontHelper.registerFont(this.getUIContext(), fontItem);
+      if (!result.registered) {
+        return '';
+      }
+      this.registeredFontFamilies.set(item.filePath, result.familyName);
+      this.registeredFontFamilies.set(result.filePath, result.familyName);
       item.filePath = result.filePath;
       item.familyName = this.familyNameForPath(result.filePath);
-      this.readerActiveFontFamily = result.familyName;
-      this.readerFontRegistered = true;
-      return result.familyName;
+      family = result.familyName;
     }
-    return '';
+    if (activate) {
+      this.readerActiveFontFamily = family;
+      this.readerFontRegistered = true;
+    }
+    return family;
   }
 
   getPreviewFontFamily(): string {
@@ -557,7 +574,7 @@ struct SettingsPage {
     for (const item of this.customFonts) {
       const stableFamily = item.filePath ? ReaderFontHelper.normalizeFontFamily(item.filePath) : item.familyName;
       if (item.familyName === family || stableFamily === family) {
-        return this.registerCustomFont(item) || stableFamily || family;
+        return this.registerCustomFont(item, false) || stableFamily || family;
       }
     }
     return family;
@@ -635,6 +652,11 @@ struct SettingsPage {
     const fontSourceName = settings ? settings.fontSourceName : this.readerFontSourceName;
     if (!fontFilePath || !this.fontFileExists(fontFilePath)) {
       return false;
+    }
+    // 启动或选字体时已注册并设成应用字体的，打开页面不再重注册、setFont 和回写设置：
+    // setFont 会让整个应用（含所有 Web 组件）刷新一遍配置，正赶上页面转场。
+    if (this.readerFontRegistered && this.readerActiveFontFamily === ReaderFontHelper.runtimeFontFamily(fontFilePath)) {
+      return true;
     }
     const item = new ReaderCustomFontItem();
     item.familyName = fontFamily || ReaderFontHelper.normalizeFontFamily(fontFilePath);

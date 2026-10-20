@@ -796,7 +796,6 @@ struct ThemeSettingsPage {
     .height(56 + this.statusBarHeight)
     .padding({ top: this.statusBarHeight, left: AppSpacing.LG, right: AppSpacing.LG })
     .backgroundColor(this.titleBarSurfaceColor())
-    .backdropBlur(ThemeRuntime.topBarBlur())
     .alignItems(VerticalAlign.Center)
   }
 

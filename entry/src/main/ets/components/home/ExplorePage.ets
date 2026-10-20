@@ -37,6 +37,8 @@ export struct ExplorePage {
   /** 分类达到这个数量才在频道栏右端显示“全部分类”按钮，少量分类横滑就能看完。 */
   static readonly CATEGORY_SHEET_MIN_COUNT: number = 6;
   @Prop statusBarHeight: number = 0;
+  /** 悬浮顶栏的实测高度，用来把底色的渐隐段放在最下面。 */
+  @State topBarHeight: number = 0;
   @Prop navBarHeight: number = 0;
   @Prop @Watch('onActiveChanged') isActive: boolean = false;
   @State entries: ExploreEntry[] = [];
@@ -509,8 +511,10 @@ export struct ExplorePage {
         .width('100%')
         .position({ x: 0, y: 0 })
         .zIndex(4)
-        .backgroundColor(ThemeRuntime.topBarColor(this.appDarkMode))
-        .backdropBlur(ThemeRuntime.topBarBlur())
+        .linearGradient(ThemeRuntime.topBarBackground(this.appDarkMode, this.topBarHeight))
+        .onAreaChange((_oldArea: Area, newArea: Area) => {
+          this.topBarHeight = Number(newArea.height);
+        })
 
       if (this.isLoading) {
         Column() {

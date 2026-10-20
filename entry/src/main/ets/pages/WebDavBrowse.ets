@@ -186,7 +186,6 @@ struct WebDavBrowsePage {
       .width('100%')
       .padding({ left: AppSpacing.LG, right: AppSpacing.LG, top: AppSpacing.LG, bottom: AppSpacing.MD })
       .backgroundColor(ThemeRuntime.topBarColor(this.appDarkMode))
-      .backdropBlur(ThemeRuntime.topBarBlur())
       .zIndex(2)
 
       if (this.entries.length === 0) {
