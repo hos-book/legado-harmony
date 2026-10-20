@@ -23,7 +23,8 @@ import { CloudSyncSettingsStore } from '../account/CloudSyncSettingsStore';
 import { CloudSyncCoordinator } from '../account/CloudSyncCoordinator';
 import { CloudSyncChangeTracker } from '../account/CloudSyncChangeTracker';
 import { StartupCoverTextStore } from '../utils/StartupCoverTextStore';
-import { BookSourceRuntimeStore, SourceScriptNotice, TlsTrustStore } from '@legado/sourceengine';
+import { BookSourceRuntimeStore, NativeSourceInteraction, SourceScriptNotice, TlsTrustStore } from '@legado/sourceengine';
+import { AppSourceInteraction } from '../utils/AppSourceInteraction';
 import { HdsFeedback } from '../utils/HdsFeedback';
 import { QuickJsDiagnostics } from '@legado/sourceengine/Diagnostics';
 import { AppDatabase } from '../model/data/AppDatabase';
@@ -70,6 +71,8 @@ export default class EntryAbility extends UIAbility {
     SourceScriptNotice.setHandler((sourceName: string, message: string): void => {
       HdsFeedback.showToast(sourceName ? `${sourceName}：${message}` : message);
     });
+    // 原生书源脚本的提示、刷新发现页、打开网页。
+    NativeSourceInteraction.setHandler(new AppSourceInteraction(this.context));
     TlsTrustStore.load(this.context).catch((e: Error) => {
       hilog.warn(0x0000, 'testTag', 'Load TLS trust settings failed: %{public}s', JSON.stringify(e));
     });
