@@ -11,18 +11,18 @@
 > 本项目不内置、不托管、不分发小说正文、章节、封面、付费资源或书源订阅。应用仅处理用户自行导入且具备合法使用权限的书源规则与本地文件。使用前请确认内容授权、目标站点协议及所在地法律法规要求。
 
 <p align="center">
-  <a href="docs/images/app-intro-01.png"><img src="docs/images/app-intro-01.png" width="19%" alt="书架：小说、漫画、有声书与视频统一管理" /></a>
-  <a href="docs/images/app-intro-02.png"><img src="docs/images/app-intro-02.png" width="19%" alt="搜索：多书源搜索与分类结果" /></a>
-  <a href="docs/images/app-intro-03.png"><img src="docs/images/app-intro-03.png" width="19%" alt="发现：频道、分类与榜单" /></a>
-  <a href="docs/images/app-intro-04.png"><img src="docs/images/app-intro-04.png" width="19%" alt="详情：书籍信息与目录" /></a>
-  <a href="docs/images/app-intro-05.png"><img src="docs/images/app-intro-05.png" width="19%" alt="段评：阅读中的评论气泡与面板" /></a>
+  <a href="docs/manual/shots/01-shelf.png"><img src="docs/manual/shots/01-shelf.png" width="19%" alt="书架：小说、漫画、有声书与视频统一管理" /></a>
+  <a href="docs/manual/shots/02-search.png"><img src="docs/manual/shots/02-search.png" width="19%" alt="搜索：多书源搜索与分类结果" /></a>
+  <a href="docs/manual/shots/03-discover.png"><img src="docs/manual/shots/03-discover.png" width="19%" alt="发现：频道、分类与榜单" /></a>
+  <a href="docs/manual/shots/04-detail.png"><img src="docs/manual/shots/04-detail.png" width="19%" alt="详情：书籍信息与目录" /></a>
+  <a href="docs/manual/shots/05-comment.png"><img src="docs/manual/shots/05-comment.png" width="19%" alt="段评：阅读中的评论气泡与面板" /></a>
 </p>
 <p align="center">
-  <a href="docs/images/app-intro-06.png"><img src="docs/images/app-intro-06.png" width="19%" alt="翻页：仿真与 3D 仿真阅读" /></a>
-  <a href="docs/images/app-intro-07.png"><img src="docs/images/app-intro-07.png" width="19%" alt="漫画：条漫与单页阅读" /></a>
-  <a href="docs/images/app-intro-08.png"><img src="docs/images/app-intro-08.png" width="19%" alt="朗读：音色、逐句高亮与后台播放" /></a>
-  <a href="docs/images/app-intro-09.png"><img src="docs/images/app-intro-09.png" width="19%" alt="媒体：有声书与视频播放" /></a>
-  <a href="docs/images/app-intro-10.png"><img src="docs/images/app-intro-10.png" width="19%" alt="主题：封面、启动页与阅读配色" /></a>
+  <a href="docs/manual/shots/06-pageturn.png"><img src="docs/manual/shots/06-pageturn.png" width="19%" alt="翻页：仿真与 3D 仿真阅读" /></a>
+  <a href="docs/manual/shots/07-comic.png"><img src="docs/manual/shots/07-comic.png" width="19%" alt="漫画：条漫与单页阅读" /></a>
+  <a href="docs/manual/shots/08-tts.png"><img src="docs/manual/shots/08-tts.png" width="19%" alt="朗读：音色、逐句高亮与后台播放" /></a>
+  <a href="docs/manual/shots/09-media.png"><img src="docs/manual/shots/09-media.png" width="19%" alt="媒体：有声书与视频播放" /></a>
+  <a href="docs/manual/shots/10-theme.png"><img src="docs/manual/shots/10-theme.png" width="19%" alt="主题：封面、启动页与阅读配色" /></a>
 </p>
 
 | 项目 | 信息 |
