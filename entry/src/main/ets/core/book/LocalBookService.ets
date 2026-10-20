@@ -1165,7 +1165,9 @@ export class LocalBookService {
     const root = new XmlNodeData();
     root.name = '#document';
     const stack: XmlNodeData[] = [root];
-    const encoded = new util.TextEncoder().encodeInto(text);
+    // TextDecoder may preserve a UTF-8 BOM as U+FEFF; XmlPullParser then treats
+    // the XML declaration as a processing instruction outside the document start.
+    const encoded = new util.TextEncoder().encodeInto(text.replace(/^\uFEFF/, ''));
     const bytes = new ArrayBuffer(encoded.length);
     new Uint8Array(bytes).set(encoded);
     const parser = new xml.XmlPullParser(bytes, 'utf-8');
