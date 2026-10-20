@@ -44,7 +44,18 @@ const SHELF_UPDATE_BADGE_VARIABLE: string = 'shelfHasUpdate';
 const SHELF_SEARCH_INPUT_KEY: string = 'bookshelf_search_input';
 /** 输入停顿这么久才按新关键词重新筛选，连续打字时不必每个字都重建列表。 */
 const SHELF_SEARCH_APPLY_DELAY_MS: number = 200;
+/** 标签、书源筛选键的前缀，后面跟 encodeURIComponent 过的名字，避免名字里的逗号打乱键列表。 */
+const SHELF_FILTER_TAG_PREFIX: string = 'tag:';
+const SHELF_FILTER_ORIGIN_PREFIX: string = 'src:';
+const SHELF_DAY_MS: number = 24 * 60 * 60 * 1000;
 let bookshelfColdStartRefreshStarted: boolean = false;
+
+/** 标签、书源筛选子页里的一项：筛选键、显示名与当前书架里的本数。 */
+class ShelfFilterOption {
+  key: string = '';
+  label: string = '';
+  count: number = 0;
+}
 
 interface ShelfFullTextCacheTask {
   taskId: number;
@@ -78,14 +89,20 @@ export struct BookshelfPage {
   static readonly SCOPE_TAB_INDICATOR_WIDTH: number = 18;
   /** 分类栏按书籍类型切换，没有书的类型不显示；隐私书架不在栏里，从最后一项继续左滑进入。 */
   static readonly TYPE_TAB_IDS: string[] = ['all', 'text', 'image', 'audio', 'video'];
-  /** 筛选分四组：来源、状态、阅读进度与更新。 */
+  /**
+   * 弹窗里直接列出的筛选组：来源、状态、阅读进度、最近阅读与更新。
+   * 标签和书源的选项随书架内容变化，键带前缀，放在弹窗的二级页里。
+   */
   static readonly FILTER_SOURCE_KEYS: string[] = ['network', 'local'];
   static readonly FILTER_STATUS_KEYS: string[] = ['finished', 'ongoing'];
   static readonly FILTER_PROGRESS_KEYS: string[] = ['unread', 'reading', 'readDone'];
+  static readonly FILTER_READ_TIME_KEYS: string[] = ['read7d', 'read30d', 'stale90d'];
   static readonly FILTER_UPDATE_KEYS: string[] = ['updated'];
   static readonly FILTER_GROUPS: string[][] = [BookshelfPage.FILTER_SOURCE_KEYS, BookshelfPage.FILTER_STATUS_KEYS,
-    BookshelfPage.FILTER_PROGRESS_KEYS, BookshelfPage.FILTER_UPDATE_KEYS];
-  static readonly FILTER_GROUP_LABELS: string[] = ['来源', '状态', '进度', '更新'];
+    BookshelfPage.FILTER_PROGRESS_KEYS, BookshelfPage.FILTER_READ_TIME_KEYS, BookshelfPage.FILTER_UPDATE_KEYS];
+  static readonly FILTER_GROUP_LABELS: string[] = ['来源', '状态', '进度', '最近阅读', '更新'];
+  /** 标签、书源二级页里选项区域的最大高度，超出后在区域内滚动。 */
+  static readonly FILTER_SUBPAGE_MAX_HEIGHT: number = 360;
   /** 标题行下方书架搜索栏的高度。 */
   static readonly SEARCH_BAR_HEIGHT: number = 40;
   /** 顶部排序胶囊、筛选和布局圆形按钮的高度。 */
@@ -97,6 +114,8 @@ export struct BookshelfPage {
   // 加密的书源封面解密完成后递增，读取它的封面会重新取到本地文件地址。
   @StorageProp('sourceCoverRevision') sourceCoverRevision: number = 0;
   @Prop statusBarHeight: number = 0;
+  /** 悬浮顶栏的实测高度，用来把底色的渐隐段放在最下面。 */
+  @State topBarHeight: number = 0;
   @Prop navBarHeight: number = 0;
   @Link isBookMultiSelect: boolean;
   @Link @Watch('onActiveShelfGroupChanged') activeShelfGroupId: number;
@@ -114,8 +133,6 @@ export struct BookshelfPage {
   @State shelfScope: string = 'all';
   /** 分类栏上已经点中、书籍列表还在切换动画里的目标页（类型或 'private'）；空串表示跟随当前页。 */
   @State shelfScopeTabSelection: string = '';
-  /** 悬浮顶栏的实测高度，用来把底色的渐隐段放在最下面。 */
-  @State topBarHeight: number = 0;
   /** 当前有书的类型，决定分类栏显示哪几项；“全部”总在第一位。 */
   @State shelfTypeTabIds: string[] = ['all'];
   /** 分类栏的实际宽度：沉浸材质底板需要具体数值。 */
@@ -128,6 +145,8 @@ export struct BookshelfPage {
   @State showShelfSortMenu: boolean = false;
   @State showShelfLayoutMenu: boolean = false;
   @State showShelfFilterMenu: boolean = false;
+  /** 筛选弹窗当前页：空串为主页，'tag' / 'origin' 为标签、书源二级页。 */
+  @State shelfFilterMenuPage: string = '';
   /** 分类栏选中的书籍类型，只在本次运行内保留（切换页签不丢，重启后回到“全部”）。 */
   @StorageLink('bookshelfTypeTab') shelfTypeTab: string = 'all';
   /** 筛选条件（FILTER_GROUPS 里的键）逗号分隔，同样只在本次运行内保留。 */
@@ -4587,13 +4606,16 @@ export struct BookshelfPage {
   }
 
   booksForShelfScope(scope: string): Book[] {
+    return this.allBooks.filter((book: Book) => this.isInShelfView(book, scope) &&
+      this.matchesShelfFilters(book) && this.matchesShelfSearch(book));
+  }
+
+  /** 当前书架页（普通/隐私、分组、分类栏类型）里的书，不看筛选和关键词。 */
+  isInShelfView(book: Book, scope: string): boolean {
     const privateScope = scope === 'private';
-    return this.allBooks.filter((book: Book) => {
-      // 隐私书籍只出现在隐私书架里；隐私书架关闭后它们继续隐藏。
-      if (book.isPrivate !== privateScope || !this.matchesShelfGroup(book)) return false;
-      if (!privateScope && this.shelfTypeTab !== 'all' && this.shelfBookType(book) !== this.shelfTypeTab) return false;
-      return this.matchesShelfFilters(book) && this.matchesShelfSearch(book);
-    });
+    // 隐私书籍只出现在隐私书架里；隐私书架关闭后它们继续隐藏。
+    if (book.isPrivate !== privateScope || !this.matchesShelfGroup(book)) return false;
+    return privateScope || this.shelfTypeTab === 'all' || this.shelfBookType(book) === this.shelfTypeTab;
   }
 
   matchesShelfGroup(book: Book): boolean {
@@ -4621,41 +4643,140 @@ export struct BookshelfPage {
     if (!this.shelfFilterKeys) {
       return [];
     }
-    const keys: string[] = this.shelfFilterKeys.split(',');
-    return BookshelfPage.allShelfFilterKeys().filter((key: string) => keys.indexOf(key) >= 0);
+    return BookshelfPage.canonicalShelfFilterKeys(this.shelfFilterKeys.split(','));
   }
 
-  static allShelfFilterKeys(): string[] {
-    const keys: string[] = [];
-    BookshelfPage.FILTER_GROUPS.forEach((group: string[]) => keys.push(...group));
-    return keys;
+  /** 固定键按 FILTER_GROUPS 的顺序排在前，标签、书源键按选中先后排在后，去重并丢掉不认识的键。 */
+  static canonicalShelfFilterKeys(keys: string[]): string[] {
+    const result: string[] = [];
+    BookshelfPage.FILTER_GROUPS.forEach((group: string[]) => {
+      group.forEach((key: string) => {
+        if (keys.indexOf(key) >= 0) result.push(key);
+      });
+    });
+    keys.forEach((key: string) => {
+      if (BookshelfPage.isDynamicShelfFilterKey(key) && result.indexOf(key) < 0) result.push(key);
+    });
+    return result;
+  }
+
+  static isDynamicShelfFilterKey(key: string): boolean {
+    return (key.startsWith(SHELF_FILTER_TAG_PREFIX) && key.length > SHELF_FILTER_TAG_PREFIX.length) ||
+      (key.startsWith(SHELF_FILTER_ORIGIN_PREFIX) && key.length > SHELF_FILTER_ORIGIN_PREFIX.length);
+  }
+
+  static shelfFilterKeyFor(prefix: string, value: string): string {
+    return `${prefix}${encodeURIComponent(value)}`;
+  }
+
+  /** 标签、书源键里的名字；固定键原样返回。 */
+  static shelfFilterKeyValue(key: string): string {
+    const prefix = key.startsWith(SHELF_FILTER_TAG_PREFIX) ? SHELF_FILTER_TAG_PREFIX :
+      (key.startsWith(SHELF_FILTER_ORIGIN_PREFIX) ? SHELF_FILTER_ORIGIN_PREFIX : '');
+    if (!prefix) return key;
+    try {
+      return decodeURIComponent(key.substring(prefix.length));
+    } catch (e) {
+      return key.substring(prefix.length);
+    }
+  }
+
+  /** 键所属的组：固定组用下标，标签为 'tag'，书源为 'origin'。 */
+  static shelfFilterGroupOf(key: string): string {
+    if (key.startsWith(SHELF_FILTER_TAG_PREFIX)) return 'tag';
+    if (key.startsWith(SHELF_FILTER_ORIGIN_PREFIX)) return 'origin';
+    const index = BookshelfPage.FILTER_GROUPS.findIndex((group: string[]) => group.indexOf(key) >= 0);
+    return `${index}`;
   }
 
   /**
    * 同一组里选的多项取并集，各组之间取交集；某组一项都没选就不按这组限制。
-   * 例：网络 + 已完结 = 网络书里已完结的；网络 + 本地 = 不限来源。
+   * 例：网络 + 已完结 = 网络书里已完结的；网络 + 本地 = 不限来源；标签选“玄幻”“都市”= 带其中任一个标签。
    */
   matchesShelfFilters(book: Book): boolean {
     const keys = this.shelfFilterKeyList();
     if (keys.length === 0) {
       return true;
     }
-    for (let index = 0; index < BookshelfPage.FILTER_GROUPS.length; index++) {
-      const group = BookshelfPage.FILTER_GROUPS[index];
-      const selected = keys.filter((key: string) => group.indexOf(key) >= 0);
-      if (selected.length > 0 && selected.indexOf(this.shelfFilterBookKey(index, book)) < 0) {
-        return false;
-      }
-    }
-    return true;
+    const groups: string[] = [];
+    keys.forEach((key: string) => {
+      const group = BookshelfPage.shelfFilterGroupOf(key);
+      if (groups.indexOf(group) < 0) groups.push(group);
+    });
+    const now = Date.now();
+    return groups.every((group: string) => keys.some((key: string) =>
+      BookshelfPage.shelfFilterGroupOf(key) === group && this.matchesShelfFilterKey(key, book, now)));
   }
 
-  /** 这本书在第 groupIndex 组筛选里对应的键；“更新”组只有一项，没更新时返回空串。 */
-  shelfFilterBookKey(groupIndex: number, book: Book): string {
-    if (groupIndex === 0) return LocalBookService.isLocalBook(book) ? 'local' : 'network';
-    if (groupIndex === 1) return this.isShelfBookFinished(book) ? 'finished' : 'ongoing';
-    if (groupIndex === 2) return this.shelfReadProgressKey(book);
-    return this.hasShelfBookUpdate(book) ? 'updated' : '';
+  matchesShelfFilterKey(key: string, book: Book, now: number): boolean {
+    if (key.startsWith(SHELF_FILTER_TAG_PREFIX)) {
+      return BookDisplayHelper.getBookTags(book).indexOf(BookshelfPage.shelfFilterKeyValue(key)) >= 0;
+    }
+    if (key.startsWith(SHELF_FILTER_ORIGIN_PREFIX)) {
+      return this.shelfBookOriginName(book) === BookshelfPage.shelfFilterKeyValue(key);
+    }
+    if (key === 'network' || key === 'local') return (LocalBookService.isLocalBook(book) ? 'local' : 'network') === key;
+    if (key === 'finished' || key === 'ongoing') return (this.isShelfBookFinished(book) ? 'finished' : 'ongoing') === key;
+    if (BookshelfPage.FILTER_PROGRESS_KEYS.indexOf(key) >= 0) return this.shelfReadProgressKey(book) === key;
+    if (key === 'updated') return this.hasShelfBookUpdate(book);
+    const readTime = this.getBookReadTime(book);
+    if (key === 'read7d') return readTime > 0 && now - readTime <= 7 * SHELF_DAY_MS;
+    if (key === 'read30d') return readTime > 0 && now - readTime <= 30 * SHELF_DAY_MS;
+    if (key === 'stale90d') {
+      // 从没打开过的书按加入书架的时间算，方便一起清理放了很久没看的书。
+      const lastTouched = readTime > 0 ? readTime : this.getBookAddTime(book);
+      return lastTouched <= 0 || now - lastTouched > 90 * SHELF_DAY_MS;
+    }
+    return false;
+  }
+
+  /** 书源筛选只看网络书，按书源名归并；本地书的书源名是文件来源，不参与。 */
+  shelfBookOriginName(book: Book): string {
+    if (LocalBookService.isLocalBook(book)) return '';
+    return (book.originName || book.origin || '').trim();
+  }
+
+  /** 当前书架页里出现过的标签，按本数从多到少；已选但当前页没有的标签也留着，方便取消。 */
+  shelfTagFilterOptions(): ShelfFilterOption[] {
+    return this.buildShelfFilterOptions(SHELF_FILTER_TAG_PREFIX, (book: Book) => BookDisplayHelper.getBookTags(book));
+  }
+
+  shelfOriginFilterOptions(): ShelfFilterOption[] {
+    return this.buildShelfFilterOptions(SHELF_FILTER_ORIGIN_PREFIX, (book: Book) => {
+      const name = this.shelfBookOriginName(book);
+      return name ? [name] : [];
+    });
+  }
+
+  buildShelfFilterOptions(prefix: string, valuesOf: (book: Book) => string[]): ShelfFilterOption[] {
+    const counts: Map<string, number> = new Map();
+    this.allBooks.forEach((book: Book) => {
+      if (!this.isInShelfView(book, this.shelfScope)) return;
+      const seen: string[] = [];
+      valuesOf(book).forEach((raw: string) => {
+        const value = raw.trim();
+        if (!value || seen.indexOf(value) >= 0) return;
+        seen.push(value);
+        counts.set(value, (counts.get(value) || 0) + 1);
+      });
+    });
+    this.shelfFilterKeyList().forEach((key: string) => {
+      if (key.startsWith(prefix)) {
+        const value = BookshelfPage.shelfFilterKeyValue(key);
+        if (!counts.has(value)) counts.set(value, 0);
+      }
+    });
+    const options: ShelfFilterOption[] = [];
+    counts.forEach((count: number, value: string) => {
+      const option = new ShelfFilterOption();
+      option.key = BookshelfPage.shelfFilterKeyFor(prefix, value);
+      option.label = value;
+      option.count = count;
+      options.push(option);
+    });
+    options.sort((a: ShelfFilterOption, b: ShelfFilterOption) => b.count !== a.count ? b.count - a.count :
+      a.label.localeCompare(b.label, 'zh-Hans-CN-u-co-pinyin'));
+    return options;
   }
 
   /** 与书籍卡片上的“未读 / N章未读 / 已读完”一致。 */
@@ -6367,6 +6488,7 @@ export struct BookshelfPage {
       this.shelfHeaderCircleButton($r('sys.symbol.funnel'),
         this.showShelfFilterMenu || this.shelfFilterKeyList().length > 0, this.shelfFilterAccessibilityText(), () => {
           this.showShelfFilterMenu = !this.showShelfFilterMenu;
+          this.shelfFilterMenuPage = '';
           this.showShelfSortMenu = false;
           this.showShelfLayoutMenu = false;
           this.showShelfGroupMenu = false;
@@ -6377,6 +6499,7 @@ export struct BookshelfPage {
       this.shelfFilterDropdown()
     }, Placement.BottomRight, () => {
       this.showShelfFilterMenu = false;
+      this.shelfFilterMenuPage = '';
     }))
   }
 
@@ -6388,6 +6511,17 @@ export struct BookshelfPage {
 
   @Builder
   shelfFilterDropdown() {
+    if (this.shelfFilterMenuPage === 'tag') {
+      this.shelfFilterSubpage('标签', SHELF_FILTER_TAG_PREFIX, this.shelfTagFilterOptions(), '当前书架的书没有标签')
+    } else if (this.shelfFilterMenuPage === 'origin') {
+      this.shelfFilterSubpage('书源', SHELF_FILTER_ORIGIN_PREFIX, this.shelfOriginFilterOptions(), '当前书架没有网络书籍')
+    } else {
+      this.shelfFilterMainPage()
+    }
+  }
+
+  @Builder
+  shelfFilterMainPage() {
     Column({ space: AppSpacing.XXS }) {
       Row({ space: 10 }) {
         SymbolGlyph($r('sys.symbol.magnifyingglass'))
@@ -6424,6 +6558,14 @@ export struct BookshelfPage {
         .width('100%')
         .padding({ left: 12, right: 4 })
       }, (label: string) => label)
+
+      Divider()
+        .strokeWidth(0.5)
+        .color(ThemeRuntime.hairlineColor(this.appDarkMode))
+        .margin({ left: 12, right: 12 })
+      this.filterSubpageEntry('标签', 'tag', SHELF_FILTER_TAG_PREFIX)
+      this.filterSubpageEntry('书源', 'origin', SHELF_FILTER_ORIGIN_PREFIX)
+
       if (this.shelfFilterKeyList().length > 0) {
         Divider()
           .strokeWidth(0.5)
@@ -6441,6 +6583,138 @@ export struct BookshelfPage {
     }
     .width(248)
     .padding(BookshelfPage.MENU_PADDING)
+  }
+
+  /** 主页上的“标签 ›”“书源 ›”：右侧显示已选的名字，点进二级页。 */
+  @Builder
+  filterSubpageEntry(title: string, page: string, prefix: string) {
+    Row({ space: AppSpacing.SM }) {
+      Text(title)
+        .fontSize(AppFontSize.BODY_LARGE)
+        .fontColor(this.primaryTextColor())
+      Text(this.shelfFilterSelectedSummary(prefix))
+        .fontSize(AppFontSize.BODY)
+        .fontColor(this.shelfFilterSelectedSummary(prefix) === '不限' ? this.secondaryTextColor() : this.accentColor())
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .textAlign(TextAlign.End)
+        .layoutWeight(1)
+      SymbolGlyph($r('sys.symbol.chevron_right'))
+        .fontSize(14)
+        .fontColor([this.secondaryTextColor()])
+    }
+    .width('100%')
+    .height(BookshelfPage.MENU_ITEM_HEIGHT)
+    .padding({ left: 12, right: 12 })
+    .borderRadius(this.shelfMenuItemRadius())
+    .alignItems(VerticalAlign.Center)
+    .accessibilityText(`${title}筛选，${this.shelfFilterSelectedSummary(prefix)}`)
+    .onClick(() => {
+      this.shelfFilterMenuPage = page;
+    })
+  }
+
+  @Builder
+  shelfFilterSubpage(title: string, prefix: string, options: ShelfFilterOption[], emptyText: string) {
+    Column({ space: AppSpacing.XXS }) {
+      Row({ space: AppSpacing.SM }) {
+        SymbolGlyph($r('sys.symbol.chevron_left'))
+          .fontSize(16)
+          .fontColor([this.primaryTextColor()])
+        Text(title)
+          .fontSize(AppFontSize.BODY_LARGE)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.primaryTextColor())
+          .layoutWeight(1)
+      }
+      .width('100%')
+      .height(BookshelfPage.MENU_ITEM_HEIGHT)
+      .padding({ left: 12, right: 12 })
+      .borderRadius(this.shelfMenuItemRadius())
+      .alignItems(VerticalAlign.Center)
+      .accessibilityText(`返回筛选，当前为${title}`)
+      .onClick(() => {
+        this.shelfFilterMenuPage = '';
+      })
+
+      if (options.length === 0) {
+        Text(emptyText)
+          .fontSize(AppFontSize.BODY)
+          .fontColor(this.secondaryTextColor())
+          .width('100%')
+          .textAlign(TextAlign.Center)
+          .padding({ top: AppSpacing.LG, bottom: AppSpacing.LG })
+      } else {
+        Scroll() {
+          Flex({ wrap: FlexWrap.Wrap }) {
+            ForEach(options, (option: ShelfFilterOption) => {
+              this.filterCountChip(option)
+            }, (option: ShelfFilterOption) => option.key)
+          }
+          .width('100%')
+          .padding({ left: 12, right: 4, top: AppSpacing.XS })
+        }
+        .width('100%')
+        .constraintSize({ maxHeight: BookshelfPage.FILTER_SUBPAGE_MAX_HEIGHT })
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
+        .align(Alignment.Top)
+      }
+
+      if (this.shelfFilterKeysWithPrefix(prefix).length > 0) {
+        Divider()
+          .strokeWidth(0.5)
+          .color(ThemeRuntime.hairlineColor(this.appDarkMode))
+          .margin({ top: AppSpacing.XS, bottom: AppSpacing.XS, left: 12, right: 12 })
+        Text(`清除${title}筛选`)
+          .fontSize(AppFontSize.BODY_LARGE)
+          .fontColor(this.secondaryTextColor())
+          .width('100%')
+          .height(BookshelfPage.MENU_ITEM_HEIGHT)
+          .textAlign(TextAlign.Center)
+          .borderRadius(this.shelfMenuItemRadius())
+          .onClick(() => this.setShelfFilterKeys(this.shelfFilterKeyList()
+            .filter((key: string) => !key.startsWith(prefix))))
+      }
+    }
+    .width(248)
+    .padding(BookshelfPage.MENU_PADDING)
+  }
+
+  /** 标签、书源小块：名字后跟本数。 */
+  @Builder
+  filterCountChip(option: ShelfFilterOption) {
+    Text() {
+      Span(option.label)
+      Span(` ${option.count}`)
+        .fontSize(AppFontSize.CAPTION)
+        .fontColor(this.secondaryTextColor())
+        .fontWeight(FontWeight.Regular)
+    }
+    .fontSize(AppFontSize.BODY)
+    .fontWeight(this.isShelfFilterSelected(option.key) ? FontWeight.Medium : FontWeight.Regular)
+    .fontColor(this.isShelfFilterSelected(option.key) ? this.accentColor() : this.primaryTextColor())
+    .maxLines(1)
+    .textOverflow({ overflow: TextOverflow.Ellipsis })
+    .constraintSize({ maxWidth: 216 })
+    .height(32)
+    .padding({ left: AppSpacing.LG, right: AppSpacing.LG })
+    .borderRadius(16)
+    .backgroundColor(this.isShelfFilterSelected(option.key) ? this.selectedSoftBackgroundColor() :
+      ThemeRuntime.softFillColor(this.appDarkMode))
+    .margin({ right: AppSpacing.SM, bottom: AppSpacing.SM })
+    .accessibilityText(`${option.label}，${option.count}本`)
+    .accessibilitySelected(this.isShelfFilterSelected(option.key))
+    .onClick(() => this.toggleShelfFilter(option.key))
+  }
+
+  shelfFilterKeysWithPrefix(prefix: string): string[] {
+    return this.shelfFilterKeyList().filter((key: string) => key.startsWith(prefix));
+  }
+
+  shelfFilterSelectedSummary(prefix: string): string {
+    const keys = this.shelfFilterKeysWithPrefix(prefix);
+    return keys.length === 0 ? '不限' : keys.map((key: string) => BookshelfPage.shelfFilterKeyValue(key)).join('、');
   }
 
   @Builder
@@ -6480,7 +6754,10 @@ export struct BookshelfPage {
     if (key === 'reading') return '在读';
     if (key === 'readDone') return '已读完';
     if (key === 'updated') return '有更新';
-    return key;
+    if (key === 'read7d') return '一周内';
+    if (key === 'read30d') return '一月内';
+    if (key === 'stale90d') return '三个月没读';
+    return BookshelfPage.shelfFilterKeyValue(key);
   }
 
   isShelfFilterSelected(key: string): boolean {
@@ -6499,7 +6776,7 @@ export struct BookshelfPage {
   }
 
   setShelfFilterKeys(keys: string[]): void {
-    const next = BookshelfPage.allShelfFilterKeys().filter((key: string) => keys.indexOf(key) >= 0).join(',');
+    const next = BookshelfPage.canonicalShelfFilterKeys(keys).join(',');
     if (next === this.shelfFilterKeys) {
       return;
     }
