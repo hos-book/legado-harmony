@@ -91,7 +91,6 @@ export struct PageScaffold {
     .width('100%')
     .height(PageScaffold.BAR_HEIGHT + this.statusBarHeight)
     .padding({ top: this.statusBarHeight })
-    .linearGradient(ThemeRuntime.topBarBackground(this.appDarkMode, PageScaffold.BAR_HEIGHT + this.statusBarHeight))
     .alignItems(VerticalAlign.Center)
   }
 }

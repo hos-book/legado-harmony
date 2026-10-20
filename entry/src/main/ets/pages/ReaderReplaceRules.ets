@@ -384,7 +384,6 @@ struct ReaderReplaceRulesPage {
     .height(56 + this.statusBarHeight)
     // Keep the action text aligned with the content/search field right edge.
     .padding({ right: AppSpacing.XL, top: this.statusBarHeight })
-    .backgroundColor(ThemeRuntime.topBarColor(this.appDarkMode))
     .alignItems(VerticalAlign.Center)
   }
 

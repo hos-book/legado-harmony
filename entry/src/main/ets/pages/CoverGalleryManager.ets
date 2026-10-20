@@ -616,7 +616,6 @@ struct CoverGalleryManagerPage {
     .width('100%')
     .height(56 + this.statusBarHeight)
     .padding({ top: this.statusBarHeight })
-    .linearGradient(ThemeRuntime.topBarBackground(this.appDarkMode, 56 + this.statusBarHeight))
     .alignItems(VerticalAlign.Center)
   }
 

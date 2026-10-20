@@ -234,7 +234,6 @@ struct OpdsBrowsePage {
     .width('100%')
     .height(56 + this.statusBarHeight)
     .padding({ top: this.statusBarHeight, right: AppSpacing.SM })
-    .backgroundColor(ThemeRuntime.topBarColor(this.appDarkMode))
     .alignItems(VerticalAlign.Center)
     .position({ x: 0, y: 0 })
     .zIndex(3)

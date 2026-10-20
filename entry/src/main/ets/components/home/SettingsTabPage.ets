@@ -143,7 +143,6 @@ export struct SettingsPage {
       .width('100%')
       .height(56 + this.statusBarHeight - this.headerCollapse)
       .clip(true)
-      .linearGradient(ThemeRuntime.topBarBackground(this.appDarkMode, 56 + this.statusBarHeight))
       .onAreaChange((_oldArea: Area, newArea: Area) => {
         this.onHeaderCollapseChange((56 + this.statusBarHeight - Number(newArea.height)) /
           CollapsingHeader.DISTANCE);

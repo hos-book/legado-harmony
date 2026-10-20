@@ -114,8 +114,6 @@ export struct BookshelfPage {
   // 加密的书源封面解密完成后递增，读取它的封面会重新取到本地文件地址。
   @StorageProp('sourceCoverRevision') sourceCoverRevision: number = 0;
   @Prop statusBarHeight: number = 0;
-  /** 悬浮顶栏的实测高度，用来把底色的渐隐段放在最下面。 */
-  @State topBarHeight: number = 0;
   @Prop navBarHeight: number = 0;
   @Link isBookMultiSelect: boolean;
   @Link @Watch('onActiveShelfGroupChanged') activeShelfGroupId: number;
@@ -1136,10 +1134,6 @@ export struct BookshelfPage {
         .width('100%')
         .position({ x: 0, y: 0 })
         .zIndex(4)
-        .linearGradient(ThemeRuntime.topBarBackground(this.appDarkMode, this.topBarHeight))
-        .onAreaChange((_oldArea: Area, newArea: Area) => {
-          this.topBarHeight = Number(newArea.height);
-        })
 
         if (this.isLoading) {
           Column() {

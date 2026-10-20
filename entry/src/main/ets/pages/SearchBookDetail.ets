@@ -323,13 +323,6 @@ struct SearchBookDetailPage {
   @Builder
   titleBar() {
     Stack({ alignContent: Alignment.Start }) {
-      // 底色层：顶部透明露出封面氛围背景，滚动后渐显。
-      Column()
-        .width('100%')
-        .height('100%')
-        .linearGradient(ThemeRuntime.topBarBackground(this.appDarkMode, 56 + this.statusBarHeight))
-        .opacity(this.titleBarProgress())
-
       Row() {
         ImmersiveBackButton({ iconColor: this.primaryTextColor(), darkMode: this.appDarkMode,
           onBack: () => this.handleBack() })

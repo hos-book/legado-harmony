@@ -172,33 +172,6 @@ export class ThemeRuntime {
     return ThemeRuntime.normalizeColor(ThemeRuntime.pageColor(darkMode), fallback);
   }
 
-  /** 顶栏底部渐隐段的高度，落在顶栏自己的下边距里，静止时不压到内容。 */
-  static readonly TOP_BAR_FADE_HEIGHT: number = 12;
-
-  /**
-   * 悬浮在列表上的顶栏底色：上面是实色，最下面 TOP_BAR_FADE_HEIGHT 淡到同色全透明，
-   * 滚进顶栏的内容在这里淡出，没有硬边。height 是顶栏实际高度，还没量到时整条用实色。
-   */
-  static topBarBackground(darkMode: boolean, height: number): LinearGradientOptions {
-    const color = ThemeRuntime.topBarColor(darkMode);
-    const fadeHeight = ThemeRuntime.TOP_BAR_FADE_HEIGHT;
-    if (!(height > fadeHeight * 2)) {
-      return { direction: GradientDirection.Bottom, colors: [[color, 0], [color, 1]] };
-    }
-    const rgb = color.substring(1);
-    const fadeStart = 1 - fadeHeight / height;
-    // 先快后慢地淡出，用同色的透明度渐变，避免中间发灰。
-    return {
-      direction: GradientDirection.Bottom,
-      colors: [
-        [color, 0],
-        [color, fadeStart],
-        [`#80${rgb}`, fadeStart + (1 - fadeStart) * 0.4],
-        [`#00${rgb}`, 1]
-      ]
-    };
-  }
-
   static inputColor(darkMode: boolean): string {
     const fallback = ThemeRuntime.fallbackVariant(darkMode).colors.inputColor;
     return ThemeRuntime.colorFromStorage(darkMode ? ThemeRuntime.KEY_DARK_INPUT_COLOR :
