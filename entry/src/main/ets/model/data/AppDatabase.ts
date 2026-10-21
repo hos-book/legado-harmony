@@ -11,6 +11,13 @@ interface ColumnMigration {
   definition: string;
 }
 
+/** 本机列表管理状态，与排序在同一事务内保存。 */
+export interface BookSourcePositionUpdate {
+  bookSourceUrl: string;
+  isPinned: boolean;
+  isBottom: boolean;
+}
+
 export class ReaderPaginationCacheRecord {
   starts: number[] = [];
   ends: number[] = [];
@@ -77,7 +84,7 @@ export class AppDatabase implements BookSourceRuntimePersistence {
   private latestBookProgressWriteTimes: Map<string, number> = new Map<string, number>();
   private readStatsWriteTask: Promise<void> = Promise.resolve();
   private readonly DATABASE_NAME = 'legado.db';
-  private readonly SCHEMA_VERSION = 19;
+  private readonly SCHEMA_VERSION = 20;
 
   private constructor() {}
 
@@ -199,6 +206,7 @@ export class AppDatabase implements BookSourceRuntimePersistence {
         customButton INTEGER DEFAULT 0,
         eventListener INTEGER DEFAULT 0,
         isPinned INTEGER DEFAULT 0,
+        isBottom INTEGER DEFAULT 0,
         enabled INTEGER DEFAULT 1,
         enabledExplore INTEGER DEFAULT 1,
         isLocked INTEGER DEFAULT 0,
@@ -433,6 +441,7 @@ export class AppDatabase implements BookSourceRuntimePersistence {
       { table: 'book_sources', column: 'eventListener', definition: 'eventListener INTEGER DEFAULT 0' },
       { table: 'book_sources', column: 'isLocked', definition: 'isLocked INTEGER DEFAULT 0' },
       { table: 'book_sources', column: 'isPinned', definition: 'isPinned INTEGER DEFAULT 0' },
+      { table: 'book_sources', column: 'isBottom', definition: 'isBottom INTEGER DEFAULT 0' },
       { table: 'book_sources', column: 'validationStatus', definition: 'validationStatus INTEGER DEFAULT 0' },
       { table: 'book_chapters', column: 'variable', definition: "variable TEXT DEFAULT ''" }
     ];
@@ -1521,6 +1530,7 @@ export class AppDatabase implements BookSourceRuntimePersistence {
     if (!this.store) return [];
     const predicates = new relationalStore.RdbPredicates('book_sources');
     predicates.orderByDesc('isPinned');
+    predicates.orderByAsc('isBottom');
     predicates.orderByAsc('customOrder');
     const resultSet = await this.store.query(predicates, []);
     const sources: BookSource[] = [];
@@ -1542,6 +1552,7 @@ export class AppDatabase implements BookSourceRuntimePersistence {
     if (!this.store) return [];
     const predicates = new relationalStore.RdbPredicates('book_sources');
     predicates.orderByDesc('isPinned');
+    predicates.orderByAsc('isBottom');
     predicates.orderByAsc('customOrder');
     const columns = [
       'bookSourceUrl', 'bookSourceName', 'bookSourceType', 'bookSourceGroup', 'bookSourceComment',
@@ -1629,7 +1640,7 @@ export class AppDatabase implements BookSourceRuntimePersistence {
     // 列表不加载完整 jsLib，只取开头一小段判断是否为原生书源。
     const resultSet = await this.store.querySql(
       `SELECT ${columns.join(', ')}, substr(jsLib, 1, ${NATIVE_SOURCE_JSLIB_HEAD.length}) AS jsLibHead ` +
-        'FROM book_sources ORDER BY isPinned DESC, customOrder ASC');
+        'FROM book_sources ORDER BY isPinned DESC, isBottom ASC, customOrder ASC');
     const sources: BookSource[] = [];
     try {
       while (resultSet.goToNextRow()) {
@@ -1682,9 +1693,27 @@ export class AppDatabase implements BookSourceRuntimePersistence {
     }
   }
 
+  /** 只返回显式置底的书源；最后一项的位置不能用来推断用户意图。 */
+  async getBottomBookSourceUrls(): Promise<string[]> {
+    if (!this.store) return [];
+    const predicates = new relationalStore.RdbPredicates('book_sources');
+    predicates.equalTo('isBottom', 1).equalTo('isPinned', 0);
+    const resultSet = await this.store.query(predicates, ['bookSourceUrl']);
+    const urls: string[] = [];
+    try {
+      while (resultSet.goToNextRow()) {
+        urls.push(resultSet.getString(resultSet.getColumnIndex('bookSourceUrl')));
+      }
+    } finally {
+      resultSet.close();
+    }
+    return urls;
+  }
+
   /** 书源排序属于列表管理信息，不受书源内容锁定状态影响。 */
-  async updateBookSourceOrders(bookSourceUrls: string[]): Promise<void> {
-    if (!this.store || bookSourceUrls.length === 0) return;
+  async updateBookSourceOrders(bookSourceUrls: string[], position?: BookSourcePositionUpdate): Promise<void> {
+    if (!this.store) throw new Error('书源数据库未初始化');
+    if (bookSourceUrls.length === 0) return;
     const transaction = await this.store.createTransaction();
     try {
       for (let index = 0; index < bookSourceUrls.length; index++) {
@@ -1692,7 +1721,12 @@ export class AppDatabase implements BookSourceRuntimePersistence {
         if (!bookSourceUrl) continue;
         const predicates = new relationalStore.RdbPredicates('book_sources');
         predicates.equalTo('bookSourceUrl', bookSourceUrl);
-        await transaction.update({ customOrder: index }, predicates);
+        const bucket: relationalStore.ValuesBucket = { customOrder: index };
+        if (position && position.bookSourceUrl === bookSourceUrl) {
+          bucket['isPinned'] = position.isPinned ? 1 : 0;
+          bucket['isBottom'] = position.isBottom && !position.isPinned ? 1 : 0;
+        }
+        await transaction.update(bucket, predicates);
       }
       await transaction.commit();
     } catch (e) {
@@ -1707,7 +1741,9 @@ export class AppDatabase implements BookSourceRuntimePersistence {
     if (!this.store || !bookSourceUrl) return;
     const predicates = new relationalStore.RdbPredicates('book_sources');
     predicates.equalTo('bookSourceUrl', bookSourceUrl);
-    await this.store.update({ isPinned: pinned ? 1 : 0 }, predicates);
+    const bucket: relationalStore.ValuesBucket = { isPinned: pinned ? 1 : 0 };
+    if (pinned) bucket['isBottom'] = 0;
+    await this.store.update(bucket, predicates);
     CloudSyncChangeTracker.markBookSourceChanged();
   }
 
@@ -1798,6 +1834,7 @@ export class AppDatabase implements BookSourceRuntimePersistence {
     predicates.equalTo('enabled', 1);
     if (ruleScope === 'explore') predicates.equalTo('enabledExplore', 1);
     predicates.orderByDesc('isPinned');
+    predicates.orderByAsc('isBottom');
     predicates.orderByAsc('customOrder');
     const columns = ruleScope === 'search' ? this.searchBookSourceColumns() :
       (ruleScope === 'explore' ? this.exploreBookSourceColumns() : []);
@@ -1818,6 +1855,7 @@ export class AppDatabase implements BookSourceRuntimePersistence {
     const predicates = new relationalStore.RdbPredicates('book_sources');
     predicates.like('bookSourceName', `%${keyword}%`);
     predicates.orderByDesc('isPinned');
+    predicates.orderByAsc('isBottom');
     predicates.orderByAsc('customOrder');
     const resultSet = await this.store.query(predicates, []);
     const sources: BookSource[] = [];

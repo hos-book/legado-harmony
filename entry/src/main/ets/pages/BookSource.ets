@@ -1,6 +1,6 @@
 import { NativeSourceService, NativeSourceSpec, BookSource, SearchBook, BookListRule, SearchRule, ExploreRule, BookInfoRule, TocRule, ContentRule, HttpClient, HttpResponse, RawHttpTextClient, VerificationSupport, CookieStore, TlsTrustStore, BookSourceLoginItem, BookSourceScriptRunner, BookSourceLoginCrypto, BookSourceExecutionJournal, BookSourceRuntimeRouter, SourceRuntimeDecision, SourceRuntimeStage, AnalyzeUrl } from '@legado/sourceengine';
 import { router, promptAction } from '@kit.ArkUI';
-import { AppDatabase } from '../model/data/AppDatabase';
+import { AppDatabase, BookSourcePositionUpdate } from '../model/data/AppDatabase';
 import { SearchCoordinator, SearchProgress, SearchSourceResult } from '../core/book/SearchCoordinator';
 import { syncSystemBars } from '../utils/SystemBars';
 import { SearchExploreSettingsStore } from '../utils/SearchExploreSettingsStore';
@@ -139,6 +139,7 @@ struct BookSourcePage {
   @State sourceLoginFilter: string = 'all';
   @State sourceValidationFilter: string = 'all';
   @State sourceSortMode: string = 'custom';
+  @State bottomSourceUrls: string[] = [];
   @State showAddDialog: boolean = false;
   @State showImportUrlDialog: boolean = false;
   @State @Watch('onSystemDialogFlagChanged') showImportSourceSelectionDialog: boolean = false;
@@ -327,6 +328,7 @@ struct BookSourcePage {
       const db = AppDatabase.getInstance();
       await db.initWithContext(getContext(this));
       this.allSources = await db.getBookSourceSummaries();
+      this.bottomSourceUrls = await db.getBottomBookSourceUrls();
       this.sourceGroups = await BookSourceGroupStore.load(getContext(this), this.sourceGroupsFromSources());
       this.ensureActiveSourceGroup();
       this.applySourceFilters();
@@ -1770,8 +1772,8 @@ struct BookSourcePage {
         }
         this.contextActionItem($r('sys.symbol.pin'), this.actionSourcePinned() ? '取消置顶' : '置顶',
           this.primaryTextColor(), () => this.toggleActionSourcePinned())
-        this.contextActionItem($r('sys.symbol.chevron_down'), '置底', this.primaryTextColor(),
-          () => this.moveActionSourceToBottom())
+        this.contextActionItem($r('sys.symbol.chevron_down'), this.actionSourceAtBottom() ? '取消置底' : '置底',
+          this.primaryTextColor(), () => this.toggleActionSourceBottom())
         this.contextActionItem($r('sys.symbol.lock'), this.actionSourceLocked() ? '解锁' : '锁定',
           this.primaryTextColor(), () => this.toggleActionSourceLocked())
         if (!this.actionSourceLocked()) {
@@ -3695,14 +3697,36 @@ struct BookSourcePage {
         nextAllSources[index] = reordered[orderedIndex++];
       }
     }
-    await this.applyAndPersistSourceOrder(nextAllSources, '排序已保存');
+    // 手动拖离底部组时解除置底，避免拖动成功后又被排序规则拉回。
+    const leavesBottomGroup = this.isSourceAtBottom(moved) &&
+      targetIndex < this.sources.filter((source: BookSource) => !this.isSourceAtBottom(source)).length;
+    await this.applyAndPersistSourceOrder(nextAllSources, '排序已保存', leavesBottomGroup ? {
+      bookSourceUrl: moved.bookSourceUrl, isPinned: false, isBottom: false
+    } : undefined);
   }
 
-  async applyAndPersistSourceOrder(nextSources: BookSource[], successMessage: string = ''): Promise<void> {
+  async applyAndPersistSourceOrder(nextSources: BookSource[], successMessage: string = '',
+    position?: BookSourcePositionUpdate): Promise<void> {
     if (this.isBatchOperating || this.sourceOrderSaving || nextSources.length === 0) return;
-    const orderedSources = nextSources.filter((source: BookSource) => source.isPinned)
-      .concat(nextSources.filter((source: BookSource) => !source.isPinned));
     const previousSources = this.allSources.slice();
+    const previousOrders = previousSources.map((source: BookSource) => source.customOrder);
+    const previousBottomUrls = this.bottomSourceUrls;
+    if (position) {
+      this.bottomSourceUrls = previousBottomUrls.filter((url: string) => url !== position.bookSourceUrl);
+      if (position.isBottom && !position.isPinned) {
+        this.bottomSourceUrls = this.bottomSourceUrls.concat([position.bookSourceUrl]);
+      }
+      nextSources = nextSources.map((source: BookSource): BookSource => {
+        if (source.bookSourceUrl !== position.bookSourceUrl) return source;
+        const copy = this.copyBookSourceRuntime(source);
+        copy.sourceFormat = source.sourceFormat;
+        copy.isPinned = position.isPinned;
+        return copy;
+      });
+    }
+    const orderedSources = nextSources.filter((source: BookSource) => source.isPinned)
+      .concat(nextSources.filter((source: BookSource) => !source.isPinned && !this.isSourceAtBottom(source)))
+      .concat(nextSources.filter((source: BookSource) => this.isSourceAtBottom(source)));
     const restoreFirstIndex = this.sourceFirstVisibleIndex;
     const restoreVisibleCount = this.sourceVisibleItemCount;
     for (let index = 0; index < orderedSources.length; index++) {
@@ -3716,7 +3740,7 @@ struct BookSourcePage {
     this.sourceOrderSaving = true;
     try {
       await AppDatabase.getInstance().updateBookSourceOrders(
-        orderedSources.map((source: BookSource) => source.bookSourceUrl));
+        orderedSources.map((source: BookSource) => source.bookSourceUrl), position);
       const revision = AppStorage.get<number>('bookSourceOrderRevision') || 0;
       AppStorage.setOrCreate('bookSourceOrderRevision', revision + 1);
       if (successMessage) HdsFeedback.showToast(successMessage);
@@ -3724,8 +3748,9 @@ struct BookSourcePage {
       console.error('保存书源排序失败:', e);
       HdsFeedback.showToast('保存排序失败');
       for (let index = 0; index < previousSources.length; index++) {
-        previousSources[index].customOrder = index;
+        previousSources[index].customOrder = previousOrders[index];
       }
+      this.bottomSourceUrls = previousBottomUrls;
       this.allSources = [...previousSources];
       this.applySourceFilters();
       this.restoreSourceListViewport(restoreFirstIndex, restoreVisibleCount);
@@ -3813,8 +3838,7 @@ struct BookSourcePage {
   }
 
   isSourceAtBottom(source: BookSource): boolean {
-    return this.allSources.length > 1 &&
-      this.allSources[this.allSources.length - 1].bookSourceUrl === source.bookSourceUrl;
+    return !source.isPinned && this.bottomSourceUrls.includes(source.bookSourceUrl);
   }
 
   applySourceFilters(): void {
@@ -3866,13 +3890,12 @@ struct BookSourcePage {
   }
 
   sortFilteredSources(filtered: BookSource[]): BookSource[] {
-    if (this.sourceSortMode === 'custom') return filtered.slice();
-    const bottomUrl = this.allSources.length > 0 ?
-      this.allSources[this.allSources.length - 1].bookSourceUrl : '';
     return filtered.slice().sort((left: BookSource, right: BookSource): number => {
       if (left.isPinned !== right.isPinned) return left.isPinned ? -1 : 1;
-      if (!left.isPinned && left.bookSourceUrl === bottomUrl) return 1;
-      if (!right.isPinned && right.bookSourceUrl === bottomUrl) return -1;
+      if (this.isSourceAtBottom(left) !== this.isSourceAtBottom(right)) {
+        return this.isSourceAtBottom(left) ? 1 : -1;
+      }
+      if (this.sourceSortMode === 'custom') return left.customOrder - right.customOrder;
       if (this.sourceSortMode === 'name') {
         return (left.bookSourceName || '').localeCompare(right.bookSourceName || '');
       }
@@ -4070,6 +4093,11 @@ struct BookSourcePage {
     return source ? source.isPinned : false;
   }
 
+  actionSourceAtBottom(): boolean {
+    const source = this.actionSource();
+    return source ? this.isSourceAtBottom(source) : false;
+  }
+
   actionSourceTlsTrusted(): boolean {
     const source = this.actionSource();
     return source ? TlsTrustStore.isTrustedUrl(source.bookSourceUrl) : false;
@@ -4102,7 +4130,7 @@ struct BookSourcePage {
 
   async toggleActionSourcePinned(): Promise<void> {
     const source = this.actionSource();
-    if (!source || this.isBatchOperating) return;
+    if (!source || this.isBatchOperating || this.sourceOrderSaving) return;
     const sourceUrl = source.bookSourceUrl;
     const pinned = !source.isPinned;
     this.closeSourceActions();
@@ -4110,30 +4138,36 @@ struct BookSourcePage {
     if (currentIndex < 0) return;
     const next = this.allSources.slice();
     const moved = next.splice(currentIndex, 1)[0];
-    moved.isPinned = pinned;
-    await AppDatabase.getInstance().setBookSourcePinned(sourceUrl, pinned);
     if (pinned) {
       next.unshift(moved);
     } else {
       const pinnedCount = next.filter((item: BookSource) => item.isPinned).length;
       next.splice(pinnedCount, 0, moved);
     }
-    await this.applyAndPersistSourceOrder(next, pinned ? '书源已置顶' : '已取消置顶');
+    await this.applyAndPersistSourceOrder(next, pinned ? '书源已置顶' : '已取消置顶', {
+      bookSourceUrl: sourceUrl, isPinned: pinned, isBottom: false
+    });
   }
 
-  async moveActionSourceToBottom(): Promise<void> {
+  async toggleActionSourceBottom(): Promise<void> {
     const source = this.actionSource();
-    if (!source || this.isBatchOperating) return;
+    if (!source || this.isBatchOperating || this.sourceOrderSaving) return;
     const sourceUrl = source.bookSourceUrl;
+    const bottom = !this.isSourceAtBottom(source);
     this.closeSourceActions();
     const currentIndex = this.allSources.findIndex((item: BookSource) => item.bookSourceUrl === sourceUrl);
     if (currentIndex < 0) return;
     const next = this.allSources.slice();
     const moved = next.splice(currentIndex, 1)[0];
-    moved.isPinned = false;
-    await AppDatabase.getInstance().setBookSourcePinned(sourceUrl, false);
-    next.push(moved);
-    await this.applyAndPersistSourceOrder(next, '书源已置底');
+    if (bottom) {
+      next.push(moved);
+    } else {
+      const pinnedCount = next.filter((item: BookSource) => item.isPinned).length;
+      next.splice(pinnedCount, 0, moved);
+    }
+    await this.applyAndPersistSourceOrder(next, bottom ? '书源已置底' : '已取消置底', {
+      bookSourceUrl: sourceUrl, isPinned: false, isBottom: bottom
+    });
   }
 
   openActionSourceGroup(): void {
