@@ -1,6 +1,7 @@
 import http from '@ohos.net.http';
 import { util } from '@kit.ArkTS';
 import { AccountCommerceConfig } from './AccountCommerceConfig';
+import { MembershipCatalog, MembershipQuote, MembershipSnapshot, MembershipOrderList } from './MembershipModels';
 import {
   AccountApiError,
   AccountSnapshot,
@@ -25,7 +26,56 @@ class ApiErrorBody {
   retryAfter: number = 0;
 }
 
+export class MembershipPurchaseResponse {
+  account: AccountSnapshot = new AccountSnapshot();
+  membership: MembershipSnapshot = new MembershipSnapshot();
+  orderId: string = '';
+}
+
+export class MembershipGiftResponse {
+  membership: MembershipSnapshot = new MembershipSnapshot();
+  ttsWallet: TtsWalletSnapshot = new TtsWalletSnapshot();
+}
+
 export class AccountCommerceApi {
+  static async membershipOrders(token: string): Promise<MembershipOrderList> {
+    return JSON.parse(await AccountCommerceApi.request('/v1/membership/orders', 'GET', '', token)) as MembershipOrderList;
+  }
+  static async cloudRequest(path: string, method: string, body: string, token: string): Promise<string> {
+    return AccountCommerceApi.request(`/v1/cloud-files${path}`, method, body, token);
+  }
+  static async fetchMembershipCatalog(token: string = ''): Promise<MembershipCatalog> {
+    if (token) {
+      try {
+        return JSON.parse(await AccountCommerceApi.request('/v1/membership/catalog/account', 'GET', '', token)) as MembershipCatalog;
+      } catch (error) {
+        // Older servers only expose the public catalog; never hide authentication or network errors.
+        if ((error as AccountApiError).statusCode !== 404) throw error as Error;
+      }
+    }
+    return JSON.parse(await AccountCommerceApi.request('/v1/membership/catalog', 'GET', '', '')) as MembershipCatalog;
+  }
+
+  static async fetchMembership(token: string): Promise<MembershipSnapshot> {
+    return JSON.parse(await AccountCommerceApi.request('/v1/membership', 'GET', '', token)) as MembershipSnapshot;
+  }
+
+  static async quoteMembership(sku: string, token: string): Promise<MembershipQuote> {
+    return JSON.parse(await AccountCommerceApi.request('/v1/membership/quote', 'POST',
+      JSON.stringify({ sku: sku }), token)) as MembershipQuote;
+  }
+
+  static async purchaseMembership(quoteId: string, requestId: string, token: string): Promise<MembershipPurchaseResponse> {
+    const raw = JSON.parse(await AccountCommerceApi.request('/v1/membership/purchase', 'POST',
+      JSON.stringify({ quoteId: quoteId, requestId: requestId }), token)) as MembershipPurchaseResponse;
+    raw.account = AccountCommerceApi.normalizeAccount(raw.account);
+    return raw;
+  }
+
+  static async claimMembershipGift(tier: string, token: string): Promise<MembershipGiftResponse> {
+    return JSON.parse(await AccountCommerceApi.request('/v1/membership/gift', 'POST',
+      JSON.stringify({ tier: tier }), token)) as MembershipGiftResponse;
+  }
   static async login(authorizationCode: string): Promise<HuaweiLoginResponse> {
     const value = await AccountCommerceApi.request('/v1/auth/huawei', 'POST',
       JSON.stringify({ authorizationCode: authorizationCode }), '');
@@ -270,6 +320,9 @@ export class AccountCommerceApi {
     result.promoPoints = Math.max(0, Math.floor(Number(account?.promoPoints) || 0));
     result.iapDebtPoints = Math.max(0, Math.floor(Number(account?.iapDebtPoints) || 0));
     result.welcomeGranted = account?.welcomeGranted === true;
+    result.membership = account?.membership || null;
+    result.memberThemeIds = account?.memberThemeIds || [];
+    result.memberVerifiedAt = Date.now();
     result.entitlements = account?.entitlements || [];
     return result;
   }

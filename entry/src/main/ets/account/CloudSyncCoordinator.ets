@@ -171,6 +171,8 @@ class LocalSyncEntity {
 }
 
 export class CloudSyncRunResult {
+  skipped: number = 0;
+  warning: string = '';
   uploaded: number = 0;
   downloaded: number = 0;
   conflicts: number = 0;
@@ -342,6 +344,9 @@ export class CloudSyncCoordinator {
           context, deviceId, state.cursor, batch, conflictPolicy);
         const response = await CloudSyncCoordinator.exchangeSyncWithRetry(request);
         CloudSyncCoordinator.validateResponse(response);
+        for (const ack of response.acknowledgements || []) {
+          if (ack.error) { result.skipped++; result.warning = ack.error.message; }
+        }
         const operationMap = CloudSyncCoordinator.operationEntityMap(batch, localEntities);
         CloudSyncChangeTracker.beginRemoteApply();
         try {
@@ -378,10 +383,10 @@ export class CloudSyncCoordinator {
         }
       }
 
-      settings.status = CloudSyncSettingsStore.STATUS_SYNCED;
+      settings.status = result.skipped > 0 ? CloudSyncSettingsStore.STATUS_ERROR : CloudSyncSettingsStore.STATUS_SYNCED;
       settings.lastSuccessAt = Date.now();
-      settings.pendingCount = 0;
-      settings.errorMessage = '';
+      settings.pendingCount = result.skipped;
+      settings.errorMessage = result.warning;
       await CloudSyncSettingsStore.saveRuntimeState(context, userId, settings.status,
         settings.lastSuccessAt, settings.pendingCount, settings.errorMessage);
       CloudSyncChangeTracker.markSynced(changeSnapshot);
@@ -797,6 +802,7 @@ export class CloudSyncCoordinator {
   ): Promise<number> {
     let conflicts = 0;
     for (const ack of acknowledgements) {
+      if (ack.error) continue; // A quota rejection is not a remote conflict; preserve local data.
       const local = operationMap[ack.opId];
       if (!local) {
         continue;

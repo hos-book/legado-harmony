@@ -19,6 +19,7 @@ import { ThemeRuntime } from '../theme/ThemeRuntime';
 import { ThemeIds } from '../theme/ThemeModels';
 import { ThemeTrialManager } from '../utils/ThemeTrialManager';
 import { AccountSessionStore } from '../account/AccountSessionStore';
+import { MembershipThemeGuard } from '../account/MembershipThemeGuard';
 import { HuaweiAccountService } from '../account/HuaweiAccountService';
 import { CloudSyncSettingsStore } from '../account/CloudSyncSettingsStore';
 import { CloudSyncCoordinator } from '../account/CloudSyncCoordinator';
@@ -42,6 +43,7 @@ export default class EntryAbility extends UIAbility {
   private themeBootstrapPromise: Promise<void> = Promise.resolve();
   private readerBootstrapPromise: Promise<void> = Promise.resolve();
   private accountBootstrapPromise: Promise<void> = Promise.resolve();
+  private membershipThemeTimer: number = -1;
   private deferredStartupScheduled: boolean = false;
   private mainWindowStage: window.WindowStage | null = null;
 
@@ -232,6 +234,12 @@ export default class EntryAbility extends UIAbility {
     });
     // Theme and glass affect the first frame, but they are independent and can be restored in parallel.
     this.themeBootstrapPromise = Promise.all([appThemePromise, glassPromise]).then(() => {});
+    Promise.all([this.themeBootstrapPromise, this.accountBootstrapPromise]).then(() => {
+      this.membershipThemeTimer = setInterval(() => {
+        MembershipThemeGuard.refresh(this.context).catch((error: Error) => console.warn('主题权益检查失败', error.message));
+      }, 60000);
+      return MembershipThemeGuard.refresh(this.context);
+    }).catch((error: Error) => console.warn('主题权益初始化检查失败', error.message));
     // Reader preferences and custom font registration are not needed to paint Index/Startup, so the first
     // content does not wait for them. They do wait for the theme: reader settings are kept per theme, and
     // loading before appThemeId is restored would read the default theme's copy (including its global font).
@@ -256,6 +264,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onDestroy(): void {
+    if (this.membershipThemeTimer >= 0) clearInterval(this.membershipThemeTimer);
     lanReaderServer.stop().catch(() => undefined);
     readStatsTracker.flush();
     hilog.info(0x0000, 'testTag', '%{public}s', 'Ability onDestroy');
@@ -345,6 +354,7 @@ export default class EntryAbility extends UIAbility {
     this.syncSystemColorMode(this.context.config);
     this.accountBootstrapPromise
       .then(() => HuaweiAccountService.renewSession(this.context))
+      .then(() => MembershipThemeGuard.refresh(this.context))
       .catch((e: Error) => {
         hilog.warn(0x0000, 'testTag', 'Renew account session failed: %{public}s', JSON.stringify(e));
       })

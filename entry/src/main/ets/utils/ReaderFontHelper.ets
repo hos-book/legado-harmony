@@ -241,7 +241,7 @@ export class ReaderFontHelper {
   }
 
   /**
-   * Internal font files deliberately use reader_font_*.ttf names so that all
+   * Internal font files deliberately use ASCII reader_font_* / cloud_UUID names so that all
    * ArkUI font loaders can open them. Those storage names must never leak into
    * the settings UI. For old records that already lost their sourceName, read
    * the OpenType `name` table and recover the embedded font name.
@@ -261,7 +261,8 @@ export class ReaderFontHelper {
 
   static isInternalFontName(value: string): boolean {
     const name = ReaderFontHelper.fileNameFromPath((value || '').trim()).toLowerCase();
-    return /^reader_font(?:_[0-9]+)?(?:_[0-9]+)?(?:\.(?:ttf|otf|ttc))?$/.test(name);
+    return /^reader_font(?:_[0-9]+)?(?:_[0-9]+)?(?:\.(?:ttf|otf|ttc))?$/.test(name) ||
+      /^cloud_[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.(?:ttf|otf|ttc)$/.test(name);
   }
 
   static embeddedFontName(filePath: string): string {

@@ -115,7 +115,21 @@ export class AccountSessionStore {
 
   static hasValidEntitlement(themeId: string, now: number = Date.now()): boolean {
     const entitlement = AccountSessionStore.entitlement(themeId);
-    return entitlement !== null && entitlement.expiresAt > now;
+    return (entitlement !== null && entitlement.expiresAt > now) ||
+      AccountSessionStore.hasMemberThemeAccess(themeId, now);
+  }
+
+  static hasMemberThemeAccess(themeId: string, now: number = Date.now()): boolean {
+    const account = AccountSessionStore.snapshot;
+    const membership = account.membership;
+    const elapsed = now - account.memberVerifiedAt;
+    if (!AccountSessionStore.isLoggedIn() || !membership?.active || membership.restricted ||
+      account.iapDebtPoints > 0 || !membership.state || elapsed < 0 || elapsed > 72 * 60 * 60 * 1000) {
+      return false;
+    }
+    const serverNow = membership.serverNow + elapsed;
+    return (membership.state.expiresAt === null || membership.state.expiresAt > serverNow) &&
+      account.memberThemeIds.includes(themeId);
   }
 
   private static async persist(context: Context): Promise<void> {
@@ -128,6 +142,8 @@ export class AccountSessionStore {
   private static applyToStorage(): void {
     AccountSessionStore.initializeStorage();
     AppStorage.setOrCreate(AccountSessionStore.STORAGE_LOGGED_IN, AccountSessionStore.isLoggedIn());
+    AppStorage.setOrCreate('accountMembershipSku', AccountSessionStore.isLoggedIn() &&
+      AccountSessionStore.snapshot.membership?.active ? AccountSessionStore.snapshot.membership?.state?.sku || '' : '');
     AppStorage.setOrCreate(AccountSessionStore.STORAGE_DISPLAY_NAME,
       AccountSessionStore.isLoggedIn() ? AccountSessionStore.snapshot.displayName : '');
     AppStorage.setOrCreate(AccountSessionStore.STORAGE_AVATAR_URL,
@@ -166,6 +182,9 @@ export class AccountSessionStore {
     result.promoPoints = Math.max(0, Math.floor(Number(source.promoPoints) || 0));
     result.iapDebtPoints = Math.max(0, Math.floor(Number(source.iapDebtPoints) || 0));
     result.welcomeGranted = source.welcomeGranted === true;
+    result.membership = source.membership || null;
+    result.memberThemeIds = source.memberThemeIds || [];
+    result.memberVerifiedAt = Number(source.memberVerifiedAt) || 0;
     result.entitlements = [];
     if (source.entitlements) {
       for (const item of source.entitlements) {

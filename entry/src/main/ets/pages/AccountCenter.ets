@@ -13,6 +13,7 @@ import {
   RechargeProduct
 } from '../account/AccountCommerceModels';
 import { AccountSessionStore } from '../account/AccountSessionStore';
+import { MembershipIcons } from '../account/MembershipIcons';
 import { CloudSyncSettingsStore } from '../account/CloudSyncSettingsStore';
 import { HuaweiAccountService } from '../account/HuaweiAccountService';
 import { ThemeRuntime } from '../theme/ThemeRuntime';
@@ -25,6 +26,7 @@ import { PageScaffold } from '../components/common/PageScaffold';
 @Entry
 @Component
 struct AccountCenterPage {
+  @StorageLink('accountMembershipSku') membershipSku: string = '';
   @StorageLink('appDarkMode') appDarkMode: boolean = false;
   @StorageLink('themeRevision') themeRevision: number = 0;
   @StorageLink('accountLoggedIn') accountLoggedIn: boolean = false;
@@ -103,6 +105,9 @@ struct AccountCenterPage {
     Column({ space: AppSpacing.LG }) {
       if (!this.editingProfile) {
         this.accountCard()
+        Button('会员中心')
+          .width('100%')
+          .onClick(() => { router.pushUrl({ url: 'pages/MembershipCenter' }) })
         this.cloudSyncCard()
       }
       if (this.accountLoggedIn) {
@@ -598,6 +603,10 @@ struct AccountCenterPage {
           Text('登录后新用户免费获得 300 点')
             .fontSize(AppFontSize.CAPTION)
             .fontColor(this.subTextColor())
+        }
+        if (this.membershipSku) {
+          Image(MembershipIcons.forSku(this.membershipSku)).width(30).height(30).objectFit(ImageFit.Contain)
+            .onClick(() => { router.pushUrl({ url: 'pages/MembershipCenter' }) })
         }
       }
       .layoutWeight(1)

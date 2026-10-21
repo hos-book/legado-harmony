@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { parseMembershipSalesPilot } from './membershipSales.js';
 
 function required(name: string): string {
   const value = process.env[name]?.trim();
@@ -27,6 +28,18 @@ function csvSet(name: string, fallback: string): ReadonlySet<string> {
 }
 
 export const config = {
+  membershipEnabled: process.env.MEMBERSHIP_ENABLED === 'true',
+  membershipSalesPilot: parseMembershipSalesPilot(process.env.MEMBERSHIP_PILOT_USER_IDS,
+    process.env.MEMBERSHIP_PILOT_SKUS, process.env.MEMBERSHIP_PILOT_UNTIL),
+  membershipSourceLimitsEnabled: process.env.MEMBERSHIP_SOURCE_LIMITS_ENABLED === 'true',
+  cloudFiles: {
+    enabled: process.env.CLOUD_FILES_ENABLED === 'true',
+    endpoint: process.env.HUAWEICLOUD_OBS_ENDPOINT?.trim() || '',
+    region: process.env.HUAWEICLOUD_OBS_REGION?.trim() || '',
+    bucket: process.env.HUAWEICLOUD_OBS_BUCKET?.trim() || '',
+    ak: process.env.HUAWEICLOUD_OBS_AK?.trim() || '',
+    sk: process.env.HUAWEICLOUD_OBS_SK?.trim() || ''
+  },
   port: Number(process.env.PORT || '8080'),
   host: process.env.HOST?.trim() || '127.0.0.1',
   publicBaseUrl: (process.env.PUBLIC_BASE_URL?.trim() || 'https://qingye.icynol.com').replace(/\/+$/, ''),

@@ -1,3 +1,5 @@
+import { MembershipSnapshot } from './MembershipModels';
+
 export class ThemeEntitlement {
   themeId: string = '';
   expiresAt: number = 0;
@@ -15,6 +17,9 @@ export class ThemeCatalogResponse {
 }
 
 export class AccountSnapshot {
+  membership: MembershipSnapshot | null = null;
+  memberThemeIds: string[] = [];
+  memberVerifiedAt: number = 0;
   userId: string = '';
   displayName: string = '华为用户';
   avatarUrl: string = '';

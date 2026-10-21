@@ -928,7 +928,8 @@ export class SystemTtsReader {
 
   private async playCloudQueue(generation: number, voiceId: string): Promise<void> {
     const jobs: CloudTtsAudioJob[] = [];
-    this.fillCloudAudioJobs(generation, voiceId, jobs);
+    // Let the first audible segment obtain the user's synthesis slot before speculative prefetch.
+    this.fillCloudAudioJobs(generation, voiceId, jobs, 1);
     while (this.readGeneration === generation && this.active) {
       if (jobs.length === 0) {
         await this.httpReader.drain();
@@ -976,8 +977,8 @@ export class SystemTtsReader {
     }
   }
 
-  private fillCloudAudioJobs(generation: number, voiceId: string, jobs: CloudTtsAudioJob[]): void {
-    const prefetchWindow = this.cloudTtsPrefetchWindow();
+  private fillCloudAudioJobs(generation: number, voiceId: string, jobs: CloudTtsAudioJob[], limit: number = 0): void {
+    const prefetchWindow = limit > 0 ? limit : this.cloudTtsPrefetchWindow();
     while (this.readGeneration === generation && this.active &&
       jobs.length < prefetchWindow && this.chunkIndex < this.chunks.length) {
       const index = this.chunkIndex;

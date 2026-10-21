@@ -2583,6 +2583,7 @@ struct ThemeSettingsPage {
       return '免费使用';
     }
     const entitlement = AccountSessionStore.entitlement(theme.id);
+    if (AccountSessionStore.hasMemberThemeAccess(theme.id)) return '会员免费使用';
     if (entitlement && entitlement.expiresAt > Date.now()) {
       return `有效至 ${this.formatDate(entitlement.expiresAt)}`;
     }
@@ -2598,6 +2599,7 @@ struct ThemeSettingsPage {
   }
 
   themeAccessLabel(themeId: string): string {
+    if (AccountSessionStore.hasMemberThemeAccess(themeId)) return '会员免费';
     if (BuiltinThemeRegistry.isFree(themeId)) {
       return '免费';
     }

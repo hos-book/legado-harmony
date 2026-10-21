@@ -1,0 +1,181 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { readFile, readdir } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { PGlite } from '@electric-sql/pglite';
+import {
+  claimMembershipGift, MembershipDb, membershipSnapshot, purchaseMembership,
+  quoteMembership, readMembership, membershipCatalog
+} from './membershipService.js';
+import { parseMembershipSalesPilot } from './membershipSales.js';
+import { membershipAnniversary, MembershipError, MembershipSku } from './membershipPolicy.js';
+
+test('membership SQL transactions and quota lifecycle (embedded PostgreSQL)', async t => {
+  const db = new PGlite();
+  t.after(() => db.close());
+  const migrations = new URL('../migrations/', import.meta.url);
+  for (const file of (await readdir(migrations)).filter(file => file.endsWith('.sql')).sort()) {
+    const sql = await readFile(new URL(file, migrations), 'utf8');
+    // Operational VACUUM in older migrations must run outside PGlite's multi-statement transaction.
+    await db.exec(sql.replace(/^VACUUM[^;]*;/gm, ''));
+  }
+  // Rerunning the new migration cannot accidentally enable sales or reset data.
+  await db.exec(await readFile(new URL('016_memberships.sql', migrations), 'utf8'));
+  const adapter = (connection: Pick<PGlite, 'query'>): MembershipDb => ({
+    query: connection.query.bind(connection) as unknown as MembershipDb['query']
+  });
+  const tx = <T>(fn: (client: MembershipDb) => Promise<T>) => db.transaction(client => fn(adapter(client)));
+  const query = adapter(db);
+  const now = Date.parse('2028-01-31T00:15:00+08:00');
+  async function user(paid = 10000, promo = 300) {
+    const id = randomUUID();
+    await db.query('INSERT INTO app_users(id,huawei_open_id) VALUES ($1,$2)', [id, id]);
+    await db.query('INSERT INTO point_wallets(user_id,balance,paid_balance,promo_balance) VALUES ($1,$2,$3,$4)',
+      [id, paid + promo, paid, promo]);
+    return id;
+  }
+  async function buy(id: string, sku: MembershipSku, at = now) {
+    const quote = await tx(client => quoteMembership(client, id, sku, at));
+    const result = await tx(client => purchaseMembership(client, id, quote.quoteId, randomUUID(), at));
+    return { quote, result };
+  }
+  const rejectedCode = (code: string) => (error: unknown) => error instanceof MembershipError && error.code === code;
+
+  await t.test('new products are not for sale until explicitly enabled', async () => {
+    const id = await user();
+    await assert.rejects(tx(client => quoteMembership(client, id, 'MONTHLY', now)), rejectedCode('MEMBERSHIP_NOT_ON_SALE'));
+    await db.exec('UPDATE membership_products SET sales_enabled=TRUE');
+  });
+  await t.test('promotional points cannot pay; failure rolls back wallet and membership', async () => {
+    const id = await user(59, 10000);
+    const quote = await tx(client => quoteMembership(client, id, 'MONTHLY', now));
+    await assert.rejects(tx(client => purchaseMembership(client, id, quote.quoteId, 'insufficient', now)),
+      rejectedCode('INSUFFICIENT_PAID_POINTS'));
+    assert.equal(await readMembership(query, id), null);
+    const wallet = await db.query<{ paid_balance: number; promo_balance: number }>('SELECT paid_balance,promo_balance FROM point_wallets WHERE user_id=$1', [id]);
+    assert.equal(Number(wallet.rows[0]!.paid_balance), 59);
+    assert.equal(Number(wallet.rows[0]!.promo_balance), 10000);
+  });
+  await t.test('pilot isolates account/SKU, rechecks expiry and revocation, and preserves paid retries', async () => {
+    await db.exec('UPDATE membership_products SET sales_enabled=FALSE');
+    try {
+      const id = await user();
+      const other = await user();
+      const pilot = parseMembershipSalesPilot(id, 'MONTHLY', new Date(now + 60000).toISOString());
+      assert.ok((await membershipCatalog(query, undefined, now, pilot)).every(p => !p.salesEnabled));
+      assert.ok((await membershipCatalog(query, other, now, pilot)).every(p => !p.salesEnabled));
+      assert.deepEqual((await membershipCatalog(query, id, now, pilot)).filter(p => p.salesEnabled).map(p => p.sku), ['MONTHLY']);
+      await assert.rejects(tx(c => quoteMembership(c, other, 'MONTHLY', now, pilot)), rejectedCode('MEMBERSHIP_NOT_ON_SALE'));
+      await assert.rejects(tx(c => quoteMembership(c, id, 'ANNUAL', now, pilot)), rejectedCode('MEMBERSHIP_NOT_ON_SALE'));
+      const quote = await tx(c => quoteMembership(c, id, 'MONTHLY', now, pilot));
+      await assert.rejects(tx(c => purchaseMembership(c, id, quote.quoteId, 'pilot', now)), rejectedCode('MEMBERSHIP_NOT_ON_SALE'));
+      await assert.rejects(tx(c => purchaseMembership(c, id, quote.quoteId, 'pilot', now + 60000, pilot)), rejectedCode('MEMBERSHIP_NOT_ON_SALE'));
+      assert.equal(await readMembership(query, id), null);
+      const order = await tx(c => purchaseMembership(c, id, quote.quoteId, 'pilot', now + 1000, pilot));
+      const retry = await tx(c => purchaseMembership(c, id, quote.quoteId, 'pilot', now + 60000));
+      assert.equal(retry.orderId, order.orderId);
+      assert.equal(retry.duplicate, true);
+      const balance = await db.query<{ paid_balance: number }>('SELECT paid_balance FROM point_wallets WHERE user_id=$1', [id]);
+      assert.equal(Number(balance.rows[0]!.paid_balance), 9940);
+      assert.ok((await membershipCatalog(query, id, now + 60000, pilot)).every(p => !p.salesEnabled));
+    } finally { await db.exec('UPDATE membership_products SET sales_enabled=TRUE'); }
+  });
+  await t.test('duplicate purchase and duplicate quote charge only once, even after quote expiry', async () => {
+    const id = await user();
+    const quote = await tx(client => quoteMembership(client, id, 'MONTHLY', now));
+    const order = await tx(client => purchaseMembership(client, id, quote.quoteId, 'once', now));
+    const retry = await tx(client => purchaseMembership(client, id, quote.quoteId, 'once', now + 3600000));
+    const newId = await tx(client => purchaseMembership(client, id, quote.quoteId, 'new-id', now + 3600000));
+    assert.equal(retry.orderId, order.orderId);
+    assert.equal(newId.orderId, order.orderId);
+    const wallet = await db.query<{ paid_balance: number; promo_balance: number }>('SELECT paid_balance,promo_balance FROM point_wallets WHERE user_id=$1', [id]);
+    assert.equal(Number(wallet.rows[0]!.paid_balance), 9940);
+    assert.equal(Number(wallet.rows[0]!.promo_balance), 300);
+  });
+  await t.test('old quotes cannot overwrite a renewal; cross-account quote cannot spend', async () => {
+    const id = await user();
+    const other = await user();
+    const quote = await tx(client => quoteMembership(client, id, 'ANNUAL', now));
+    await assert.rejects(tx(client => purchaseMembership(client, other, quote.quoteId, 'cross', now)), rejectedCode('MEMBERSHIP_QUOTE_EXPIRED'));
+    await buy(id, 'MONTHLY');
+    await assert.rejects(tx(client => purchaseMembership(client, id, quote.quoteId, 'stale', now)), rejectedCode('MEMBERSHIP_OFFER_CHANGED'));
+  });
+  await t.test('gifts are exclusive, idempotent, extend on renewal and remain in their own period', async () => {
+    const id = await user();
+    await buy(id, 'MONTHLY');
+    const first = await tx(client => claimMembershipGift(client, id, 'STANDARD', now));
+    const duplicate = await tx(client => claimMembershipGift(client, id, 'STANDARD', now));
+    assert.equal(first.chars, 2000);
+    assert.equal(duplicate.duplicate, true);
+    await assert.rejects(tx(client => claimMembershipGift(client, id, 'PREMIUM', now)), rejectedCode('MEMBERSHIP_GIFT_ALREADY_CLAIMED'));
+    await buy(id, 'MONTHLY', now + 1000);
+    let grants = await db.query<{ expires_at: Date; remaining_chars: number }>(
+      "SELECT expires_at,remaining_chars FROM tts_quota_grants WHERE user_id=$1 AND source='MEMBERSHIP'", [id]);
+    assert.equal(grants.rows[0]!.expires_at.getTime(), membershipAnniversary(now, 2));
+    await tx(client => claimMembershipGift(client, id, 'PREMIUM', membershipAnniversary(now, 1)));
+    const oldExpiry = membershipAnniversary(now, 2);
+    await buy(id, 'MONTHLY', oldExpiry);
+    grants = await db.query<{ expires_at: Date; remaining_chars: number }>(
+      "SELECT expires_at,remaining_chars FROM tts_quota_grants WHERE user_id=$1 AND source='MEMBERSHIP'", [id]);
+    assert.ok(grants.rows.every(grant => grant.expires_at.getTime() === oldExpiry));
+    assert.equal((await membershipSnapshot(query, id, oldExpiry)).claim, null);
+  });
+  await t.test('lifetime upgrade makes existing gifts permanent without granting twice', async () => {
+    const id = await user();
+    await buy(id, 'ANNUAL');
+    await tx(client => claimMembershipGift(client, id, 'STANDARD', now));
+    await buy(id, 'SUPER_LIFETIME', now + 1000);
+    const repeat = await tx(client => claimMembershipGift(client, id, 'STANDARD', now + 2000));
+    assert.equal(repeat.chars, 2000);
+    const grants = await db.query<{ forever: boolean }>(
+      "SELECT NOT isfinite(expires_at) AS forever FROM tts_quota_grants WHERE user_id=$1 AND source='MEMBERSHIP'", [id]);
+    assert.equal(grants.rows[0]!.forever, true);
+    const next = await tx(client => claimMembershipGift(client, id, 'PREMIUM', membershipAnniversary(now, 1)));
+    assert.equal(next.chars, 1500);
+    const third = await tx(client => claimMembershipGift(client, id, 'STANDARD', membershipAnniversary(now, 2)));
+    assert.equal(third.chars, 3000);
+  });
+  await t.test('first purchase starts at payment; pending quotes expire before an old membership does', async () => {
+    const id = await user();
+    const quote = await tx(client => quoteMembership(client, id, 'MONTHLY', now));
+    await tx(client => purchaseMembership(client, id, quote.quoteId, 'delayed', now + 60000));
+    const state = (await readMembership(query, id))!;
+    assert.equal(state.anchorAt, now + 60000);
+    const renewal = await tx(client => quoteMembership(client, id, 'ANNUAL', state.expiresAt! - 1000));
+    await assert.rejects(tx(client => purchaseMembership(client, id, renewal.quoteId, 'late', state.expiresAt!)), rejectedCode('MEMBERSHIP_QUOTE_EXPIRED'));
+  });
+  await t.test('refund debt suspends paid membership and claims without deleting entitlement', async () => {
+    const id = await user();
+    await buy(id, 'LIFETIME');
+    await db.query('INSERT INTO account_debts(user_id,iap_debt_points) VALUES ($1,10)', [id]);
+    const snapshot = await membershipSnapshot(query, id, now);
+    assert.equal(snapshot.active, false);
+    assert.equal(snapshot.restricted, true);
+    assert.equal(snapshot.benefits.memberThemes, false);
+    await assert.rejects(tx(client => claimMembershipGift(client, id, 'STANDARD', now)), rejectedCode('ACCOUNT_PAYMENT_RESTRICTED'));
+  });
+  await t.test('icyn revoke script preserves points/history, expires only test gift and refuses paid membership', async () => {
+    const id = 'd105489a-3d17-4f18-af36-7a15e5e1b3ae';
+    const period = '10537fff-4a2e-4663-93fd-7b2f7f4c24ff';
+    await db.query("INSERT INTO app_users(id,huawei_open_id,display_name) VALUES ($1,$2,'icyn')", [id, id]);
+    await db.query('INSERT INTO point_wallets(user_id,balance,paid_balance,promo_balance) VALUES ($1,7196,6896,300)', [id]);
+    await db.query(`INSERT INTO membership_periods(id,user_id,sku,anchor_at,paid_months,permanent_credit_points)
+      VALUES ($1,$2,'SUPER_LIFETIME',now()-interval '1 minute',0,0)`, [period, id]);
+    await db.query('INSERT INTO membership_accounts(user_id,period_id,revision) VALUES ($1,$2,1)', [id, period]);
+    await tx(c => claimMembershipGift(c, id, 'STANDARD'));
+    const before = await db.query('SELECT * FROM point_wallets WHERE user_id=$1', [id]);
+    const script = await readFile(new URL('../scripts/revoke-icyn-test-membership.sql', import.meta.url), 'utf8');
+    await db.exec(script);
+    await db.exec(script); // safe retry before any actual purchase
+    assert.equal(await readMembership(query, id), null);
+    assert.deepEqual((await db.query('SELECT * FROM point_wallets WHERE user_id=$1', [id])).rows, before.rows);
+    assert.equal((await db.query('SELECT * FROM membership_gift_claims WHERE period_id=$1', [period])).rows.length, 1);
+    assert.equal((await db.query('SELECT * FROM membership_periods WHERE id=$1', [period])).rows.length, 1);
+    assert.equal((await db.query('SELECT * FROM tts_quota_grants WHERE membership_period_id=$1 AND expires_at>now()', [period])).rows.length, 0);
+    await buy(id, 'MONTHLY');
+    assert.notEqual((await readMembership(query, id))!.periodId, period);
+    await assert.rejects(db.exec(script), /already has a purchase/);
+    await db.exec('ROLLBACK');
+    assert.equal((await readMembership(query, id))!.sku, 'MONTHLY');
+  });
+});

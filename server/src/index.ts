@@ -78,6 +78,12 @@ import {
   signSessionToken
 } from './sessionTokens.js';
 import { AuthBody, RedeemBody, TtsRedeemBody, TtsSynthesizeBody, IapBody, ProfileBody } from './apiModels.js';
+import { MembershipError, membershipActive } from './membershipPolicy.js';
+import { membershipSnapshot, readMembership } from './membershipService.js';
+import { registerMembershipRoutes } from './membershipRoutes.js';
+import { CloudFileService } from './cloudFileService.js';
+import { registerCloudFileRoutes } from './cloudFileRoutes.js';
+import { createObsStore } from './cloudObjectStore.js';
 
 interface AuthenticatedRequest extends FastifyRequest {
   userId?: string;
@@ -88,7 +94,8 @@ class ApiError extends Error {
   constructor(
     readonly statusCode: number,
     readonly code: string,
-    message: string
+    message: string,
+    readonly retryAfter: number = 0
   ) {
     super(message);
   }
@@ -157,8 +164,11 @@ app.addHook('onSend', async (request, reply, payload) => {
 });
 
 app.setErrorHandler((error, _request, reply) => {
-  if (error instanceof ApiError) {
-    void reply.status(error.statusCode).send({ code: error.code, message: error.message });
+  if (error instanceof ApiError || error instanceof MembershipError) {
+    const retryAfter = error instanceof ApiError ? error.retryAfter : 0;
+    if (retryAfter > 0) reply.header('Retry-After', String(retryAfter));
+    void reply.status(error.statusCode).send({ code: error.code, message: error.message,
+      ...(retryAfter > 0 ? { retryAfter } : {}) });
     return;
   }
   if (error instanceof SyncApiError) {
@@ -182,6 +192,35 @@ app.get('/health', async () => ({
   ok: true,
   sisConfigured: isHuaweiSisConfigured()
 }));
+
+registerMembershipRoutes(app, {
+  enabled: config.membershipEnabled,
+  salesPilot: config.membershipSalesPilot,
+  superEnabled: config.cloudFiles.enabled && !!config.cloudFiles.endpoint && !!config.cloudFiles.region &&
+    !!config.cloudFiles.bucket && !!config.cloudFiles.ak && !!config.cloudFiles.sk,
+  authenticate,
+  userId: requiredUserId,
+  transaction: inTransaction,
+  limit: userId => enforceAccountRateLimit(userId, 'membership', config.http.sensitiveRateLimitPerMinute),
+  account: snapshot,
+  wallet: ttsWallet
+});
+
+const obs = config.cloudFiles;
+const cloudFiles = new CloudFileService(inTransaction,
+  config.membershipEnabled && obs.enabled && obs.endpoint && obs.region && obs.bucket && obs.ak && obs.sk
+    ? createObsStore(obs) : null);
+registerCloudFileRoutes(app, cloudFiles, { authenticate, userId: requiredUserId,
+  limit: userId => enforceAccountRateLimit(userId, 'cloud-files', 120) });
+const cloudMaintenance = setInterval(() => {
+  void cloudFiles.maintenance().catch(error => app.log.error(error, 'cloud file cleanup failed'));
+  if (config.membershipEnabled) void pool.query(`DELETE FROM membership_quotes WHERE id IN (
+    SELECT q.id FROM membership_quotes q WHERE q.expires_at < now()-interval '1 day'
+      AND NOT EXISTS(SELECT 1 FROM membership_orders o WHERE o.quote_id=q.id) LIMIT 1000
+  )`).catch(error => app.log.error(error, 'membership quote cleanup failed'));
+}, 60000);
+cloudMaintenance.unref();
+app.addHook('onClose', async () => { clearInterval(cloudMaintenance); });
 
 app.get<{ Params: { userId: string } }>('/v1/avatars/:userId', async (request, reply) => {
   const userId = request.params.userId;
@@ -725,7 +764,7 @@ app.post<{ Body: TtsSynthesizeBody }>(
         const statusCode = error.code === 'TTS_RATE_LIMITED'
           ? 429
           : error.code === 'TTS_DAILY_BUDGET_EXHAUSTED' ? 503 : 409;
-        throw new ApiError(statusCode, error.code, error.message);
+        throw new ApiError(statusCode, error.code, error.message, statusCode === 429 ? 2 : 0);
       }
       throw error;
     }
@@ -769,13 +808,14 @@ app.post<{ Body: TtsSynthesizeBody }>(
 
     let releaseTtsSlot: (() => void) | null = null;
     try {
-      releaseTtsSlot = await ttsConcurrency.acquire(userId);
+      const member = config.membershipEnabled ? await readMembership(pool, userId) : null;
+      releaseTtsSlot = await ttsConcurrency.acquire(userId, membershipActive(member, Date.now()));
     } catch (error) {
       if (!reservation.duplicate) {
         await refundTtsUsage(reservation.usage.id, 'TTS_SERVER_BUSY');
       }
       if (error instanceof TtsServerBusyError) {
-        throw new ApiError(503, 'TTS_SERVER_BUSY', error.message);
+        throw new ApiError(503, 'TTS_SERVER_BUSY', error.message, 2);
       }
       throw error;
     }
@@ -1108,7 +1148,7 @@ async function ttsWallet(db: Queryable, userId: string) {
     `SELECT
        tier,
        COALESCE(SUM(remaining_chars), 0)::bigint AS balance,
-       (extract(epoch FROM MIN(expires_at)) * 1000)::bigint AS next_expiry_ms
+       (extract(epoch FROM MIN(CASE WHEN isfinite(expires_at) THEN expires_at END)) * 1000)::bigint AS next_expiry_ms
      FROM tts_quota_grants
      WHERE user_id = $1
        AND remaining_chars > 0
@@ -1171,6 +1211,9 @@ async function snapshot(db: Queryable, userId: string) {
     [userId]
   );
   const row = account.rows[0]!;
+  const membership = config.membershipEnabled ? await membershipSnapshot(db, userId) : null;
+  const memberThemes = membership?.active ? await db.query<{ theme_id: string }>(
+    'SELECT theme_id FROM theme_catalog WHERE member_included = TRUE') : null;
   return {
     userId: row.id,
     displayName: row.display_name,
@@ -1182,6 +1225,8 @@ async function snapshot(db: Queryable, userId: string) {
     promoPoints: Number(row.promo_balance),
     welcomeGranted: row.welcome_granted,
     iapDebtPoints: Number(row.iap_debt_points),
+    membership,
+    memberThemeIds: memberThemes?.rows.map(item => item.theme_id) ?? [],
     entitlements: entitlements.rows.map((item) => ({
       themeId: item.theme_id,
       expiresAt: Number(item.expires_at_ms)
