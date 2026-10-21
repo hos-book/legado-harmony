@@ -411,11 +411,3 @@ for f in harmony-book-source-engine/scripts/*-check.mjs; do node --experimental-
 - 源码地址：https://github.com/wip3l/legado-harmony
 
 项目包含的 QuickJS、ohos_quickjs 及 OpenHarmony/Huawei N-API 封装代码继续适用各自的 MIT 或 Apache-2.0 许可证，详见 [第三方开源软件声明](THIRD_PARTY_NOTICES.md)。相关完整许可文本同时打包进入 HAP，并可在应用“关于 → 开源许可”中查看。
-
-### 4.2.925 界面与图标补充
-
-- 搜索与发现的“封面模糊背景”可在搜索/发现设置中关闭。首页顶部与底部导航栏跟随列表滚动收起和展开。
-- API 26 及以上支持主题桌面图标，主题应用与图标设置可使用对应的重绘图标资源。
-- 视频播放恢复跟随系统旋转；正文插图先下载缓存再显示；手动选择的全局字体重启后继续保留。
-
-- 「我的 → 加入交流群」可打开 QQ 交流群入口。
