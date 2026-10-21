@@ -56,6 +56,7 @@ struct ReaderFontSettingsPage {
   @StorageLink('appDarkAccentColor') appDarkAccentColor: string = '#4E9BFF';
   @StorageLink('themeRevision') themeRevision: number = 0;
   @StorageLink('accountEntitlementsRevision') accountEntitlementsRevision: number = 0;
+  @StorageLink('readerFontWeight') readerFontWeight: number = 400;
   @State readerFontSize: number = 20;
   @State readerBodyFontMode: string = 'global';
   @State readerBodyFontFamily: string = '';
@@ -133,6 +134,7 @@ struct ReaderFontSettingsPage {
     try {
       const settings = await ReaderSettingsStore.load(getContext(this));
       this.readerFontSize = settings.fontSize;
+      this.readerFontWeight = settings.fontWeight;
       this.readerBodyFontMode = settings.bodyFontMode;
       this.readerBodyFontFamily = settings.bodyFontFamily;
       this.readerTitleFontMode = settings.titleFontMode;
@@ -797,6 +799,7 @@ struct ReaderFontSettingsPage {
         .width('100%')
       Text('这是一段阅读正文预览，文字会跟随当前正文字体设置显示。')
         .fontSize(this.readerFontSize)
+        .fontWeight(this.readerFontWeight)
         .fontFamily(this.bodyPreviewFontFamily())
         .fontColor(this.primaryTextColor())
         .width('100%')
@@ -1074,6 +1077,7 @@ struct ReaderFontSettingsPage {
           .verticalAlign(ImageSpanAlignment.CENTER)
         Span(slice.text)
           .fontSize(this.regexRuleAt(index).fontSize)
+          .fontWeight(this.readerFontWeight)
           .fontFamily(this.previewFontFamily(this.regexRuleAt(index).fontMode, this.regexRuleAt(index).fontFamily))
           .fontColor(this.regexPreviewTextColor(true, index))
           .textShadow(this.regexPreviewTextShadow(true, index))
@@ -1089,6 +1093,7 @@ struct ReaderFontSettingsPage {
     } else {
       Span(slice.text)
         .fontSize(slice.highlighted ? this.regexRuleAt(index).fontSize : this.readerFontSize)
+        .fontWeight(this.readerFontWeight)
         .fontFamily(slice.highlighted ?
           this.previewFontFamily(this.regexRuleAt(index).fontMode, this.regexRuleAt(index).fontFamily) :
           this.previewFontFamily(this.readerBodyFontMode, this.readerBodyFontFamily))

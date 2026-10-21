@@ -555,6 +555,7 @@ struct ReadBookPage {
   private readerGestureTurnGuardUntil: number = 0;
   private readerGestureTurnAllowance: number = 0;
   private slideResetSerial: number = 0;
+  @StorageLink('readerFontWeight') @Watch('onReadLayoutChanged') readerFontWeight: number = 400;
   @StorageLink('readerFontSize') @Watch('onReadLayoutChanged') readerFontSize: number = 20;
   @StorageLink('readerLetterSpacing') @Watch('onReadLayoutChanged') readerLetterSpacing: number = 0;
   @StorageLink('readerTextAlign') @Watch('onReadLayoutChanged') readerTextAlign: string = 'justify';
@@ -6315,6 +6316,7 @@ struct ReadBookPage {
 
   applyLoadedReaderSettings(settings: ReaderSettings): void {
     this.readerFontSize = settings.fontSize;
+    this.readerFontWeight = settings.fontWeight;
     this.readerLetterSpacing = settings.letterSpacing;
     this.readerTextAlign = settings.textAlign;
     this.readerLineHeight = settings.lineHeight;
@@ -9158,7 +9160,7 @@ struct ReadBookPage {
     if (this.readerTypographyDraftPending && this.readerTypographyDraft.length === ReaderTypographyField.COUNT) {
       return [...this.readerTypographyDraft];
     }
-    return [this.readerFontSize, this.readerLetterSpacing, this.readerLineHeight, this.readerParagraphSpacing,
+    return [this.readerFontSize, this.readerFontWeight, this.readerLetterSpacing, this.readerLineHeight, this.readerParagraphSpacing,
       this.readerMarginLeft, this.readerMarginRight, this.readerMarginTop, this.readerMarginBottom];
   }
 
@@ -9176,6 +9178,7 @@ struct ReadBookPage {
     if (draft.length !== ReaderTypographyField.COUNT) return;
     this.readerLayoutCommitInProgress = true;
     this.readerFontSize = draft[ReaderTypographyField.FONT_SIZE];
+    this.readerFontWeight = draft[ReaderTypographyField.FONT_WEIGHT];
     this.readerLetterSpacing = draft[ReaderTypographyField.LETTER_SPACING];
     this.readerLineHeight = draft[ReaderTypographyField.LINE_HEIGHT];
     this.readerParagraphSpacing = draft[ReaderTypographyField.PARAGRAPH_SPACING];
@@ -9791,7 +9794,8 @@ struct ReadBookPage {
       this.readerMarginTop,
       this.readerMarginBottom,
       this.readerLetterSpacing,
-      this.readerTextAlign
+      this.readerTextAlign,
+      this.readerFontWeight
     ).catch((e: Error) => {
       console.warn('保存阅读排版设置失败:', e);
     });
@@ -12181,6 +12185,7 @@ struct ReadBookPage {
   readerPlainTextLeaf(text: string) {
     Text(ReaderActionMarker.strip(LocalBookService.stripEpubImageMarkers(text || '', false), false))
       .fontSize(this.readerFontSize)
+      .fontWeight(this.readerFontWeight)
       .fontFamily(this.getBodyReaderFontFamily())
       .fontColor(this.getTextColor())
       .lineSpacing(LengthMetrics.vp(Math.max(0, this.readerLineHeight)))
@@ -13501,6 +13506,7 @@ struct ReadBookPage {
     input.columnCount = 1;
     input.columnGapPx = 0;
     input.fontSizePx = this.toMeasureFontPx(this.readerFontSize);
+    input.fontWeight = this.readerFontWeight;
     input.titleFontSizePx = this.toMeasureFontPx(this.readerTitleFontSize);
     input.lineSpacingPx = this.toMeasureNonNegativePx(this.readerLineHeight);
     input.paragraphSpacingPx = this.toMeasureNonNegativePx(this.readerParagraphSpacing);
@@ -14282,7 +14288,7 @@ struct ReadBookPage {
           styledValue: new TextStyle({
             fontSize: LengthMetrics.px(run.fontSizePx),
             fontFamily: run.fontFamily || this.getBodyReaderFontFamily(),
-            fontWeight: run.bold ? 500 : 400,
+            fontWeight: run.fontWeight,
             fontColor: Color.Transparent
           })
         });
@@ -15160,7 +15166,7 @@ struct ReadBookPage {
       `${this.readerRegexFontPattern}_${this.readerRegexFontMode}_${this.readerRegexFontFamily}_` +
       `${this.readerRegexFontSize}_${this.readerRegexShadowColor}_${this.themeRevision}_` +
       `${this.themeRegexEmphasisMode()}_${this.themeRegexBubbleStyleId()}_reader_action_layout_v7`;
-    return `${this.readerFontSize}_${this.readerLetterSpacing}_${this.readerTextAlign}_${this.readerLineHeight}_${this.readerParagraphSpacing}_` +
+    return `${this.readerFontSize}_${this.readerFontWeight}_${this.readerLetterSpacing}_${this.readerTextAlign}_${this.readerLineHeight}_${this.readerParagraphSpacing}_` +
       `${this.keepParagraphIndent}_` +
       `${this.readerMarginLeft}_${this.readerMarginRight}_${this.readerMarginTop}_${this.readerMarginBottom}_` +
       `${this.readerBodyFontMode}_${this.readerBodyFontFamily}_${this.getBodyReaderFontFamily()}_` +

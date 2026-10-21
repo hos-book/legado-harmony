@@ -398,6 +398,16 @@ export class ReaderV2Paginator {
     return graphicsText.TextAlign.JUSTIFY;
   }
 
+  private static readonly FONT_WEIGHTS: graphicsText.FontWeight[] = [
+      graphicsText.FontWeight.W100, graphicsText.FontWeight.W200,
+      graphicsText.FontWeight.W300, graphicsText.FontWeight.W400, graphicsText.FontWeight.W500,
+      graphicsText.FontWeight.W600, graphicsText.FontWeight.W700, graphicsText.FontWeight.W800,
+      graphicsText.FontWeight.W900];
+
+  private static bodyFontWeight(weight: number): graphicsText.FontWeight {
+    return ReaderV2Paginator.FONT_WEIGHTS[weight / 100 - 1];
+  }
+
   private static baseTextStyle(block: ReaderV2Block, snapshot: ReaderV2LayoutSnapshot): graphicsText.TextStyle {
     const heading = block.title || block.headingLevel > 0;
     // Chapter titles keep the user's title size. In-chapter headings sit between body and title size so a
@@ -408,7 +418,7 @@ export class ReaderV2Paginator {
       fontSize: block.title ? snapshot.titleFontSizePx : (heading ? headingFontSizePx : snapshot.fontSizePx),
       letterSpacing: snapshot.letterSpacingPx,
       fontFamilies: [heading ? snapshot.titleFontFamily : snapshot.bodyFontFamily],
-      fontWeight: heading ? graphicsText.FontWeight.W600 : graphicsText.FontWeight.W400,
+      fontWeight: heading ? graphicsText.FontWeight.W600 : ReaderV2Paginator.bodyFontWeight(snapshot.fontWeight),
       color: ReaderV2Paginator.graphicsColor(snapshot.textColor),
       halfLeading: false,
       heightOnly: true,
@@ -696,7 +706,7 @@ export class ReaderV2Paginator {
       const style = ReaderV2Paginator.styleAt(document, block, block.displayStart + start, snapshot, regexStyles);
       const families = style.fontFamilies;
       result.push(new ReaderV2SelectionRun(block.text.substring(start, end), Number(style.fontSize),
-        families && families.length > 0 ? families[0] : '', block.title || block.headingLevel > 0,
+        families && families.length > 0 ? families[0] : '', block.title || block.headingLevel > 0 ? 600 : snapshot.fontWeight,
         Number(style.letterSpacing || 0)));
     }
     return result;

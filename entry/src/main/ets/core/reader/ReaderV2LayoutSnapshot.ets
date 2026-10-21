@@ -1,3 +1,4 @@
+import { ReaderFontWeight } from './ReaderFontWeight';
 import { ReaderCommentBubbleStyle } from './ReaderCommentBubble';
 
 export class ReaderV2Rect {
@@ -41,6 +42,7 @@ export class ReaderV2LayoutInput {
   columnGapPx: number = 0;
   columnCount: number = 1;
   fontSizePx: number = 40;
+  fontWeight: number = ReaderFontWeight.DEFAULT;
   titleFontSizePx: number = 44;
   lineSpacingPx: number = 0;
   paragraphSpacingPx: number = 0;
@@ -68,6 +70,7 @@ export class ReaderV2LayoutSnapshot {
   columnRects: ReaderV2Rect[] = [];
   extendToStatusBar: boolean = false;
   fontSizePx: number = 40;
+  fontWeight: number = ReaderFontWeight.DEFAULT;
   titleFontSizePx: number = 44;
   lineSpacingPx: number = 0;
   paragraphSpacingPx: number = 0;
@@ -112,6 +115,7 @@ export class ReaderV2LayoutSnapshot {
     }
 
     snapshot.fontSizePx = Math.max(1, input.fontSizePx);
+    snapshot.fontWeight = ReaderFontWeight.normalize(input.fontWeight);
     snapshot.titleFontSizePx = Math.max(1, input.titleFontSizePx);
     snapshot.lineSpacingPx = Math.max(0, input.lineSpacingPx);
     snapshot.paragraphSpacingPx = Math.max(0, input.paragraphSpacingPx);
@@ -136,7 +140,7 @@ export class ReaderV2LayoutSnapshot {
     const values = [
       snapshot.viewport.width(), snapshot.viewport.height(), snapshot.contentRect.left, snapshot.contentRect.top,
       snapshot.contentRect.right, snapshot.contentRect.bottom, snapshot.columnRects.length,
-      snapshot.fontSizePx, snapshot.titleFontSizePx, snapshot.lineSpacingPx, snapshot.paragraphSpacingPx,
+      snapshot.fontSizePx, snapshot.fontWeight, snapshot.titleFontSizePx, snapshot.lineSpacingPx, snapshot.paragraphSpacingPx,
       snapshot.letterSpacingPx, snapshot.textAlign, snapshot.commentFontSizePx, snapshot.commentBubble.identity(),
       snapshot.commentsEnabled ? 1 : 0, snapshot.regexEnabled ? 1 : 0
     ];

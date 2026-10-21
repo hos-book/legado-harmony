@@ -1,3 +1,4 @@
+import { ReaderFontWeight } from '../../core/reader/ReaderFontWeight';
 import { ImmersiveMaterialRuntime } from '../../utils/ImmersiveMaterialRuntime';
 import { ImmersiveBackButton } from '../ImmersiveBackButton';
 import { ThemeRuntime } from '../../theme/ThemeRuntime';
@@ -16,22 +17,25 @@ interface ReaderHeaderFooterSwitchOptions {
 /** 排版参数在草稿数组里的下标。 */
 export class ReaderTypographyField {
   static readonly FONT_SIZE: number = 0;
-  static readonly LETTER_SPACING: number = 1;
-  static readonly LINE_HEIGHT: number = 2;
-  static readonly PARAGRAPH_SPACING: number = 3;
-  static readonly MARGIN_LEFT: number = 4;
-  static readonly MARGIN_RIGHT: number = 5;
-  static readonly MARGIN_TOP: number = 6;
-  static readonly MARGIN_BOTTOM: number = 7;
-  static readonly COUNT: number = 8;
+  static readonly FONT_WEIGHT: number = 1;
+  static readonly LETTER_SPACING: number = 2;
+  static readonly LINE_HEIGHT: number = 3;
+  static readonly PARAGRAPH_SPACING: number = 4;
+  static readonly MARGIN_LEFT: number = 5;
+  static readonly MARGIN_RIGHT: number = 6;
+  static readonly MARGIN_TOP: number = 7;
+  static readonly MARGIN_BOTTOM: number = 8;
+  static readonly COUNT: number = 9;
 
-  static readonly LABELS: string[] = ['字号', '字距', '行距', '段落间距', '左边距', '右边距', '上边距', '下边距'];
+  static readonly LABELS: string[] = ['字号', '字体粗细', '字距', '行距', '段落间距', '左边距', '右边距', '上边距', '下边距'];
 
   static min(field: number): number {
+    if (field === ReaderTypographyField.FONT_WEIGHT) return ReaderFontWeight.MIN;
     return field === ReaderTypographyField.FONT_SIZE ? 14 : 0;
   }
 
   static max(field: number): number {
+    if (field === ReaderTypographyField.FONT_WEIGHT) return ReaderFontWeight.MAX;
     if (field === ReaderTypographyField.FONT_SIZE) return 50;
     if (field === ReaderTypographyField.LETTER_SPACING) return 8;
     if (field === ReaderTypographyField.LINE_HEIGHT) return 52;
@@ -40,13 +44,18 @@ export class ReaderTypographyField {
     return 120;
   }
 
+  static step(field: number): number {
+    return field === ReaderTypographyField.FONT_WEIGHT ? ReaderFontWeight.STEP : 1;
+  }
+
   static clamp(field: number, value: number): number {
+    if (field === ReaderTypographyField.FONT_WEIGHT) return ReaderFontWeight.normalize(value);
     return Math.max(ReaderTypographyField.min(field), Math.min(Math.round(value), ReaderTypographyField.max(field)));
   }
 }
 
 /**
- * 正文排版的统一调节控件：下拉选一个参数（字号、字距、行距、段距、四侧边距），用加减按钮或直接输入数值。
+ * 正文排版的统一调节控件：下拉选一个参数（字号、字体粗细、字距、行距、段距、四侧边距），用加减按钮或直接输入数值。
  * 数值草稿是组件自己的状态，连点加减只刷新这个控件；每次变化把整组草稿交给页面，
  * 页面稍后一次性提交并重排正文。
  */
@@ -71,7 +80,10 @@ export struct ReaderTypographyStepper {
   aboutToAppear(): void {
     const values: number[] = [];
     for (let field = 0; field < ReaderTypographyField.COUNT; field++) {
-      values.push(field < this.initialValues.length ? this.initialValues[field] : ReaderTypographyField.min(field));
+      const fallback = field === ReaderTypographyField.FONT_WEIGHT ? ReaderFontWeight.DEFAULT :
+        ReaderTypographyField.min(field);
+      values.push(ReaderTypographyField.clamp(field,
+        field < this.initialValues.length ? this.initialValues[field] : fallback));
     }
     this.values = values;
   }
@@ -122,7 +134,7 @@ export struct ReaderTypographyStepper {
       Blank()
         .layoutWeight(1)
       this.stepButton($r('sys.symbol.minus'), '减小当前排版参数',
-        this.current() > ReaderTypographyField.min(this.field), () => this.apply(this.current() - 1))
+        this.current() > ReaderTypographyField.min(this.field), () => this.apply(this.current() - ReaderTypographyField.step(this.field)))
       if (this.inputVisible) {
         TextInput({ text: this.inputDraft, placeholder: `${this.current()}` })
           .type(InputType.Number)
@@ -154,7 +166,7 @@ export struct ReaderTypographyStepper {
           })
       }
       this.stepButton($r('sys.symbol.plus'), '增大当前排版参数',
-        this.current() < ReaderTypographyField.max(this.field), () => this.apply(this.current() + 1))
+        this.current() < ReaderTypographyField.max(this.field), () => this.apply(this.current() + ReaderTypographyField.step(this.field)))
     }
     .width('100%')
     // Keep the selector on the same content baseline as the settings below.

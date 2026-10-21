@@ -35,7 +35,8 @@ function harness() {
     },
     HexColor: { normalize: (value, fallback) => value || fallback }
   });
-  vm.runInContext(compile(read('core/reader/ReaderInfoBarModel.ts')) + '\n' +
+  vm.runInContext(compile(read('core/reader/ReaderFontWeight.ts')) + '\n' +
+    compile(read('core/reader/ReaderInfoBarModel.ts')) + '\n' +
     compile(read('utils/ReaderSettingsStore.ets')) +
     '\n' + compile(read('account/ReaderPreferencesSync.ets')) +
     '\nglobalThis.api = { ReaderSettingsStore, ReaderSettings, ReaderInfoBarConfig, ReaderPreferencesSync };', context);
@@ -109,6 +110,59 @@ function openChromePanel(h) {
 }
 
 const tests = {
+  async 'font weight defaults survive legacy settings and profiles'() {
+    const h = harness();
+    assert.equal((await h.settings.reload({})).fontWeight, 400);
+    const legacy = { ...await h.settings.load({}) };
+    delete legacy.fontWeight;
+    h.disk.set('readerThemeProfileV1_classic-blue', JSON.stringify(legacy));
+    assert.equal((await h.settings.reload({})).fontWeight, 400);
+    h.disk.delete('readerThemeProfileV1_classic-blue');
+    h.disk.set('readerFontWeight', '650');
+    assert.equal((await h.settings.reload({})).fontWeight, 700);
+    h.disk.delete('readerThemeProfileV1_classic-blue');
+    h.disk.set('readerFontWeight', 'invalid');
+    assert.equal((await h.settings.reload({})).fontWeight, 400);
+  },
+  async 'font weight normalizes, persists and survives omitted arguments and font changes'() {
+    const h = harness();
+    await h.settings.saveLayoutSettings({}, 20, 12, 0, 18, 18, 18, 18, 0, 'justify', 650);
+    assert.equal(h.values.get('readerFontWeight'), 700);
+    assert.equal(h.disk.get('readerFontWeight'), 700);
+    assert.equal((await h.settings.reload({})).fontWeight, 700);
+    // Older callers, including applying a theme's layout, must preserve the selected weight.
+    await h.settings.saveLayoutSettings({}, 24, 14, 2);
+    const style = await h.settings.load({});
+    style.bodyFontFamily = 'custom-face';
+    await h.settings.saveReaderFontStyleSettings({}, style);
+    assert.equal((await h.settings.reload({})).fontWeight, 700);
+    assert.equal(h.syncMarks, 0);
+    assert.equal('fontWeight' in h.sync.toPayload(style), false);
+    assert.equal(h.sync.merge(style, { fontWeight: 100 }).fontWeight, 700);
+    style.fontWeight = 300;
+    await h.settings.saveAll({}, style);
+    assert.equal((await h.settings.reload({})).fontWeight, 300);
+  },
+  async 'rapid font weight edits retain the latest value across theme switches'() {
+    const h = harness();
+    const release = h.pauseNextAccess();
+    const first = h.settings.saveLayoutSettings({}, 20, 12, 0, 18, 18, 18, 18, 0, 'justify', 500);
+    const last = h.settings.saveLayoutSettings({}, 20, 12, 0, 18, 18, 18, 18, 0, 'justify', 800);
+    await new Promise(resolve => setImmediate(resolve));
+    const reload = h.settings.reload({});
+    release();
+    await Promise.all([first, last]);
+    assert.equal((await reload).fontWeight, 800);
+    h.values.set('appThemeId', 'other-theme');
+    await h.settings.switchThemeProfile({}, 'classic-blue', 'other-theme');
+    await h.settings.saveLayoutSettings({}, 20, 12, 0, 18, 18, 18, 18, 0, 'justify', 200);
+    h.values.set('appThemeId', 'classic-blue');
+    assert.equal((await h.settings.switchThemeProfile({}, 'other-theme', 'classic-blue')).fontWeight, 800);
+    h.values.set('appThemeId', 'other-theme');
+    assert.equal((await h.settings.switchThemeProfile({}, 'classic-blue', 'other-theme')).fontWeight, 200);
+    h.values.set('appDarkMode', true);
+    assert.equal((await h.settings.reload({})).fontWeight, 200);
+  },
   async 'open panel switches persist immediately across day/night rebuilds'() {
     const h = harness();
     const switches = [['显示页眉', true], ['页眉分隔线', true],

@@ -7,15 +7,15 @@ export class ReaderV2SelectionRun {
   text: string = '';
   fontSizePx: number = 0;
   fontFamily: string = '';
-  bold: boolean = false;
+  fontWeight: number = 400;
   letterSpacingPx: number = 0;
 
-  constructor(text: string, fontSizePx: number, fontFamily: string, bold: boolean,
+  constructor(text: string, fontSizePx: number, fontFamily: string, fontWeight: number,
     letterSpacingPx: number = 0) {
     this.text = text;
     this.fontSizePx = fontSizePx;
     this.fontFamily = fontFamily;
-    this.bold = bold;
+    this.fontWeight = fontWeight;
     this.letterSpacingPx = letterSpacingPx;
   }
 }

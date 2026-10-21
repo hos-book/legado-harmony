@@ -1,3 +1,4 @@
+import { ReaderFontWeight } from '../core/reader/ReaderFontWeight';
 import { Context } from '@kit.AbilityKit';
 import preferences from '@ohos.data.preferences';
 import { ReaderThemeHelper } from './ReaderThemeHelper';
@@ -7,6 +8,7 @@ import { ReaderInfoBarConfig } from '../core/reader/ReaderInfoBarModel';
 
 export class ReaderSettings {
   fontSize: number = 20;
+  fontWeight: number = ReaderFontWeight.DEFAULT;
   letterSpacing: number = 0;
   textAlign: string = 'justify';
   lineHeight: number = 12;
@@ -90,6 +92,7 @@ export class ReaderSettingsStore {
   static readonly SCREEN_ORIENTATION_SYSTEM: string = 'system';
   static readonly SCREEN_ORIENTATION_PORTRAIT: string = 'portrait';
   static readonly SCREEN_ORIENTATION_LANDSCAPE: string = 'landscape';
+  static readonly KEY_FONT_WEIGHT: string = 'readerFontWeight';
   static readonly KEY_FONT_SIZE: string = 'readerFontSize';
   static readonly KEY_LETTER_SPACING: string = 'readerLetterSpacing';
   static readonly KEY_TEXT_ALIGN: string = 'readerTextAlign';
@@ -185,6 +188,8 @@ export class ReaderSettingsStore {
       20,
       'fontSize'
     );
+    settings.fontWeight = await ReaderSettingsStore.getNumber(
+      store, ReaderSettingsStore.KEY_FONT_WEIGHT, ReaderFontWeight.DEFAULT, 'fontWeight');
     settings.letterSpacing = await ReaderSettingsStore.getNumber(
       store, ReaderSettingsStore.KEY_LETTER_SPACING, 0, 'letterSpacing');
     settings.textAlign = ReaderSettingsStore.normalizeTextAlign(
@@ -481,10 +486,12 @@ export class ReaderSettingsStore {
     marginTop: number = 18,
     marginBottom: number = 18,
     letterSpacing: number = 0,
-    textAlign: string = 'justify'
+    textAlign: string = 'justify',
+    fontWeight?: number
   ): Promise<void> {
     const settings = ReaderSettingsStore.cachedSettings || ReaderSettingsStore.fromStorage();
     settings.fontSize = ReaderSettingsStore.normalizeFontSize(fontSize);
+    settings.fontWeight = ReaderFontWeight.normalize(fontWeight ?? settings.fontWeight);
     settings.letterSpacing = ReaderSettingsStore.normalizeLetterSpacing(letterSpacing);
     settings.textAlign = ReaderSettingsStore.normalizeTextAlign(textAlign);
     settings.lineHeight = ReaderSettingsStore.normalizeLineHeight(lineHeight);
@@ -518,6 +525,7 @@ export class ReaderSettingsStore {
     themeId: string): Promise<void> {
     const store = await preferences.getPreferences(context, ReaderSettingsStore.STORE_NAME);
     await store.put(ReaderSettingsStore.KEY_FONT_SIZE, settings.fontSize);
+    await store.put(ReaderSettingsStore.KEY_FONT_WEIGHT, settings.fontWeight);
     await store.put(ReaderSettingsStore.KEY_LETTER_SPACING, settings.letterSpacing);
     await store.put(ReaderSettingsStore.KEY_TEXT_ALIGN, settings.textAlign);
     await store.put(ReaderSettingsStore.KEY_LINE_HEIGHT, settings.lineHeight);
@@ -950,7 +958,8 @@ export class ReaderSettingsStore {
       settings.marginTop,
       settings.marginBottom,
       settings.letterSpacing,
-      settings.textAlign
+      settings.textAlign,
+      settings.fontWeight
     );
     await ReaderSettingsStore.saveThemeSettings(
       context,
@@ -1099,6 +1108,7 @@ export class ReaderSettingsStore {
 
   private static applyLayoutToStorage(settings: ReaderSettings): void {
     AppStorage.setOrCreate(ReaderSettingsStore.KEY_FONT_SIZE, settings.fontSize);
+    AppStorage.setOrCreate(ReaderSettingsStore.KEY_FONT_WEIGHT, settings.fontWeight);
     AppStorage.setOrCreate(ReaderSettingsStore.KEY_LETTER_SPACING, settings.letterSpacing);
     AppStorage.setOrCreate(ReaderSettingsStore.KEY_TEXT_ALIGN, settings.textAlign);
     AppStorage.setOrCreate(ReaderSettingsStore.KEY_LINE_HEIGHT, settings.lineHeight);
@@ -1266,6 +1276,7 @@ export class ReaderSettingsStore {
     fontSize: number = 20,
     lineHeightMode: string = ''
   ): number {
+    if (type === 'fontWeight') return ReaderFontWeight.normalize(value);
     if (type === 'fontSize') {
       return ReaderSettingsStore.normalizeFontSize(value);
     }
@@ -1463,6 +1474,7 @@ export class ReaderSettingsStore {
   private static clone(source: ReaderSettings): ReaderSettings {
     const settings = new ReaderSettings();
     settings.fontSize = ReaderSettingsStore.normalizeFontSize(source.fontSize);
+    settings.fontWeight = ReaderFontWeight.normalize(source.fontWeight);
     settings.letterSpacing = ReaderSettingsStore.normalizeLetterSpacing(source.letterSpacing);
     settings.textAlign = ReaderSettingsStore.normalizeTextAlign(source.textAlign);
     settings.lineHeight = ReaderSettingsStore.normalizeLineHeight(source.lineHeight);
@@ -1559,6 +1571,8 @@ export class ReaderSettingsStore {
     settings.fontSize = ReaderSettingsStore.normalizeFontSize(
       AppStorage.get<number>(ReaderSettingsStore.KEY_FONT_SIZE) ?? 20
     );
+    settings.fontWeight = ReaderFontWeight.normalize(
+      AppStorage.get<number>(ReaderSettingsStore.KEY_FONT_WEIGHT) ?? ReaderFontWeight.DEFAULT);
     settings.letterSpacing = ReaderSettingsStore.normalizeLetterSpacing(
       AppStorage.get<number>(ReaderSettingsStore.KEY_LETTER_SPACING) ?? 0);
     settings.textAlign = ReaderSettingsStore.normalizeTextAlign(

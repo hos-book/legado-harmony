@@ -1,3 +1,5 @@
+import { ReaderTypographyField } from '../components/reader/ReaderLayoutSettings';
+import { ReaderFontWeight } from '../core/reader/ReaderFontWeight';
 import { router } from '@kit.ArkUI';
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { syncSystemBars } from '../utils/SystemBars';
@@ -39,6 +41,7 @@ struct SettingsPage {
   @StorageLink('appThemeMode') appThemeMode: string = 'system';
   @StorageLink('appDarkMode') appDarkMode: boolean = false;
   @StorageLink('themeRevision') themeRevision: number = 0;
+  @StorageLink('readerFontWeight') readerFontWeight: number = 400;
   @StorageLink('readerFontSize') readerFontSize: number = 20;
   @StorageLink('readerLetterSpacing') readerLetterSpacing: number = 0;
   @StorageLink('readerTextAlign') readerTextAlign: string = 'justify';
@@ -598,6 +601,7 @@ struct SettingsPage {
 
   applyLoadedReaderSettings(settings: ReaderSettings): void {
     this.readerFontSize = settings.fontSize;
+    this.readerFontWeight = settings.fontWeight;
     this.readerLetterSpacing = settings.letterSpacing;
     this.readerTextAlign = settings.textAlign;
     this.readerLineHeight = settings.lineHeight;
@@ -731,6 +735,7 @@ struct SettingsPage {
   previewReaderText() {
     Text('窗外的风掠过树梢，纸页在指尖轻轻翻动。夜色渐深，故事也在这一刻慢慢展开。')
       .fontSize(this.readerFontSize)
+      .fontWeight(this.readerFontWeight)
       .fontFamily(this.getPreviewBodyFontFamily())
       .fontColor(this.previewTextColor())
       .lineHeight(this.getPreviewReaderLineHeight())
@@ -738,6 +743,7 @@ struct SettingsPage {
 
     Text('他停在灯下，听见远处传来的脚步声，像是某个被遗忘的约定终于抵达。')
       .fontSize(this.readerFontSize)
+      .fontWeight(this.readerFontWeight)
       .fontFamily(this.getPreviewBodyFontFamily())
       .fontColor(this.previewTextColor())
       .lineHeight(this.getPreviewReaderLineHeight())
@@ -1078,7 +1084,8 @@ struct SettingsPage {
       this.readerMarginTop,
       this.readerMarginBottom,
       this.readerLetterSpacing,
-      this.readerTextAlign
+      this.readerTextAlign,
+      this.readerFontWeight
     ).catch((e: Error) => {
       console.warn('保存阅读排版设置失败:', e);
     });
@@ -1086,6 +1093,11 @@ struct SettingsPage {
 
   setReaderFontSize(fontSize: number): void {
     this.readerFontSize = Math.max(14, Math.min(Math.round(fontSize), 50));
+    this.saveReaderLayoutSettings();
+  }
+
+  setReaderFontWeight(weight: number): void {
+    this.readerFontWeight = ReaderFontWeight.normalize(weight);
     this.saveReaderLayoutSettings();
   }
 
@@ -1162,52 +1174,38 @@ struct SettingsPage {
   }
 
   typographySettingOptions(): SelectOption[] {
-    return [
-      { value: '字号' },
-      { value: '字距' },
-      { value: '行距' },
-      { value: '段落间距' },
-      { value: '左边距' },
-      { value: '右边距' },
-      { value: '上边距' },
-      { value: '下边距' }
-    ];
+    return ReaderTypographyField.LABELS.map((label: string): SelectOption => ({ value: label }));
   }
 
   typographySettingTitle(): string {
-    const titles: string[] = ['字号', '字距', '行距', '段落间距', '左边距', '右边距', '上边距', '下边距'];
-    const index = Math.max(0, Math.min(this.typographySettingIndex, titles.length - 1));
-    return titles[index];
+    return ReaderTypographyField.LABELS[this.typographySettingIndex];
   }
 
   typographySettingMin(): number {
-    return this.typographySettingIndex === 0 ? 14 : 0;
+    return ReaderTypographyField.min(this.typographySettingIndex);
   }
 
   typographySettingMax(): number {
-    if (this.typographySettingIndex === 0) return 50;
-    if (this.typographySettingIndex === 1) return 8;
-    if (this.typographySettingIndex === 2) return 52;
-    if (this.typographySettingIndex === 3) return 32;
-    if (this.typographySettingIndex === 4 || this.typographySettingIndex === 5) return 80;
-    return 120;
+    return ReaderTypographyField.max(this.typographySettingIndex);
   }
 
   currentTypographySettingValue(): number {
     switch (this.typographySettingIndex) {
-      case 1:
-        return this.readerLetterSpacing;
+      case ReaderTypographyField.FONT_WEIGHT:
+        return this.readerFontWeight;
       case 2:
-        return this.readerLineHeight;
+        return this.readerLetterSpacing;
       case 3:
-        return this.readerParagraphSpacing;
+        return this.readerLineHeight;
       case 4:
-        return this.readerMarginLeft;
+        return this.readerParagraphSpacing;
       case 5:
-        return this.readerMarginRight;
+        return this.readerMarginLeft;
       case 6:
-        return this.readerMarginTop;
+        return this.readerMarginRight;
       case 7:
+        return this.readerMarginTop;
+      case 8:
         return this.readerMarginBottom;
       default:
         return this.readerFontSize;
@@ -1215,27 +1213,30 @@ struct SettingsPage {
   }
 
   adjustCurrentTypographySetting(delta: number): void {
-    const next = this.currentTypographySettingValue() + delta;
+    const next = this.currentTypographySettingValue() + delta * ReaderTypographyField.step(this.typographySettingIndex);
     switch (this.typographySettingIndex) {
-      case 1:
-        this.setReaderLetterSpacing(next);
+      case ReaderTypographyField.FONT_WEIGHT:
+        this.setReaderFontWeight(next);
         return;
       case 2:
-        this.setReaderLineHeight(next);
+        this.setReaderLetterSpacing(next);
         return;
       case 3:
-        this.setReaderParagraphSpacing(next);
+        this.setReaderLineHeight(next);
         return;
       case 4:
-        this.setReaderMarginLeft(next);
+        this.setReaderParagraphSpacing(next);
         return;
       case 5:
-        this.setReaderMarginRight(next);
+        this.setReaderMarginLeft(next);
         return;
       case 6:
-        this.setReaderMarginTop(next);
+        this.setReaderMarginRight(next);
         return;
       case 7:
+        this.setReaderMarginTop(next);
+        return;
+      case 8:
         this.setReaderMarginBottom(next);
         return;
       default:
@@ -1258,25 +1259,28 @@ struct SettingsPage {
       return;
     }
     switch (this.typographySettingIndex) {
-      case 1:
-        this.setReaderLetterSpacing(value);
+      case ReaderTypographyField.FONT_WEIGHT:
+        this.setReaderFontWeight(value);
         break;
       case 2:
-        this.setReaderLineHeight(value);
+        this.setReaderLetterSpacing(value);
         break;
       case 3:
-        this.setReaderParagraphSpacing(value);
+        this.setReaderLineHeight(value);
         break;
       case 4:
-        this.setReaderMarginLeft(value);
+        this.setReaderParagraphSpacing(value);
         break;
       case 5:
-        this.setReaderMarginRight(value);
+        this.setReaderMarginLeft(value);
         break;
       case 6:
-        this.setReaderMarginTop(value);
+        this.setReaderMarginRight(value);
         break;
       case 7:
+        this.setReaderMarginTop(value);
+        break;
+      case 8:
         this.setReaderMarginBottom(value);
         break;
       default:
