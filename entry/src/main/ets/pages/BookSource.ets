@@ -495,86 +495,7 @@ struct BookSourcePage {
                     .accessibilityText(`长按拖动排序：${source.bookSourceName}`)
                   }
 
-                  Column() {
-                    Row() {
-                      Text(source.bookSourceName)
-                        .fontSize(AppFontSize.BODY_LARGE)
-                        .fontWeight(FontWeight.Bold)
-                        .fontColor(this.primaryTextColor())
-                        .maxLines(1)
-                        .textOverflow({ overflow: TextOverflow.Ellipsis })
-                        .layoutWeight(1)
-
-                      this.sourceFormatBadge(source)
-                      if (source.isPinned) {
-                        this.sourceStatusIcon($r('sys.symbol.pin'), this.accentColor(), '已置顶')
-                      }
-                      if (this.isSourceAtBottom(source)) {
-                        this.sourceOrderStatusBadge('尾', '已置尾')
-                      }
-
-                      if (source.bookSourceGroup) {
-                        Text(source.bookSourceGroup)
-                          .fontSize(AppFontSize.CAPTION)
-                          .fontColor(this.accentColor())
-                          .maxLines(1)
-                          .textOverflow({ overflow: TextOverflow.Ellipsis })
-                          .constraintSize({ maxWidth: 72 })
-                          .padding({ left: AppSpacing.SM, right: AppSpacing.SM, top: AppSpacing.XXS, bottom: AppSpacing.XXS })
-                          .backgroundColor(this.inputColor())
-                          .borderRadius(ThemeRuntime.smallRadius())
-                          .margin({ left: AppSpacing.SM })
-                      }
-
-                      if (this.sourceNeedsLogin(source)) {
-                        this.sourceLoginStatusBadge(
-                          this.sourceLoggedIn(source) ? ThemeRuntime.successColor(this.appDarkMode) : ThemeRuntime.dangerColor(this.appDarkMode),
-                          this.sourceLoggedIn(source) ? '已登录' : '未登录')
-                      }
-                      if (source.isLocked) {
-                        this.sourceStatusIcon($r('sys.symbol.lock'), this.accentColor(), '已锁定')
-                      }
-                    }
-                    .width('100%')
-                    .alignItems(VerticalAlign.Center)
-
-                    Row({ space: AppSpacing.SM }) {
-                      this.sourceValidationStatusBadge(source.validationStatus)
-                      Text(source.bookSourceUrl)
-                        .fontSize(AppFontSize.CAPTION)
-                        .fontColor(this.subTextColor())
-                        .maxLines(1)
-                        .textOverflow({ overflow: TextOverflow.Ellipsis })
-                        .layoutWeight(1)
-                    }
-                    .width('100%')
-                    .margin({ top: AppSpacing.XS })
-                    .alignItems(VerticalAlign.Center)
-
-                  }
-                  .layoutWeight(1)
-                  .alignItems(HorizontalAlign.Start)
-                  .gesture(
-                    LongPressGesture({ repeat: false })
-                      .onAction((event: GestureEvent) => {
-                        if (!this.selectionMode && !this.isBatchOperating) {
-                          this.openSourceActions(source, event);
-                        }
-                      })
-                  )
-
-                  if (this.selectionMode) {
-                    Column() {
-                      Text(source.enabled ? '已启用' : '已禁用')
-                        .fontSize(AppFontSize.CAPTION)
-                        .fontColor(source.enabled ? ThemeRuntime.successColor(this.appDarkMode) : this.subTextColor())
-                      Text(source.enabledExplore ? '发现已启用' : '发现已禁用')
-                        .fontSize(AppFontSize.CAPTION)
-                        .fontColor(source.enabledExplore ? ThemeRuntime.successColor(this.appDarkMode) : this.subTextColor())
-                        .margin({ top: AppSpacing.XS })
-                    }
-                    .alignItems(HorizontalAlign.End)
-                  }
+                  this.sourceSummary(source)
                 }
                 .width('100%')
                 .padding(AppSpacing.LG)
@@ -732,7 +653,8 @@ struct BookSourcePage {
         }
         .width('100%')
         .position({ x: 0, y: this.sourceFormatBarTop() })
-        .zIndex(3)
+        // 与页面内容同级，按声明顺序悬浮；后续菜单和遮罩必须覆盖分类栏。
+        .zIndex(0)
       }
 
       this.bookSourceTitleBar()
@@ -2076,19 +1998,82 @@ struct BookSourcePage {
     .onClick(action)
   }
 
+  /** 名称独占主行；次要信息允许换行，不再从右侧挤占名称宽度。 */
   @Builder
-  sourceOrderStatusBadge(label: string, accessibilityLabel: string) {
+  sourceSummary(source: BookSource) {
+    Column({ space: AppSpacing.XS }) {
+      Row() {
+        Text(source.bookSourceName)
+          .fontSize(AppFontSize.BODY_LARGE)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.primaryTextColor())
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1)
+        if (source.isPinned) {
+          this.sourceStatusIcon($r('sys.symbol.pin'), this.accentColor(), '已置顶')
+        }
+        if (source.isLocked) {
+          this.sourceStatusIcon($r('sys.symbol.lock'), this.subTextColor(), '已锁定')
+        }
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+
+      Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
+        if (this.sourceFormatFilter === 'all') {
+          this.sourceMetadataText(source.sourceFormat === 'native' ? '原生' : '兼容', this.subTextColor())
+        }
+        if (source.bookSourceGroup && source.bookSourceGroup !== this.activeSourceGroup) {
+          Text(source.bookSourceGroup)
+            .fontSize(AppFontSize.CAPTION)
+            .fontColor(this.secondaryTextColor())
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .constraintSize({ maxWidth: 120 })
+            .margin({ right: AppSpacing.MD, bottom: AppSpacing.XXS })
+            .accessibilityText('分组：' + source.bookSourceGroup)
+        }
+        this.sourceMetadataText(this.sourceValidationStatusLabel(source.validationStatus),
+          this.sourceValidationStatusColor(source.validationStatus))
+        if (this.sourceNeedsLogin(source)) {
+          this.sourceMetadataText(this.sourceLoggedIn(source) ? '已登录' : '待登录',
+            this.sourceLoggedIn(source) ? this.subTextColor() : ThemeRuntime.dangerColor(this.appDarkMode))
+        }
+        // 默认启用状态不再反复占位，关闭的能力仍明确显示。
+        if (!source.enabled) {
+          this.sourceMetadataText('已禁用', ThemeRuntime.dangerColor(this.appDarkMode))
+        }
+        if (!source.enabledExplore) {
+          this.sourceMetadataText('发现关闭', this.subTextColor())
+        }
+        if (this.isSourceAtBottom(source)) {
+          this.sourceMetadataText('已置底', this.subTextColor())
+        }
+      }
+      .width('100%')
+
+      Text(source.bookSourceUrl)
+        .fontSize(AppFontSize.CAPTION)
+        .fontColor(this.subTextColor())
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .width('100%')
+    }
+    .layoutWeight(1)
+    .alignItems(HorizontalAlign.Start)
+    .gesture(LongPressGesture({ repeat: false }).onAction((event: GestureEvent) => {
+      if (!this.selectionMode && !this.isBatchOperating) this.openSourceActions(source, event);
+    }))
+  }
+
+  @Builder
+  sourceMetadataText(label: string, color: string) {
     Text(label)
-      .fontSize(AppFontSize.MICRO)
-      .fontWeight(FontWeight.Medium)
-      .fontColor(this.accentColor())
-      .width(24)
-      .height(24)
-      .textAlign(TextAlign.Center)
-      .backgroundColor(this.inputColor())
-      .borderRadius(12)
-      .margin({ left: AppSpacing.SM })
-      .accessibilityText(accessibilityLabel)
+      .fontSize(AppFontSize.CAPTION)
+      .fontColor(color)
+      .maxLines(1)
+      .margin({ right: AppSpacing.MD, bottom: AppSpacing.XXS })
   }
 
   @Builder
@@ -2104,34 +2089,6 @@ struct BookSourcePage {
     .backgroundColor(this.inputColor())
     .margin({ left: AppSpacing.SM })
     .accessibilityText(accessibilityLabel)
-  }
-
-  @Builder
-  sourceLoginStatusBadge(color: string, accessibilityLabel: string) {
-    Text('登')
-      .fontSize(AppFontSize.MICRO)
-      .fontWeight(FontWeight.Medium)
-      .fontColor(color)
-      .width(24)
-      .height(24)
-      .textAlign(TextAlign.Center)
-      .backgroundColor(this.inputColor())
-      .borderRadius(12)
-      .margin({ left: AppSpacing.SM })
-      .accessibilityText(accessibilityLabel)
-  }
-
-  @Builder
-  sourceValidationStatusBadge(validationStatus: number) {
-    Text(this.sourceValidationStatusLabel(validationStatus))
-      .fontSize(AppFontSize.MICRO)
-      .fontWeight(FontWeight.Medium)
-      .fontColor(this.sourceValidationStatusColor(validationStatus))
-      .padding({ left: AppSpacing.SM, right: AppSpacing.SM, top: AppSpacing.XXS, bottom: AppSpacing.XXS })
-      .backgroundColor(this.inputColor())
-      .borderRadius(ThemeRuntime.smallRadius())
-      .maxLines(1)
-      .accessibilityText(this.sourceValidationStatusLabel(validationStatus))
   }
 
   sourceValidationStatusLabel(validationStatus: number): string {
@@ -2190,44 +2147,7 @@ struct BookSourcePage {
         .hitTestBehavior(HitTestMode.Transparent)
         .accessibilityText(`长按拖动排序：${source.bookSourceName}`)
       }
-      Column() {
-        Row() {
-          Text(source.bookSourceName)
-            .fontSize(AppFontSize.BODY_LARGE).fontWeight(FontWeight.Bold)
-            .fontColor(this.primaryTextColor())
-            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-            .layoutWeight(1)
-          this.sourceFormatBadge(source)
-          if (source.isPinned) this.sourceStatusIcon($r('sys.symbol.pin'), this.accentColor(), '已置顶')
-          if (source.isLocked) this.sourceStatusIcon($r('sys.symbol.lock'), this.accentColor(), '已锁定')
-          if (source.bookSourceGroup) {
-            Text(source.bookSourceGroup).fontSize(AppFontSize.CAPTION).fontColor(this.accentColor())
-              .constraintSize({ maxWidth: 72 }).padding({ left: AppSpacing.SM, right: AppSpacing.SM, top: AppSpacing.XXS, bottom: AppSpacing.XXS })
-              .backgroundColor(this.inputColor()).borderRadius(ThemeRuntime.smallRadius()).margin({ left: AppSpacing.SM })
-          }
-          if (this.sourceNeedsLogin(source)) {
-            this.sourceLoginStatusBadge(this.sourceLoggedIn(source) ? ThemeRuntime.successColor(this.appDarkMode) : ThemeRuntime.dangerColor(this.appDarkMode), this.sourceLoggedIn(source) ? '已登录' : '未登录')
-          }
-        }.width('100%')
-        Row({ space: AppSpacing.SM }) {
-          this.sourceValidationStatusBadge(source.validationStatus)
-          Text(source.bookSourceUrl)
-            .fontSize(AppFontSize.CAPTION).fontColor(this.subTextColor())
-            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-            .layoutWeight(1)
-        }.width('100%').margin({ top: AppSpacing.XS })
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
-      .gesture(LongPressGesture({ repeat: false }).onAction((event: GestureEvent) => {
-        if (!this.selectionMode && !this.isBatchOperating) this.openSourceActions(source, event)
-      }))
-      Column() {
-        Text(source.enabled ? '已启用' : '已禁用').fontSize(AppFontSize.CAPTION)
-          .fontColor(source.enabled ? ThemeRuntime.successColor(this.appDarkMode) : this.subTextColor())
-        Text(source.enabledExplore ? '发现已启用' : '发现已禁用').fontSize(AppFontSize.CAPTION)
-          .fontColor(source.enabledExplore ? ThemeRuntime.successColor(this.appDarkMode) : this.subTextColor()).margin({ top: AppSpacing.XS })
-      }.alignItems(HorizontalAlign.End)
+      this.sourceSummary(source)
     }
     .width('100%')
     .padding(AppSpacing.LG)
@@ -2774,18 +2694,6 @@ struct BookSourcePage {
       COMPAT_SOURCE_NOTICE_HEIGHT + AppSpacing.MD))
     .hitTestBehavior(this.sourceHeaderRowHitTest(56 + SOURCE_SEARCH_ROW_HEIGHT,
       COMPAT_SOURCE_NOTICE_HEIGHT + AppSpacing.MD))
-  }
-
-  @Builder
-  sourceFormatBadge(source: BookSource) {
-    Text(source.sourceFormat === 'native' ? '原生' : '兼容')
-      .fontSize(AppFontSize.CAPTION)
-      .fontColor(source.sourceFormat === 'native' ? this.accentColor() : this.subTextColor())
-      .padding({ left: AppSpacing.SM, right: AppSpacing.SM, top: AppSpacing.XXS, bottom: AppSpacing.XXS })
-      .backgroundColor(this.inputColor())
-      .borderRadius(ThemeRuntime.smallRadius())
-      .margin({ left: AppSpacing.SM })
-      .accessibilityText(source.sourceFormat === 'native' ? '原生书源' : '兼容书源')
   }
 
   @Builder

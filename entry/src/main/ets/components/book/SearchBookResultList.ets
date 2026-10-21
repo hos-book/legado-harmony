@@ -187,12 +187,13 @@ export struct SearchBookResultList {
           Column() {
             Text(this.safeText(book.name, '书').substring(0, 1))
               .fontSize(AppFontSize.HEADLINE)
-              .fontColor('#FFFFFF')
+              .fontColor(this.showResultCover && this.displayCover(book) ? this.secondaryTextColor : '#FFFFFF')
           }
           .width('100%')
           .height('100%')
           .justifyContent(FlexAlign.Center)
-          .backgroundColor(this.accentColor())
+          // 有封面时使用中性底色，避免圆角抗锯齿边缘透出主题色。
+          .backgroundColor(this.showResultCover && this.displayCover(book) ? this.cardColor : this.accentColor())
 
           if (this.showResultCover && this.displayCover(book)) {
             Image(this.displayCover(book))
@@ -226,6 +227,9 @@ export struct SearchBookResultList {
         }
       }
       .width('100%')
+      // 阴影与内层裁切使用相同圆角；外层不裁切，以保留圆角外的柔和阴影。
+      .borderRadius(8)
+      .backgroundColor(this.cardColor)
       .shadow({ radius: 8, color: this.isDarkMode() ? '#55000000' : '#22000000', offsetX: 0, offsetY: 3 })
 
       Text(this.safeText(book.name, '未知书名'))
