@@ -456,11 +456,18 @@ export struct ExplorePage {
               }
 
               Row() {
-                this.exploreHeaderCircleButton(this.exploreResultLayout === 'grid' ? $r('sys.symbol.list_bullet') :
-                  $r('sys.symbol.square_grid_2x2'), false,
-                  this.exploreResultLayout === 'grid' ? '切换为列表' : '切换为平铺', () => {
-                    this.exploreResultLayout = this.exploreResultLayout === 'grid' ? 'list' : 'grid';
-                  })
+                // 显式分支重建按钮，避免嵌套 Builder 按值参数保留旧图标和提示。
+                if (this.exploreResultLayout === 'grid') {
+                  this.exploreHeaderCircleButton($r('sys.symbol.list_bullet'), false,
+                    '当前为平铺，切换为列表', () => {
+                      this.exploreResultLayout = 'list';
+                    })
+                } else {
+                  this.exploreHeaderCircleButton($r('sys.symbol.square_grid_2x2'), false,
+                    '当前为列表，切换为平铺', () => {
+                      this.exploreResultLayout = 'grid';
+                    })
+                }
               }
               .margin({ right: 10 })
 

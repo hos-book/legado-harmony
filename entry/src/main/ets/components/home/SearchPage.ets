@@ -503,11 +503,18 @@ export struct SearchPage {
                 this.searchScopeLabel()
 
                 Row() {
-                  this.searchHeaderCircleButton(this.searchResultLayout === 'grid' ? $r('sys.symbol.list_bullet') :
-                    $r('sys.symbol.square_grid_2x2'), false,
-                    this.searchResultLayout === 'grid' ? '切换为列表' : '切换为平铺', () => {
-                      this.searchResultLayout = this.searchResultLayout === 'grid' ? 'list' : 'grid';
-                    })
+                  // 显式分支重建按钮，避免嵌套 Builder 按值参数保留旧图标和提示。
+                  if (this.searchResultLayout === 'grid') {
+                    this.searchHeaderCircleButton($r('sys.symbol.list_bullet'), false,
+                      '当前为平铺，切换为列表', () => {
+                        this.searchResultLayout = 'list';
+                      })
+                  } else {
+                    this.searchHeaderCircleButton($r('sys.symbol.square_grid_2x2'), false,
+                      '当前为列表，切换为平铺', () => {
+                        this.searchResultLayout = 'grid';
+                      })
+                  }
                 }
                 .margin({ right: 10 })
 
