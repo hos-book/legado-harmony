@@ -2,6 +2,7 @@ import { promptAction, router } from '@kit.ArkUI';
 import { AccountSessionStore } from '../account/AccountSessionStore';
 import { CloudSyncSettings, CloudSyncSettingsStore } from '../account/CloudSyncSettingsStore';
 import { CloudSyncCoordinator } from '../account/CloudSyncCoordinator';
+import { CloudSyncIssueStore } from '../account/CloudSyncIssueStore';
 import { CloudSyncStateStore } from '../account/CloudSyncStateStore';
 import { CloudAutoSync } from '../account/CloudAutoSync';
 import { ThemeRuntime } from '../theme/ThemeRuntime';
@@ -34,6 +35,8 @@ struct DataSyncPage {
   @StorageLink('cloudSyncPendingCount') pendingCount: number = 0;
   @StorageLink('cloudSyncStatus') syncStatus: string = CloudSyncSettingsStore.STATUS_DISABLED;
   @StorageLink('cloudSyncErrorMessage') syncErrorMessage: string = '';
+  @StorageLink('cloudSyncIssueCount') issueCount: number = 0;
+  @StorageLink('cloudSyncIssueLatest') latestIssue: string = '';
   @State saving: boolean = false;
   @State loadingSettings: boolean = false;
   private loadedUserId: string = '__not_loaded__';
@@ -62,6 +65,7 @@ struct DataSyncPage {
       const settings = await CloudSyncSettingsStore.load(getContext(this), userId);
       this.applyLoadedSettings(settings);
       this.loadedUserId = userId;
+      await CloudSyncIssueStore.load(getContext(this), userId);
     } catch (e) {
       console.warn('读取云同步设置失败:', e);
       HdsFeedback.showToast('读取同步设置失败');
@@ -188,12 +192,12 @@ struct DataSyncPage {
         }
         router.pushUrl({ url: 'pages/SyncDevices' });
       })
-      this.actionItem('同步问题', this.syncErrorMessage || '暂无待处理的问题', true, () => {
-        if (this.syncErrorMessage) {
-          HdsFeedback.showToast(this.syncErrorMessage);
-        } else {
-          HdsFeedback.showToast('当前没有同步问题');
+      this.actionItem('同步问题', this.issueSummary(), true, () => {
+        if (!this.accountLoggedIn) {
+          HdsFeedback.showToast('请先登录华为账号');
+          return;
         }
+        router.pushUrl({ url: 'pages/SyncIssues' });
       })
       this.actionItem('重新从云端同步', '保留本机待上传修改，重新获取云端数据', false, () => {
         this.confirmReloadFromCloud();
@@ -549,6 +553,13 @@ struct DataSyncPage {
   statusSummary(): string {
     return CloudSyncSettingsStore.statusSummary(this.accountLoggedIn, this.cloudSyncEnabled,
       this.syncStatus, this.pendingCount, this.lastSuccessAt);
+  }
+
+  issueSummary(): string {
+    if (this.issueCount > 0) {
+      return `${this.issueCount} 条记录 · ${this.latestIssue}`;
+    }
+    return this.syncErrorMessage || '暂无同步问题';
   }
 
   lastSyncDescription(): string {

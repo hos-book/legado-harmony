@@ -16,6 +16,7 @@ import {
   CloudSyncOperation
 } from './CloudSyncModels';
 import { CloudSyncSettings, CloudSyncSettingsStore } from './CloudSyncSettingsStore';
+import { CloudSyncIssue, CloudSyncIssueStore } from './CloudSyncIssueStore';
 import { CloudSyncChangeSnapshot, CloudSyncChangeTracker } from './CloudSyncChangeTracker';
 import {
   CloudSyncEntityState,
@@ -168,6 +169,8 @@ class LocalSyncEntity {
   payloadJson: string = '';
   contentHash: string = '';
   localKey: string = '';
+  /** 给用户看的名称（书源名、书名等），只用于同步问题记录。 */
+  label: string = '';
 }
 
 export class CloudSyncRunResult {
@@ -309,6 +312,7 @@ export class CloudSyncCoordinator {
     const changeSnapshot: CloudSyncChangeSnapshot = CloudSyncChangeTracker.snapshot();
 
     const result = new CloudSyncRunResult();
+    const issues: CloudSyncIssue[] = [];
     CloudSyncCoordinator.protectedLocalBooksDuringSync = 0;
     CloudSyncCoordinator.protectedLocalBookEntityIdsDuringSync.clear();
     CloudSyncCoordinator.readerSettingsBackfillPending = false;
@@ -344,10 +348,14 @@ export class CloudSyncCoordinator {
           context, deviceId, state.cursor, batch, conflictPolicy);
         const response = await CloudSyncCoordinator.exchangeSyncWithRetry(request);
         CloudSyncCoordinator.validateResponse(response);
-        for (const ack of response.acknowledgements || []) {
-          if (ack.error) { result.skipped++; result.warning = ack.error.message; }
-        }
         const operationMap = CloudSyncCoordinator.operationEntityMap(batch, localEntities);
+        for (const ack of response.acknowledgements || []) {
+          if (ack.error) {
+            result.skipped++;
+            result.warning = ack.error.message;
+            issues.push(CloudSyncCoordinator.rejectionIssue(ack, operationMap[ack.opId]));
+          }
+        }
         CloudSyncChangeTracker.beginRemoteApply();
         try {
           result.conflicts += await CloudSyncCoordinator.applyAcknowledgements(
@@ -386,9 +394,10 @@ export class CloudSyncCoordinator {
       settings.status = result.skipped > 0 ? CloudSyncSettingsStore.STATUS_ERROR : CloudSyncSettingsStore.STATUS_SYNCED;
       settings.lastSuccessAt = Date.now();
       settings.pendingCount = result.skipped;
-      settings.errorMessage = result.warning;
+      settings.errorMessage = result.skipped > 1 ? `${result.skipped} 项未能上传，详见同步问题` : result.warning;
       await CloudSyncSettingsStore.saveRuntimeState(context, userId, settings.status,
         settings.lastSuccessAt, settings.pendingCount, settings.errorMessage);
+      await CloudSyncCoordinator.recordIssues(context, userId, issues);
       CloudSyncChangeTracker.markSynced(changeSnapshot);
       if (result.downloaded > 0) {
         AppStorage.setOrCreate('shelfUpdateTime', Date.now());
@@ -399,7 +408,11 @@ export class CloudSyncCoordinator {
       settings.errorMessage = error instanceof Error ? error.message : String(error);
       await CloudSyncSettingsStore.saveRuntimeState(context, userId, settings.status,
         settings.lastSuccessAt, settings.pendingCount, settings.errorMessage);
-      throw new Error(settings.errorMessage || '同步失败');
+      // Items rejected on earlier pages are still worth reporting alongside the failure itself.
+      const message = settings.errorMessage || '同步失败';
+      issues.push(CloudSyncIssueStore.create(CloudSyncIssueStore.KIND_SYNC, `sync:${message}`, '同步失败', message));
+      await CloudSyncCoordinator.recordIssues(context, userId, issues);
+      throw new Error(message);
     } finally {
       // A protected tombstone can arrive on a later exchange page. Retain the entity identities
       // until every page in this run has been applied, then avoid leaking them into the next run.
@@ -474,6 +487,7 @@ export class CloudSyncCoordinator {
         'book_group',
         CloudSyncCoordinator.identity('group', group.groupName),
         payload,
+        group.groupName,
         group.groupName
       ));
     }
@@ -513,7 +527,7 @@ export class CloudSyncCoordinator {
       shelf.originOrder = book.originOrder;
       shelf.readConfig = book.readConfig;
       shelf.shelfModifiedTime = book.shelfModifiedTime;
-      result.push(CloudSyncCoordinator.entity('bookshelf_item', bookId, shelf, book.bookUrl));
+      result.push(CloudSyncCoordinator.entity('bookshelf_item', bookId, shelf, book.bookUrl, book.name));
 
       const progress = new ReadingProgressSyncPayload();
       progress.bookUrl = book.bookUrl;
@@ -522,7 +536,7 @@ export class CloudSyncCoordinator {
       progress.chapterIndex = book.durChapterIndex;
       progress.chapterPos = book.durChapterPos;
       progress.updatedAt = book.durChapterTime;
-      result.push(CloudSyncCoordinator.entity('reading_progress', bookId, progress, book.bookUrl));
+      result.push(CloudSyncCoordinator.entity('reading_progress', bookId, progress, book.bookUrl, book.name));
     }
 
     // Local files are deliberately never uploaded. Publish only a compact
@@ -549,7 +563,7 @@ export class CloudSyncCoordinator {
       progress.chapterPos = book.durChapterPos;
       progress.updatedAt = book.durChapterTime;
       result.push(CloudSyncCoordinator.entity(
-        'reading_progress', localBookId, progress, `local:${contentHash}`));
+        'reading_progress', localBookId, progress, `local:${contentHash}`, book.name));
     }
 
     const bookmarks = await db.getAllBookmarks();
@@ -573,7 +587,8 @@ export class CloudSyncCoordinator {
         'bookmark',
         CloudSyncCoordinator.identity('bookmark', bookmarkKey),
         payload,
-        bookmarkKey
+        bookmarkKey,
+        `${bookmark.bookName} · ${bookmark.chapterName}`
       ));
     }
 
@@ -585,7 +600,8 @@ export class CloudSyncCoordinator {
           'book_source',
           CloudSyncCoordinator.identity('source', source.bookSourceUrl),
           payload,
-          source.bookSourceUrl
+          source.bookSourceUrl,
+          source.bookSourceName
         ));
       }
     }
@@ -598,7 +614,7 @@ export class CloudSyncCoordinator {
     const replaceRules = await ReaderReplaceRuleStore.load(context);
     for (const rule of replaceRules) {
       result.push(CloudSyncCoordinator.entity(
-        'replace_rule', `rule_${Math.max(0, Math.floor(rule.id))}`, rule, String(rule.id)));
+        'replace_rule', `rule_${Math.max(0, Math.floor(rule.id))}`, rule, String(rule.id), rule.name));
     }
 
     const themeSettings = await AppThemeSettingsStore.load(context);
@@ -1364,14 +1380,60 @@ export class CloudSyncCoordinator {
   }
 
   private static entity(entityType: string, entityId: string, payload: Object,
-    localKey: string): LocalSyncEntity {
+    localKey: string, label: string = ''): LocalSyncEntity {
     const result = new LocalSyncEntity();
     result.entityType = entityType;
     result.entityId = entityId;
     result.payloadJson = JSON.stringify(payload);
     result.contentHash = CloudSyncCoordinator.digest(result.payloadJson);
     result.localKey = localKey;
+    result.label = label;
     return result;
+  }
+
+  private static rejectionIssue(ack: CloudSyncAcknowledgement,
+    entity: LocalSyncEntity | undefined): CloudSyncIssue {
+    const entityType = entity ? entity.entityType : '';
+    const typeLabel = CloudSyncCoordinator.entityTypeLabel(entityType);
+    const name = entity && entity.label ? entity.label.trim() : '';
+    const deleting = !!entity && !entity.payloadJson;
+    const title = `${typeLabel}${name ? `“${name}”` : ''}${deleting ? '删除未同步' : '未能上传'}`;
+    const issue = CloudSyncIssueStore.create(
+      entityType === 'book_source' ? CloudSyncIssueStore.KIND_BOOK_SOURCE : CloudSyncIssueStore.KIND_REJECTED,
+      `reject:${entityType}:${entity ? entity.entityId : ack.opId}:${ack.error?.code || ''}`,
+      title,
+      ack.error?.message || '服务端拒收了这项数据');
+    if (entity && entityType === 'book_source') issue.sourceUrl = entity.localKey;
+    if (entity && entity.payloadJson) {
+      issue.bytes = new util.TextEncoder().encodeInto(entity.payloadJson).byteLength;
+    }
+    return issue;
+  }
+
+  private static entityTypeLabel(entityType: string): string {
+    switch (entityType) {
+      case 'book_group': return '书架分组';
+      case 'bookshelf_item': return '书架书籍';
+      case 'reading_progress': return '阅读进度';
+      case 'bookmark': return '书签';
+      case 'book_source': return '书源';
+      case 'reader_settings': return '阅读设置';
+      case 'replace_rule': return '替换规则';
+      case 'theme_settings': return '主题设置';
+      case 'appearance_mode': return '显示模式';
+      case 'bookshelf_display': return '书架布局';
+      case 'search_preferences': return '搜索设置';
+      case 'custom_theme_schemes': return '自定义主题';
+      default: return '同步数据';
+    }
+  }
+
+  private static async recordIssues(context: Context, userId: string, issues: CloudSyncIssue[]): Promise<void> {
+    try {
+      await CloudSyncIssueStore.record(context, userId, issues);
+    } catch (e) {
+      console.warn('记录同步问题失败:', e);
+    }
   }
 
   private static identity(prefix: string, value: string): string {

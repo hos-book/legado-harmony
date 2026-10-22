@@ -5,6 +5,7 @@ import preferences from '@ohos.data.preferences';
 import { Book } from '@legado/sourceengine';
 import { AccountSessionStore } from './AccountSessionStore';
 import { CloudSyncSettingsStore } from './CloudSyncSettingsStore';
+import { CloudSyncIssueStore } from './CloudSyncIssueStore';
 import { CloudFileClient } from './CloudFileClient';
 import { CloudFontImport } from './CloudFontImport';
 import { CloudFileItem, CloudFileMeta, CloudTombstone } from './CloudFileModels';
@@ -102,6 +103,9 @@ export class CloudAutoSync {
       CloudAutoSync.timer = -1;
       CloudAutoSync.reconcile(context).catch((error: Error) => {
         console.warn('[CloudAutoSync] reconcile failed:', error.message);
+        const message = error.message || '文件同步失败';
+        CloudAutoSync.recordIssue(context, AccountSessionStore.account().userId, `file-run:${message}`,
+          '本地书籍与字体同步失败', message);
       });
     }, delayMs);
   }
@@ -520,12 +524,23 @@ export class CloudAutoSync {
         const message = (e as Error).message || '';
         console.warn('[CloudAutoSync] upload failed:', job.name, message);
         CloudAutoSync.failedUploads.add(job.key);
+        const label = job.kind === 'FONT' ? `字体“${job.meta?.fontName || job.name}”` :
+          `本地书籍“${job.meta?.title || job.name}”`;
+        CloudAutoSync.recordIssue(context, userId, `file:${job.key}`, `${label}未能上传`, message || '上传失败');
         // Keep the staged task for the next run only if it is resumable; a full space must be freed first.
         try { await CloudFileClient.cancelUpload(context); } catch (cancelError) { /* retried next run */ }
         if (message.includes('云空间不足')) break;
       }
     }
     if (uploaded) AppStorage.setOrCreate(CloudAutoSync.STORAGE_REVISION, Date.now());
+  }
+
+  private static recordIssue(context: Context, userId: string, key: string, title: string, message: string): void {
+    if (!userId) return;
+    CloudSyncIssueStore.record(context, userId,
+      [CloudSyncIssueStore.create(CloudSyncIssueStore.KIND_FILE, key, title, message)]).catch((error: Error) => {
+      console.warn('[CloudAutoSync] record issue failed:', error.message);
+    });
   }
 
   private static async flushRemovals(context: Context, userId: string, files: CloudFileItem[]): Promise<Set<string>> {

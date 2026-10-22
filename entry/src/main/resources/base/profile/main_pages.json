@@ -34,6 +34,7 @@
     "pages/DataSync",
     "pages/ReadingStats",
     "pages/SyncDevices",
+    "pages/SyncIssues",
     "pages/GlassSettings",
     "pages/FontSettings",
     "pages/ReaderFontSettings",

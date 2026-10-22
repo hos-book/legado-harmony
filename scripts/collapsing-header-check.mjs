@@ -13,6 +13,7 @@ vm.runInContext(compile(read('utils/CollapsingHeader').replace('export class', '
 const pages = [
   ['pages/ThemeSettings', 'themeListScroller', true],
   ['pages/SyncDevices', 'headerScroller', true],
+  ['pages/SyncIssues', 'headerScroller', true],
   ['pages/LocalBookSettings', 'headerScroller', true],
   ['pages/WebDav', 'headerScroller', true],
   ['pages/OpdsServers', 'headerScroller', true],
