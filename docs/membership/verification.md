@@ -133,3 +133,8 @@ server/scripts/db-size-audit.sql 为只读统计（各表大小与死行、各�
 ### 部署（2026-10-22）
 
 用户执行 deploy-server-20261022.sh：压缩包与 7 个文件校验通过；候选目录 25 个模块全部可加载，index.js 的 61 个导入全部存在；备份目录 /root/qingye-deploy-20261022-backup.xMP0im；线上 .env 的 SYNC_RECEIPT_RETENTION_DAYS 由 7 改为 3；重启后本机与 HTTPS 健康检查、会员目录接口通过，MainPID=589001、NRestarts=0、active/running，已安装文件与包内校验一致。启动时的清理任务删除回执 6 行、朗读记录 11 行、撤销设备 0 行（前一步一次性 SQL 已清掉积压）。月度会员取消礼包、超级会员 960 KiB 书源、回执连续清理已在线上生效；尚未在 App 内验证月度会员下一期的礼包提示与超级会员大书源同步。
+
+### 开售计划与自动同步路由上线（2026-10-22）
+
+第一次执行时 psql 以 postgres 身份无法读取 root 私有临时目录，开售数据未写入，路由文件已自动恢复，健康检查通过，线上未变。部署前快照显示四个商品 sales_enabled 均为 true（此前已手动开售）。修正脚本改由标准输入执行 SQL，并要求选择 close/keep。用户以 close 执行：019 只写入数据（结构均已存在），四个商品开售时间为 2026-11-01 00:00（UTC+8），手动开售已关闭；永久 645、永久超级 1245 点活动至 2026-12-25；目录接口确认开售时间、活动价且当前未开售；删除标记接口存在并要求登录；MainPID=645360、NRestarts=0、active/running。备份目录 /root/qingye-launch-sync-backup.TBQW0L。手动开售期间是否产生订单需另行核对 membership_orders。
+
