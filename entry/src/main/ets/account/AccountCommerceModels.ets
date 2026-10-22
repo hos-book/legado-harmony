@@ -1,5 +1,11 @@
 import { MembershipSnapshot } from './MembershipModels';
 
+export class AvatarCrop {
+  left: number = 0;
+  top: number = 0;
+  size: number = 0;
+}
+
 export class ThemeEntitlement {
   themeId: string = '';
   expiresAt: number = 0;

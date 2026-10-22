@@ -162,6 +162,8 @@ export function membershipBenefits(state: MembershipState | null, now: number, t
   const superMember = active && state?.sku === 'SUPER_LIFETIME';
   return {
     memberThemes: active,
+    animatedAvatar: active && state?.expiresAt === null &&
+      (state.sku === 'LIFETIME' || state.sku === 'SUPER_LIFETIME'),
     ttsPriority: active,
     sourceCount: superMember ? null : active ? 500 : 50,
     sourceBytes: superMember ? null : (active ? 512 : 50) * 1024,

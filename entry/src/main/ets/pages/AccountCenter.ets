@@ -10,6 +10,7 @@ import { AccountCommerceConfig } from '../account/AccountCommerceConfig';
 import { AccountCommerceApi } from '../account/AccountCommerceApi';
 import {
   AccountApiError,
+  AvatarCrop,
   IapCreditResponse,
   RechargeProduct
 } from '../account/AccountCommerceModels';
@@ -78,6 +79,10 @@ struct AccountCenterPage {
   @State profileAvatarPreview: string = '';
   @State profileAvatarPixelMap: image.PixelMap | null = null;
   @State profileAvatarBase64: string = '';
+  @State profileAvatarCrop: AvatarCrop | null = null;
+  @State profileAvatarSourceWidth: number = 0;
+  @State profileAvatarSourceHeight: number = 0;
+  @State cropAnimated: boolean = false;
   @State removeProfileAvatar: boolean = false;
   @State savingProfile: boolean = false;
   @State croppingAvatar: boolean = false;
@@ -331,6 +336,7 @@ struct AccountCenterPage {
     this.profileNameInput = this.displayName || '华为用户';
     this.profileAvatarPreview = this.avatarUrl;
     this.profileAvatarBase64 = '';
+    this.profileAvatarCrop = null;
     this.removeProfileAvatar = false;
     this.editingProfile = true;
   }
@@ -366,6 +372,17 @@ struct AccountCenterPage {
       if (!info.size.width || !info.size.height) {
         throw new Error('无法读取图片尺寸');
       }
+      const frames = await source.getFrameCount();
+      if (frames > 1) {
+        if (!await this.ensureAnimatedAvatarAccess()) return;
+        if (fs.statSync(file.fd).size > 2 * 1024 * 1024 || frames > 120 ||
+          info.size.width > 1024 || info.size.height > 1024 ||
+          info.size.width * info.size.height * frames > 32 * 1024 * 1024) {
+          HdsFeedback.showToast('请选择 2MB 内、最多 120 帧、单帧不超过 1024×1024 的较小动图');
+          return;
+        }
+      }
+      this.cropAnimated = frames > 1;
       this.cropSourceUri = uri;
       this.cropSourceWidth = info.size.width;
       this.cropSourceHeight = info.size.height;
@@ -411,6 +428,38 @@ struct AccountCenterPage {
     let packer: image.ImagePacker | null = null;
     try {
       file = fs.openSync(this.cropSourceUri, fs.OpenMode.READ_ONLY);
+      if (this.cropAnimated) {
+        if (!this.canUseAnimatedAvatar()) {
+          HdsFeedback.showToast('动态头像仅限有效的永久会员和永久超级会员使用');
+          return;
+        }
+        const size = fs.statSync(file.fd).size;
+        if (size <= 0 || size > 2 * 1024 * 1024) throw new Error('动态头像大小不能超过 2MB');
+        const bytes = new Uint8Array(size);
+        let read = 0;
+        while (read < size) {
+          const chunk = new ArrayBuffer(size - read);
+          const count = await fs.read(file.fd, chunk, { offset: read, length: chunk.byteLength });
+          if (count <= 0) throw new Error('动态头像读取不完整');
+          bytes.set(new Uint8Array(chunk, 0, count), read);
+          read += count;
+        }
+        const crop = new AvatarCrop();
+        crop.size = Math.max(1, Math.round(Math.min(this.cropSourceWidth, this.cropSourceHeight) / this.cropZoom));
+        crop.left = Math.round((this.cropSourceWidth - crop.size) * (this.cropOffsetX + 1) / 2);
+        crop.top = Math.round((this.cropSourceHeight - crop.size) * (this.cropOffsetY + 1) / 2);
+        this.profileAvatarBase64 = new util.Base64Helper().encodeToStringSync(bytes);
+        this.releaseProfileAvatarPreview();
+        this.profileAvatarCrop = crop;
+        this.profileAvatarSourceWidth = this.cropSourceWidth;
+        this.profileAvatarSourceHeight = this.cropSourceHeight;
+        this.profileAvatarPreview = this.cropSourceUri;
+        this.removeProfileAvatar = false;
+        this.croppingAvatar = false;
+        this.cropSourceUri = '';
+        HdsFeedback.showToast('动态头像裁剪完成，保存后生效');
+        return;
+      }
       source = image.createImageSource(file.fd);
       // Decode to a bounded working image first. Supplying desiredRegion and
       // desiredSize together lets some decoders scale before cropping, which
@@ -463,6 +512,7 @@ struct AccountCenterPage {
         new util.Base64Helper().encodeToStringSync(new Uint8Array(packed));
       this.releaseProfileAvatarPreview();
       this.profileAvatarPixelMap = pixelMap;
+      this.profileAvatarCrop = null;
       pixelMap = null;
       this.profileAvatarPreview = '';
       this.removeProfileAvatar = false;
@@ -545,6 +595,7 @@ struct AccountCenterPage {
     this.releaseProfileAvatarPreview();
     this.profileAvatarPreview = '';
     this.profileAvatarBase64 = '';
+    this.profileAvatarCrop = null;
     this.removeProfileAvatar = true;
   }
 
@@ -559,8 +610,9 @@ struct AccountCenterPage {
     }
     this.savingProfile = true;
     try {
+      if (this.profileAvatarCrop && !await this.ensureAnimatedAvatarAccess()) return;
       await HuaweiAccountService.updateProfile(
-        this.context, displayName, this.profileAvatarBase64, this.removeProfileAvatar);
+        this.context, displayName, this.profileAvatarBase64, this.removeProfileAvatar, this.profileAvatarCrop);
       this.editingProfile = false;
       this.profileAvatarBase64 = '';
       this.releaseProfileAvatarPreview();
@@ -579,6 +631,35 @@ struct AccountCenterPage {
       preview.release().catch((e: Error) => {
         console.warn('释放头像裁剪预览失败:', e);
       });
+    }
+  }
+
+  canUseAnimatedAvatar(): boolean {
+    const account = AccountSessionStore.account();
+    const member = account.membership;
+    const state = member?.state;
+    return this.accountLoggedIn && account.iapDebtPoints <= 0 && member !== null &&
+      member.active && !member.restricted && state !== null && state !== undefined &&
+      state.expiresAt === null && (state.sku === 'LIFETIME' || state.sku === 'SUPER_LIFETIME');
+  }
+
+  async ensureAnimatedAvatarAccess(): Promise<boolean> {
+    try {
+      // 旧缓存或旧服务端缺少新字段，并不代表用户没有永久会员身份。
+      await HuaweiAccountService.refresh(this.context);
+      this.membership = AccountSessionStore.account().membership || new MembershipSnapshot();
+      if (!this.canUseAnimatedAvatar()) {
+        HdsFeedback.showToast('动态头像仅限有效的永久会员和永久超级会员使用');
+        return false;
+      }
+      if (this.membership.benefits?.animatedAvatar !== true) {
+        HdsFeedback.showToast('动态头像服务暂未就绪，请稍后重试');
+        return false;
+      }
+      return true;
+    } catch (e) {
+      HdsFeedback.showToast(this.errorMessage(e, '暂时无法核验动态头像权限，请稍后重试'));
+      return false;
     }
   }
 
@@ -1263,6 +1344,7 @@ struct AccountCenterPage {
     }
     rows.push(new BenefitCompareRow('单个书源大小', '云同步上限',
       limits ? ['50KB', '512KB', '512KB', '512KB', '960KB'] : ['512KB', '512KB', '512KB', '512KB', '960KB']));
+    rows.push(new BenefitCompareRow('动态头像', 'GIF / WebP 动图', ['—', '—', '—', '✓', '✓']));
     rows.push(new BenefitCompareRow('书籍字体云空间', '与书源共用', ['—', '—', '—', '—', '1GB']));
     rows.push(new BenefitCompareRow('每月下载额度', '云空间下载', ['—', '—', '—', '—', '1GB']));
     return rows;
@@ -1758,6 +1840,19 @@ struct AccountCenterPage {
             .height(64)
             .borderRadius(32)
             .objectFit(ImageFit.Cover)
+        } else if (this.profileAvatarPreview && this.profileAvatarCrop) {
+          Stack({ alignContent: Alignment.TopStart }) {
+            Image(this.profileAvatarPreview)
+              .width(this.profileAvatarSourceWidth * 64 / this.profileAvatarCrop.size)
+              .height(this.profileAvatarSourceHeight * 64 / this.profileAvatarCrop.size)
+              .objectFit(ImageFit.Fill)
+              .translate({ x: -this.profileAvatarCrop.left * 64 / this.profileAvatarCrop.size,
+                y: -this.profileAvatarCrop.top * 64 / this.profileAvatarCrop.size })
+          }
+          .width(64)
+          .height(64)
+          .borderRadius(32)
+          .clip(true)
         } else if (this.profileAvatarPreview) {
           Image(this.profileAvatarPreview)
             .width(64)
@@ -1794,6 +1889,11 @@ struct AccountCenterPage {
         .alignItems(HorizontalAlign.Start)
       }
       .width('100%')
+      Text(this.canUseAnimatedAvatar() ? '支持 GIF / WebP 动态头像：2MB 内，最多 120 帧，单帧不超过 1024×1024。'
+        : '永久会员和永久超级会员支持 GIF / WebP 动态头像。')
+        .fontSize(AppFontSize.CAPTION)
+        .fontColor(this.subTextColor())
+        .width('100%')
       TextInput({ text: this.profileNameInput, placeholder: '请输入昵称' })
         .width('100%')
         .height(44)

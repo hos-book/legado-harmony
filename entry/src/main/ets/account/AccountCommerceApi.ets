@@ -4,6 +4,7 @@ import { AccountCommerceConfig } from './AccountCommerceConfig';
 import { MembershipCatalog, MembershipQuote, MembershipSnapshot, MembershipOrderList } from './MembershipModels';
 import {
   AccountApiError,
+  AvatarCrop,
   AccountSnapshot,
   HuaweiLoginResponse,
   IapCreditResponse,
@@ -106,11 +107,12 @@ export class AccountCommerceApi {
   }
 
   static async updateProfile(displayName: string, avatarBase64: string, removeAvatar: boolean,
-    sessionToken: string): Promise<AccountSnapshot> {
+    sessionToken: string, avatarCrop: AvatarCrop | null = null): Promise<AccountSnapshot> {
     const value = await AccountCommerceApi.request('/v1/me/profile', 'POST',
       JSON.stringify({
         displayName: displayName,
         avatarBase64: avatarBase64,
+        avatarCrop: avatarCrop,
         removeAvatar: removeAvatar
       }), sessionToken);
     return AccountCommerceApi.normalizeAccount(JSON.parse(value) as AccountSnapshot);

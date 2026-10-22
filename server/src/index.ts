@@ -60,7 +60,7 @@ import {
   cleanupExpiredTtsUsage,
   cleanupRevokedSyncDevices
 } from './maintenance.js';
-import { InvalidAvatarError, sanitizeAvatarBase64 } from './imageSecurity.js';
+import { registerProfileRoutes } from './profileRoutes.js';
 import { reconcileIapOrders } from './iapReconciliation.js';
 import {
   AccountRateLimitError,
@@ -78,7 +78,7 @@ import {
   sessionExpiresAt,
   signSessionToken
 } from './sessionTokens.js';
-import { AuthBody, RedeemBody, TtsRedeemBody, TtsSynthesizeBody, IapBody, ProfileBody } from './apiModels.js';
+import { AuthBody, RedeemBody, TtsRedeemBody, TtsSynthesizeBody, IapBody } from './apiModels.js';
 import { MembershipError } from './membershipPolicy.js';
 import { membershipPriority, membershipSnapshot } from './membershipService.js';
 import { registerMembershipRoutes } from './membershipRoutes.js';
@@ -165,6 +165,10 @@ app.addHook('onSend', async (request, reply, payload) => {
 });
 
 app.setErrorHandler((error, _request, reply) => {
+  if (error instanceof Error && 'code' in error && error.code === 'FST_ERR_CTP_BODY_TOO_LARGE') {
+    void reply.status(413).send({ code: 'REQUEST_TOO_LARGE', message: '上传内容过大，请缩小文件后重试' });
+    return;
+  }
   if (error instanceof ApiError || error instanceof MembershipError) {
     const retryAfter = error instanceof ApiError ? error.retryAfter : 0;
     if (retryAfter > 0) reply.header('Retry-After', String(retryAfter));
@@ -223,23 +227,11 @@ const cloudMaintenance = setInterval(() => {
 cloudMaintenance.unref();
 app.addHook('onClose', async () => { clearInterval(cloudMaintenance); });
 
-app.get<{ Params: { userId: string } }>('/v1/avatars/:userId', async (request, reply) => {
-  const userId = request.params.userId;
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(userId)) {
-    throw new ApiError(404, 'AVATAR_NOT_FOUND', '头像不存在');
-  }
-  const result = await pool.query<{ avatar_data: Buffer; avatar_mime: string }>(
-    `SELECT avatar_data, avatar_mime
-     FROM app_users
-     WHERE id = $1 AND avatar_data IS NOT NULL`,
-    [userId]
-  );
-  if (!result.rowCount) {
-    throw new ApiError(404, 'AVATAR_NOT_FOUND', '头像不存在');
-  }
-  reply.header('Content-Type', result.rows[0]!.avatar_mime || 'image/jpeg');
-  reply.header('Cache-Control', 'public, max-age=86400');
-  return reply.send(result.rows[0]!.avatar_data);
+registerProfileRoutes(app, {
+  db: pool, membershipEnabled: config.membershipEnabled,
+  authenticate, userId: requiredUserId, transaction: inTransaction,
+  limit: userId => enforceAccountRateLimit(userId, 'profile', config.http.sensitiveRateLimitPerMinute),
+  account: snapshot
 });
 
 app.post<{ Body: AuthBody }>('/v1/auth/huawei', {
@@ -401,60 +393,6 @@ app.post<{ Params: { deviceId: string } }>(
   async (request, reply) => {
     await revokeSyncDevice(requiredUserId(request), request.params.deviceId);
     return reply.status(204).send();
-  }
-);
-
-app.post<{ Body: ProfileBody }>(
-  '/v1/me/profile',
-  { preHandler: authenticate },
-  async (request) => {
-    const userId = requiredUserId(request);
-    const displayName = request.body?.displayName?.trim() || '';
-    if (!displayName || Array.from(displayName).length > 30 || /[\u0000-\u001f\u007f]/.test(displayName)) {
-      throw new ApiError(400, 'INVALID_DISPLAY_NAME', '昵称应为 1 至 30 个字符');
-    }
-
-    const removeAvatar = request.body?.removeAvatar === true;
-    const avatarBase64 = request.body?.avatarBase64?.trim() || '';
-    let avatarData: Buffer | null = null;
-    if (!removeAvatar && avatarBase64) {
-      try {
-        avatarData = await sanitizeAvatarBase64(avatarBase64);
-      } catch (error) {
-        if (error instanceof InvalidAvatarError) {
-          throw new ApiError(400, 'INVALID_AVATAR', error.message);
-        }
-        throw error;
-      }
-    }
-
-    await inTransaction(async (client) => {
-      if (removeAvatar) {
-        await client.query(
-          `UPDATE app_users
-           SET display_name = $2, avatar_url = '', avatar_data = NULL,
-               avatar_mime = NULL, profile_customized = TRUE, updated_at = now()
-           WHERE id = $1`,
-          [userId, displayName]
-        );
-      } else if (avatarData) {
-        await client.query(
-          `UPDATE app_users
-           SET display_name = $2, avatar_url = '', avatar_data = $3,
-               avatar_mime = 'image/jpeg', profile_customized = TRUE, updated_at = now()
-           WHERE id = $1`,
-          [userId, displayName, avatarData]
-        );
-      } else {
-        await client.query(
-          `UPDATE app_users
-           SET display_name = $2, profile_customized = TRUE, updated_at = now()
-           WHERE id = $1`,
-          [userId, displayName]
-        );
-      }
-    });
-    return snapshot(pool, userId);
   }
 );
 
@@ -1219,7 +1157,7 @@ async function snapshot(db: Queryable, userId: string) {
     userId: row.id,
     displayName: row.display_name,
     avatarUrl: row.has_custom_avatar
-      ? `${config.publicBaseUrl}/v1/avatars/${row.id}?v=${row.updated_at_ms}`
+      ? `${config.publicBaseUrl}/v1/avatars/${row.id}?v=${row.updated_at_ms}&a=${membership?.benefits.animatedAvatar ? 1 : 0}`
       : row.avatar_url,
     points: Number(row.balance),
     paidPoints: Number(row.paid_balance),

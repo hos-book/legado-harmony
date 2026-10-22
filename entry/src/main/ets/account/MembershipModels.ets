@@ -19,6 +19,7 @@ export class MembershipClaim {
 }
 
 export class MembershipBenefits {
+  animatedAvatar: boolean = false;
   standardGiftChars: number = 0;
   premiumGiftChars: number = 0;
   sourceCount: number | null = 50;
