@@ -25,7 +25,6 @@ export struct SettingsPage {
   @StorageLink('accountAvatarUrl') accountAvatarUrl: string = '';
   @StorageLink('accountPoints') accountPoints: number = 0;
   @StorageLink('accountMembershipSku') membershipSku: string = '';
-  @StorageLink('accountMembershipExpiresAt') membershipExpiresAt: number = 0;
   @StorageLink('cloudSyncEnabled') cloudSyncEnabled: boolean = false;
   @StorageLink('cloudSyncLastSuccessAt') cloudSyncLastSuccessAt: number = 0;
   @StorageLink('cloudSyncPendingCount') cloudSyncPendingCount: number = 0;
@@ -258,10 +257,12 @@ export struct SettingsPage {
   }
 
   membershipSlogan(): string {
-    if (!this.membershipSku) return '会员主题免费用，朗读礼包每月领';
-    if (!this.membershipExpiresAt) return '永久有效 · 字里山河，耳畔书声';
-    const date = new Date(this.membershipExpiresAt);
-    return `有效至 ${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+    if (!this.accountLoggedIn) return '初逢书页，且读一章';
+    if (this.membershipSku === 'MONTHLY') return '一月书香，日日相伴';
+    if (this.membershipSku === 'ANNUAL') return '四季有书，岁月生香';
+    if (this.membershipSku === 'LIFETIME') return '一生有书，心有所栖';
+    if (this.membershipSku === 'SUPER_LIFETIME') return '字里山河，耳畔书声';
+    return '初逢书页，且读一章';
   }
 
   @Builder
