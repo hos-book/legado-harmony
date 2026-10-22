@@ -259,7 +259,7 @@ export struct SettingsPage {
 
   membershipSlogan(): string {
     if (!this.membershipSku) return '会员主题免费用，朗读礼包每月领';
-    if (!this.membershipExpiresAt) return '永久有效 · 随心阅读，自在听书';
+    if (!this.membershipExpiresAt) return '永久有效 · 字里山河，耳畔书声';
     const date = new Date(this.membershipExpiresAt);
     return `有效至 ${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
   }
