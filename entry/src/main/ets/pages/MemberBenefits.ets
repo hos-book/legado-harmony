@@ -1,0 +1,392 @@
+import { promptAction, router } from '@kit.ArkUI';
+import { common } from '@kit.AbilityKit';
+import { AccountCommerceApi } from '../account/AccountCommerceApi';
+import { AccountApiError } from '../account/AccountCommerceModels';
+import { AccountSessionStore } from '../account/AccountSessionStore';
+import { MembershipIcons } from '../account/MembershipIcons';
+import { MembershipGiftRules } from '../account/MembershipGiftRules';
+import { MembershipSnapshot } from '../account/MembershipModels';
+import { CloudFileClient } from '../account/CloudFileClient';
+import { CloudFileSummary } from '../account/CloudFileModels';
+import { ThemeRuntime } from '../theme/ThemeRuntime';
+import { syncSystemBars } from '../utils/SystemBars';
+import { HdsFeedback } from '../utils/HdsFeedback';
+import { AppFontSize } from '../theme/AppFontSize';
+import { AppSpacing } from '../theme/AppSpacing';
+import { PageScaffold } from '../components/common/PageScaffold';
+
+/** 我的权益：每月礼包等要手动领取的权益和其余权益状态集中在这页，入口在会员卡上。 */
+@Entry
+@Component
+struct MemberBenefitsPage {
+  @StorageLink('accountMembershipSku') membershipSku: string = '';
+  @StorageLink('appDarkMode') appDarkMode: boolean = false;
+  @StorageLink('themeRevision') themeRevision: number = 0;
+  @StorageLink('accountEntitlementsRevision') entitlementsRevision: number = 0;
+  @State membership: MembershipSnapshot = new MembershipSnapshot();
+  @State memberBusy: boolean = false;
+  @State cloudSummary: CloudFileSummary | null = null;
+  private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+
+  aboutToAppear(): void {
+    this.membership = AccountSessionStore.account().membership || new MembershipSnapshot();
+    this.syncBars();
+    this.loadUsage();
+  }
+
+  onPageShow(): void {
+    this.syncBars();
+  }
+
+  build() {
+    Column() {
+      PageScaffold({ title: '我的权益', content: () => {
+        this.pageContent()
+      } })
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor(this.pageColor())
+  }
+
+  @Builder
+  pageContent() {
+    Column({ space: AppSpacing.LG }) {
+      this.summaryCard()
+      if (this.membershipSku) {
+        if (MembershipGiftRules.included(this.membership, this.membershipSku) || this.membership.claim) {
+          this.giftCard()
+        } else {
+          this.giftUpsell()
+        }
+        this.benefitList()
+      }
+    }
+    .width('100%')
+    .padding({ left: AppSpacing.LG, right: AppSpacing.LG, top: 14 })
+  }
+
+  loadUsage(): void {
+    if (!AccountSessionStore.isLoggedIn()) return;
+    if (this.isSuperMember()) {
+      CloudFileClient.summary().then((summary: CloudFileSummary) => {
+        this.cloudSummary = summary;
+      }).catch(() => undefined);
+    }
+  }
+
+  syncBars(): void {
+    syncSystemBars(getContext(this), this.appDarkMode, this.pageColor());
+  }
+
+  errorMessage(error: Object, fallback: string): string {
+    const apiError = error as AccountApiError;
+    return apiError?.message ? apiError.message : fallback;
+  }
+
+  isSuperMember(): boolean {
+    return this.membershipSku === 'SUPER_LIFETIME';
+  }
+
+  formatDate(value: number): string {
+    const date = new Date(value);
+    return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+  }
+
+  formatBytes(bytes: number): string {
+    if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+    if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    return `${Math.max(0, Math.round(bytes / 1024))} KB`;
+  }
+
+  /** 还没领取的权益条数：本期礼包。 */
+  pendingCount(): number {
+    return MembershipGiftRules.pending(this.membership, this.membershipSku) ? 1 : 0;
+  }
+
+  @Builder
+  summaryCard() {
+    Row({ space: AppSpacing.LG }) {
+      if (this.membershipSku) {
+        Image(MembershipIcons.forSku(this.membershipSku))
+          .width(44)
+          .height(44)
+          .objectFit(ImageFit.Contain)
+      }
+      Column({ space: AppSpacing.XXS }) {
+        Text(this.membershipSku ? MembershipIcons.label(this.membershipSku) : '暂无有效会员')
+          .fontSize(AppFontSize.BODY_LARGE)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(MembershipIcons.cardTextColor(this.appDarkMode))
+        Text(!this.membershipSku ? '开通或恢复会员后，可在这里领取每月礼包' :
+          (this.pendingCount() > 0 ? `${this.pendingCount()} 项权益待领取` : '本期权益都已领取'))
+          .fontSize(AppFontSize.CAPTION)
+          .fontColor(MembershipIcons.cardSubTextColor(this.appDarkMode))
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+    }
+    .width('100%')
+    .padding(AppSpacing.XL)
+    .borderRadius(ThemeRuntime.cardRadius())
+    .linearGradient({ angle: 135, colors: MembershipIcons.cardGradient(this.membershipSku, this.appDarkMode) })
+  }
+
+  // ---- 每月朗读礼包 ----
+
+  giftChars(tier: string): number {
+    if (this.membership.claim?.tier === tier) return this.membership.claim.chars;
+    const benefits = this.membership.benefits;
+    if (this.membership.active && benefits) {
+      return tier === 'STANDARD' ? benefits.standardGiftChars : benefits.premiumGiftChars;
+    }
+    if (this.membershipSku === 'MONTHLY' || !this.membershipSku) return 0;
+    if (this.isSuperMember()) return tier === 'STANDARD' ? 12000 : 6000;
+    if (this.membershipSku === 'LIFETIME') return tier === 'STANDARD' ? 8000 : 4000;
+    return tier === 'STANDARD' ? 5000 : 2500;
+  }
+
+  giftPeriodText(): string {
+    const cycle = this.membership.giftCycle;
+    if (!cycle) return '标准或精品二选一';
+    // Gift windows use Beijing time regardless of the device timezone; endsAt is exclusive.
+    const first = new Date(cycle.startsAt + 8 * 60 * 60 * 1000);
+    const last = new Date(cycle.endsAt - 1 + 8 * 60 * 60 * 1000);
+    return `${first.getUTCFullYear()}年${first.getUTCMonth() + 1}月1日—${last.getUTCDate()}日（北京时间） · 二选一`;
+  }
+
+  async confirmClaim(tier: string, title: string): Promise<void> {
+    const decision = await promptAction.showDialog({
+      title: '领取本期礼包',
+      message: `领取${title} ${this.giftChars(tier)} 字？每个自然月只能二选一，领取后不能更换；已领字数可累计使用。`,
+      buttons: [{ text: '取消', color: this.subTextColor() }, { text: '领取', color: this.accentColor() }]
+    });
+    if (decision.index === 1) await this.claimGift(tier);
+  }
+
+  async claimGift(tier: string): Promise<void> {
+    if (this.memberBusy || this.membership.claim) return;
+    this.memberBusy = true;
+    try {
+      const result = await AccountCommerceApi.claimMembershipGift(tier, AccountSessionStore.token());
+      this.membership = result.membership;
+      // 写回账号快照，返回会员页时入口提示随之更新。
+      const account = AccountSessionStore.account();
+      account.membership = result.membership;
+      account.memberVerifiedAt = Date.now();
+      await AccountSessionStore.updateSnapshot(this.context, account);
+      HdsFeedback.showToast('朗读额度已到账');
+    } catch (e) {
+      HdsFeedback.showToast(this.errorMessage(e, '领取失败，请刷新后重试'));
+    } finally {
+      this.memberBusy = false;
+    }
+  }
+
+  @Builder
+  giftUpsell() {
+    Row({ space: AppSpacing.LG }) {
+      SymbolGlyph($r('sys.symbol.book_pages'))
+        .fontSize(20)
+        .fontColor([MembershipIcons.nameColor('ANNUAL', this.appDarkMode)])
+      Column({ space: AppSpacing.XXS }) {
+        Text('月度会员不含每月朗读礼包')
+          .fontSize(AppFontSize.BODY)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.primaryTextColor())
+        Text('年度会员起每月可领标准 5000 字或精品 2500 字')
+          .fontSize(AppFontSize.CAPTION)
+          .fontColor(this.subTextColor())
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+      Text('去升级')
+        .fontSize(AppFontSize.BODY)
+        .fontColor(MembershipIcons.nameColor('ANNUAL', this.appDarkMode))
+    }
+    .width('100%')
+    .padding(AppSpacing.XL)
+    .borderRadius(ThemeRuntime.cardRadius())
+    .backgroundColor(this.cardColor())
+    .onClick(() => {
+      router.back();
+    })
+  }
+
+  @Builder
+  giftCard() {
+    Column({ space: AppSpacing.MD }) {
+      Row() {
+        Column({ space: AppSpacing.XXS }) {
+          Text('本期朗读礼包')
+            .fontSize(AppFontSize.BODY_LARGE)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.primaryTextColor())
+          Text(this.giftPeriodText())
+            .fontSize(AppFontSize.CAPTION)
+            .fontColor(this.subTextColor())
+        }
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
+        if (this.membership.claim) {
+          Text('已领取')
+            .fontSize(AppFontSize.CAPTION)
+            .fontColor(ThemeRuntime.successColor(this.appDarkMode))
+        }
+      }
+      .width('100%')
+      Row({ space: AppSpacing.MD }) {
+        this.giftTile('STANDARD', '标准音色')
+        this.giftTile('PREMIUM', '精品音色')
+      }
+      .width('100%')
+      Text('已领字数在连续会员期内有效，永久会员可累计使用')
+        .fontSize(AppFontSize.CAPTION)
+        .fontColor(this.subTextColor())
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .padding(AppSpacing.XL)
+    .borderRadius(ThemeRuntime.cardRadius())
+    .backgroundColor(this.cardColor())
+  }
+
+  @Builder
+  giftTile(tier: string, title: string) {
+    Column({ space: AppSpacing.XXS }) {
+      Row({ space: AppSpacing.XS }) {
+        Text(`${this.giftChars(tier)}`)
+          .fontSize(AppFontSize.TITLE)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.membership.claim && this.membership.claim.tier !== tier ? this.subTextColor() :
+            this.primaryTextColor())
+        Text('字')
+          .fontSize(AppFontSize.CAPTION)
+          .fontColor(this.subTextColor())
+      }
+      .alignItems(VerticalAlign.Bottom)
+      Text(this.membership.claim?.tier === tier ? `${title} · 已领取` : title)
+        .fontSize(AppFontSize.CAPTION)
+        .fontColor(this.membership.claim?.tier === tier ? ThemeRuntime.successColor(this.appDarkMode) :
+          this.subTextColor())
+    }
+    .layoutWeight(1)
+    .alignItems(HorizontalAlign.Start)
+    .padding(AppSpacing.LG)
+    .borderRadius(ThemeRuntime.mediumRadius())
+    .backgroundColor(this.inputColor())
+    .border({ width: this.membership.claim?.tier === tier ? 1.5 : 0,
+      color: ThemeRuntime.successColor(this.appDarkMode) })
+    .opacity(this.membership.claim && this.membership.claim.tier !== tier ? 0.55 : 1)
+    .onClick(() => {
+      if (!this.membership.claim) this.confirmClaim(tier, title);
+    })
+  }
+
+  // ---- 其余权益 ----
+
+  largeSourceSyncText(): string {
+    return this.isSuperMember() ? '单个书源最大 960KB · 已生效' : '永久超级会员专享 · 单个书源最大 960KB';
+  }
+
+  cloudSpaceText(): string {
+    if (!this.isSuperMember()) return '永久超级会员专享';
+    if (!this.cloudSummary) return '书籍、字体与书源共用 1GB';
+    if (!this.cloudSummary.configured) return '云空间服务尚未启用';
+    return `已用 ${this.formatBytes(this.cloudSummary.usedBytes)} / 1GB · 本月下载 ` +
+      `${this.formatBytes(this.cloudSummary.downloadBytes)}`;
+  }
+
+  @Builder
+  benefitList() {
+    Column() {
+      this.benefitRow($r('sys.symbol.paintpalette'), '会员主题库', '现有及新增会员主题，可直接应用', true, () => {
+        router.pushUrl({ url: 'pages/ThemeSettings' });
+      })
+      this.benefitRow($r('sys.symbol.speaker_wave_2'), '在线朗读优先排队', '高峰期优先 · 已生效', true, undefined)
+      this.benefitRow($r('sys.symbol.arrow_2_circlepath'), '超大书源同步', this.largeSourceSyncText(), true, undefined)
+      if (this.isSuperMember()) {
+        this.benefitRow($r('sys.symbol.folder'), '我的云空间', this.cloudSpaceText(), false, () => {
+          router.pushUrl({ url: 'pages/CloudFiles' });
+        })
+      } else {
+        this.benefitRow($r('sys.symbol.folder'), '我的云空间', this.cloudSpaceText(), false, undefined)
+      }
+    }
+    .width('100%')
+    .borderRadius(ThemeRuntime.cardRadius())
+    .clip(true)
+    .backgroundColor(this.cardColor())
+  }
+
+  @Builder
+  benefitRow(icon: Resource, title: string, detail: string, showDivider: boolean, onClick?: () => void) {
+    Column() {
+      Row({ space: AppSpacing.LG }) {
+        SymbolGlyph(icon)
+          .fontSize(22)
+          .fontColor([onClick ? this.accentColor() : this.subTextColor()])
+          .width(28)
+        Column({ space: AppSpacing.XXS }) {
+          Text(title)
+            .fontSize(AppFontSize.BODY_LARGE)
+            .fontColor(this.primaryTextColor())
+          Text(detail)
+            .fontSize(AppFontSize.CAPTION)
+            .fontColor(this.subTextColor())
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+        if (onClick) {
+          SymbolGlyph($r('sys.symbol.chevron_right'))
+            .fontSize(18)
+            .fontColor([this.subTextColor()])
+        }
+      }
+      .width('100%')
+      .constraintSize({ minHeight: 60 })
+      .padding({ left: AppSpacing.XL, right: AppSpacing.XL, top: AppSpacing.MD, bottom: AppSpacing.MD })
+      .alignItems(VerticalAlign.Center)
+      if (showDivider) {
+        Divider()
+          .strokeWidth(0.5)
+          .color(this.dividerColor())
+          .margin({ left: 56, right: AppSpacing.XL })
+      }
+    }
+    .width('100%')
+    .onClick(() => {
+      if (onClick) onClick();
+    })
+  }
+
+  pageColor(): string {
+    return ThemeRuntime.pageColor(this.appDarkMode);
+  }
+
+  cardColor(): string {
+    return ThemeRuntime.cardColor(this.appDarkMode);
+  }
+
+  inputColor(): string {
+    return ThemeRuntime.inputColor(this.appDarkMode);
+  }
+
+  primaryTextColor(): string {
+    return ThemeRuntime.primaryTextColor(this.appDarkMode);
+  }
+
+  subTextColor(): string {
+    return ThemeRuntime.subTextColor(this.appDarkMode);
+  }
+
+  accentColor(): string {
+    return ThemeRuntime.accentColor(this.appDarkMode);
+  }
+
+  dividerColor(): string {
+    return ThemeRuntime.hairlineColor(this.appDarkMode);
+  }
+}

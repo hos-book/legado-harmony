@@ -17,10 +17,9 @@ import {
 import { AccountSessionStore } from '../account/AccountSessionStore';
 import { MembershipIcons } from '../account/MembershipIcons';
 import { MembershipCommerceService } from '../account/MembershipCommerceService';
+import { MembershipGiftRules } from '../account/MembershipGiftRules';
 import { MembershipOrder, MembershipProduct, MembershipPromotion, MembershipSnapshot } from '../account/MembershipModels';
 import { CloudSyncSummary } from '../account/CloudSyncModels';
-import { CloudFileClient } from '../account/CloudFileClient';
-import { CloudFileSummary } from '../account/CloudFileModels';
 import { HuaweiAccountService } from '../account/HuaweiAccountService';
 import { ThemeRuntime } from '../theme/ThemeRuntime';
 import { syncSystemBars } from '../utils/SystemBars';
@@ -68,7 +67,8 @@ struct AccountCenterPage {
   @State orders: MembershipOrder[] = [];
   @State ordersExpanded: boolean = false;
   @State sourceUsage: CloudSyncSummary = new CloudSyncSummary();
-  @State cloudSummary: CloudFileSummary | null = null;
+  @State showRechargeSheet: boolean = false;
+  @State compareExpanded: boolean = false;
   @State editingProfile: boolean = false;
   @State profileNameInput: string = '';
   @State profileAvatarPreview: string = '';
@@ -114,6 +114,10 @@ struct AccountCenterPage {
 
   onPageShow(): void {
     this.syncBars();
+    // 从我的权益页领取礼包后返回，入口提示要跟着更新。
+    if (this.accountLoggedIn) {
+      this.membership = AccountSessionStore.account().membership || new MembershipSnapshot();
+    }
   }
 
   build() {
@@ -132,6 +136,15 @@ struct AccountCenterPage {
     .height('100%')
     .backgroundColor(this.pageColor())
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .bindSheet($$this.showRechargeSheet, this.rechargeSheet(), {
+      height: SheetSize.FIT_CONTENT,
+      dragBar: true,
+      showClose: false,
+      backgroundColor: this.cardColor(),
+      onDisappear: () => {
+        this.showRechargeSheet = false;
+      }
+    })
     .onAreaChange((_oldValue: Area, newValue: Area) => {
       const width = this.areaDimension(newValue.width);
       const height = this.areaDimension(newValue.height);
@@ -165,23 +178,17 @@ struct AccountCenterPage {
             .width('100%')
             .padding({ left: AppSpacing.XS, right: AppSpacing.XS })
         }
-        if (this.accountLoggedIn) {
-          this.cloudSpaceCard()
-        }
-        if (this.accountLoggedIn && this.membership.active) {
-          if (this.giftIncluded() || this.membership.claim) {
-            this.giftCard()
-          } else {
-            this.giftUpsell()
-          }
-        }
-        if (this.memberProducts.length > 0) {
+        if (this.purchasableProducts().length > 0) {
           this.planSection()
         }
-        this.benefitsCard()
+        // 永久超级会员已是最高档，对比表收成一行，需要时再展开。
+        if (this.isSuperMember() && !this.compareExpanded) {
+          this.compareEntry()
+        } else {
+          this.benefitsCard()
+        }
         if (this.accountLoggedIn) {
           this.serviceList()
-          this.rechargeSection()
           this.accountActions()
         } else {
           this.loginGuide()
@@ -294,13 +301,6 @@ struct AccountCenterPage {
       AccountCommerceApi.fetchSyncSummary(AccountSessionStore.token()).then((summary: CloudSyncSummary) => {
         this.sourceUsage = summary;
       }).catch(() => undefined);
-      if (this.isSuperMember()) {
-        CloudFileClient.summary().then((summary: CloudFileSummary) => {
-          this.cloudSummary = summary;
-        }).catch(() => undefined);
-      } else {
-        this.cloudSummary = null;
-      }
     } catch (e) {
       this.memberError = this.errorMessage(e, '账号数据同步失败，请稍后刷新');
     } finally {
@@ -313,7 +313,12 @@ struct AccountCenterPage {
     if (selected && selected.salesEnabled && this.purchaseBlockReason(selected) === '') return;
     const available = this.memberProducts.find((item: MembershipProduct) =>
       item.salesEnabled && this.purchaseBlockReason(item) === '');
-    if (available) this.selectedSku = available.sku;
+    if (available) {
+      this.selectedSku = available.sku;
+    } else if (this.membershipSku) {
+      // 没有可买的档位（永久超级会员）时，对比表停在当前档位。
+      this.selectedSku = this.membershipSku;
+    }
   }
 
   async logout(): Promise<void> {
@@ -333,7 +338,6 @@ struct AccountCenterPage {
     this.membership = new MembershipSnapshot();
     this.orders = [];
     this.ordersExpanded = false;
-    this.cloudSummary = null;
     HdsFeedback.showToast('已退出登录');
   }
 
@@ -785,8 +789,13 @@ struct AccountCenterPage {
     return product.sku === 'SUPER_LIFETIME' ? '' : '已拥有永久权益';
   }
 
+  /** 当前档位还能买的方案：永久会员只剩超级会员升级，永久超级会员没有。 */
+  purchasableProducts(): MembershipProduct[] {
+    return this.memberProducts.filter((item: MembershipProduct) => this.purchaseBlockReason(item) === '');
+  }
+
   showPurchaseBar(): boolean {
-    return !this.editingProfile && this.memberProducts.length > 0;
+    return !this.editingProfile && this.purchasableProducts().length > 0;
   }
 
   purchaseLabel(): string {
@@ -850,7 +859,7 @@ struct AccountCenterPage {
   /** 首发活动横幅：任一档位有进行中或即将开始的活动时显示。 */
   launchBanner(): string {
     // 旧服务端不返回 promotion 字段，解析后是 undefined 而不是 null。
-    const promoted = this.memberProducts.filter((item: MembershipProduct) => !!item.promotion);
+    const promoted = this.purchasableProducts().filter((item: MembershipProduct) => !!item.promotion);
     if (promoted.length === 0) return '';
     const promotion = promoted[0].promotion!;
     const names = promoted.map((item: MembershipProduct) => item.name).join('与');
@@ -898,6 +907,17 @@ struct AccountCenterPage {
     try {
       const purchaseUserId = AccountSessionStore.account().userId;
       const quote = await AccountCommerceApi.quoteMembership(product.sku, AccountSessionStore.token());
+      if (quote.payablePoints > this.paidPoints) {
+        // 充值入口收进了点数行的面板，点数不够时在这里直接引导过去。
+        const recharge = await promptAction.showDialog({
+          title: '充值点不足',
+          message: `本次需扣除 ${quote.payablePoints} 充值点，当前 ${this.paidPoints} 点，还差 ` +
+            `${quote.payablePoints - this.paidPoints} 点。赠送点不可抵扣。`,
+          buttons: [{ text: '取消', color: this.subTextColor() }, { text: '去充值', color: this.accentColor() }]
+        });
+        if (recharge.index === 1) this.showRechargeSheet = true;
+        return;
+      }
       const credit = quote.creditPoints > 0 ? `\n升级抵扣 ${quote.creditPoints} 点` : '';
       const decision = await promptAction.showDialog({
         title: this.membership.active ? `确认${product.months === null ? '升级' : '续费'}` : `开通${product.name}`,
@@ -921,20 +941,6 @@ struct AccountCenterPage {
     }
   }
 
-  async claimGift(tier: string): Promise<void> {
-    if (this.memberBusy || this.membership.claim) return;
-    this.memberBusy = true;
-    try {
-      const result = await AccountCommerceApi.claimMembershipGift(tier, AccountSessionStore.token());
-      this.membership = result.membership;
-      HdsFeedback.showToast('朗读额度已到账');
-    } catch (e) {
-      HdsFeedback.showToast(this.errorMessage(e, '领取失败，请刷新后重试'));
-    } finally {
-      this.memberBusy = false;
-    }
-  }
-
   async toggleOrders(): Promise<void> {
     this.ordersExpanded = !this.ordersExpanded;
     if (!this.ordersExpanded) return;
@@ -944,15 +950,6 @@ struct AccountCenterPage {
       this.ordersExpanded = false;
       HdsFeedback.showToast(this.errorMessage(e, '订单暂时无法加载'));
     }
-  }
-
-  openCloudFiles(): void {
-    if (AccountSessionStore.activeMembershipSku() !== 'SUPER_LIFETIME') {
-      this.selectedSku = 'SUPER_LIFETIME';
-      HdsFeedback.showToast('请开通或升级为永久超级会员后使用我的云空间');
-      return;
-    }
-    router.pushUrl({ url: 'pages/CloudFiles' });
   }
 
   memberValidityText(): string {
@@ -969,41 +966,46 @@ struct AccountCenterPage {
     return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
   }
 
-  formatBytes(bytes: number): string {
-    if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
-    if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-    return `${Math.max(0, Math.round(bytes / 1024))} KB`;
+  /** 会员卡上“领取会员权益”入口的提示：本期礼包还有没有领。 */
+  benefitsEntryHint(): string {
+    return MembershipGiftRules.pending(this.membership, this.membershipSku) ? '本期礼包待领取' : '';
   }
 
-  giftChars(tier: string): number {
-    if (this.membership.claim?.tier === tier) return this.membership.claim.chars;
-    const benefits = this.membership.benefits;
-    if (this.membership.active && benefits) {
-      return tier === 'STANDARD' ? benefits.standardGiftChars : benefits.premiumGiftChars;
+  @Builder
+  benefitsEntry() {
+    Row({ space: AppSpacing.SM }) {
+      SymbolGlyph($r('sys.symbol.gift'))
+        .fontSize(18)
+        .fontColor([MembershipIcons.cardTextColor(this.appDarkMode)])
+      Text('领取会员权益')
+        .fontSize(AppFontSize.BODY)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(MembershipIcons.cardTextColor(this.appDarkMode))
+        .layoutWeight(1)
+      if (this.benefitsEntryHint()) {
+        Text(this.benefitsEntryHint())
+          .fontSize(AppFontSize.CAPTION)
+          .fontColor(MembershipIcons.cardTextColor(this.appDarkMode))
+        Circle()
+          .width(7)
+          .height(7)
+          .fill(ThemeRuntime.dangerColor(this.appDarkMode))
+      } else {
+        Text('查看全部权益')
+          .fontSize(AppFontSize.CAPTION)
+          .fontColor(MembershipIcons.cardSubTextColor(this.appDarkMode))
+      }
+      SymbolGlyph($r('sys.symbol.chevron_right'))
+        .fontSize(16)
+        .fontColor([MembershipIcons.cardSubTextColor(this.appDarkMode)])
     }
-    if (this.membershipSku === 'MONTHLY' || !this.membershipSku) return 0;
-    if (this.isSuperMember()) return tier === 'STANDARD' ? 12000 : 6000;
-    if (this.membershipSku === 'LIFETIME') return tier === 'STANDARD' ? 8000 : 4000;
-    return tier === 'STANDARD' ? 5000 : 2500;
-  }
-
-  giftPeriodText(): string {
-    const cycle = this.membership.giftCycle;
-    if (!cycle) return '标准或精品二选一';
-    // Gift windows use Beijing time regardless of the device timezone; endsAt is exclusive.
-    const first = new Date(cycle.startsAt + 8 * 60 * 60 * 1000);
-    const last = new Date(cycle.endsAt - 1 + 8 * 60 * 60 * 1000);
-    return `${first.getUTCFullYear()}年${first.getUTCMonth() + 1}月1日—${last.getUTCDate()}日（北京时间） · 二选一`;
-  }
-
-  /** 月度会员不含每月朗读礼包；年度、永久与永久超级会员可领。 */
-  giftIncluded(): boolean {
-    if (!this.membership.active || this.membership.restricted) return false;
-    // 历史领取记录仅用于展示已领字数，不能作为当前档位的礼包资格。
-    const benefits = this.membership.benefits;
-    if (benefits) return benefits.standardGiftChars > 0 || benefits.premiumGiftChars > 0;
-    return this.membershipSku === 'ANNUAL' || this.membershipSku === 'LIFETIME' ||
-      this.membershipSku === 'SUPER_LIFETIME';
+    .width('100%')
+    .padding({ left: AppSpacing.LG, right: AppSpacing.MD, top: AppSpacing.MD, bottom: AppSpacing.MD })
+    .borderRadius(ThemeRuntime.mediumRadius())
+    .backgroundColor(this.appDarkMode ? '#1FFFFFFF' : '#59FFFFFF')
+    .onClick(() => {
+      router.pushUrl({ url: 'pages/MemberBenefits' });
+    })
   }
 
   @Builder
@@ -1100,6 +1102,17 @@ struct AccountCenterPage {
             .color(this.appDarkMode ? '#33FFFFFF' : '#33000000')
           this.pointCell('赠送点', this.promoPoints, '可兑换主题')
           Blank()
+          Text('充值')
+            .fontSize(AppFontSize.CAPTION)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(MembershipIcons.cardTextColor(this.appDarkMode))
+            .padding({ left: AppSpacing.LG, right: AppSpacing.LG, top: AppSpacing.XS, bottom: AppSpacing.XS })
+            .borderRadius(14)
+            .border({ width: 1, color: MembershipIcons.cardSubTextColor(this.appDarkMode) })
+            .margin({ right: AppSpacing.MD })
+            .onClick(() => {
+              this.showRechargeSheet = true;
+            })
           Text('?')
             .fontSize(AppFontSize.CAPTION)
             .fontWeight(FontWeight.Medium)
@@ -1119,6 +1132,9 @@ struct AccountCenterPage {
         .borderRadius(ThemeRuntime.mediumRadius())
         .backgroundColor(this.appDarkMode ? '#1FFFFFFF' : '#59FFFFFF')
         .alignItems(VerticalAlign.Center)
+      }
+      if (this.accountLoggedIn && this.membershipSku) {
+        this.benefitsEntry()
       }
     }
     .width('100%')
@@ -1189,7 +1205,8 @@ struct AccountCenterPage {
   @Builder
   planSection() {
     Column({ space: AppSpacing.MD }) {
-      this.sectionHeader(this.membership.active ? '续费与升级' : '会员方案', '购买说明', () => {
+      this.sectionHeader(this.membershipSku === 'LIFETIME' ? '升级超级会员' :
+        (this.membership.active ? '续费与升级' : '会员方案'), '购买说明', () => {
         this.showPurchaseTerms();
       })
       if (this.launchBanner()) {
@@ -1210,7 +1227,7 @@ struct AccountCenterPage {
       }
       Scroll() {
         Row({ space: AppSpacing.MD }) {
-          ForEach(this.memberProducts, (product: MembershipProduct) => {
+          ForEach(this.purchasableProducts(), (product: MembershipProduct) => {
             this.planCard(product)
           }, (product: MembershipProduct) =>
             `${product.sku}_${product.salesEnabled}_${this.planPriceOf(product)}_${product.promotion?.startsAt ?? 0}`)
@@ -1221,7 +1238,8 @@ struct AccountCenterPage {
       .scrollBar(BarState.Off)
       .edgeEffect(EdgeEffect.Spring)
       .width('100%')
-      Text(this.membership.active ?
+      Text(this.membershipSku === 'LIFETIME' ? '补差价升级为永久超级会员，扣点前会显示服务端报价。' :
+        this.membership.active ?
         '定期会员续费顺延有效期；升级永久按未使用时长折算抵扣。扣点前会显示服务端报价。' :
         '仅限充值点，不自动续费。永久会员可补差价升级为永久超级会员。')
         .fontSize(AppFontSize.CAPTION)
@@ -1324,7 +1342,7 @@ struct AccountCenterPage {
   memberCardBenefits(): string {
     if (!this.membershipSku) return '专属主题 · 朗读礼包 · 在线朗读优先 · 书源同步';
     const items: string[] = ['专属主题'];
-    if (this.giftIncluded()) items.push('每月朗读礼包');
+    if (MembershipGiftRules.included(this.membership, this.membershipSku)) items.push('每月朗读礼包');
     items.push('在线朗读优先', '书源同步');
     if (this.isSuperMember()) items.push('1GB 云空间');
     return items.join(' · ');
@@ -1338,115 +1356,6 @@ struct AccountCenterPage {
     if (product.sku === 'ANNUAL' && !this.membershipSku) return '推荐';
     if (product.sku === 'SUPER_LIFETIME') return '云空间';
     return '';
-  }
-
-  @Builder
-  giftUpsell() {
-    Row({ space: AppSpacing.LG }) {
-      SymbolGlyph($r('sys.symbol.book_pages'))
-        .fontSize(20)
-        .fontColor([MembershipIcons.nameColor('ANNUAL', this.appDarkMode)])
-      Column({ space: AppSpacing.XXS }) {
-        Text('月度会员不含每月朗读礼包')
-          .fontSize(AppFontSize.BODY)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.primaryTextColor())
-        Text('年度会员起每月可领标准 5000 字或精品 2500 字')
-          .fontSize(AppFontSize.CAPTION)
-          .fontColor(this.subTextColor())
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
-      Text('看年度')
-        .fontSize(AppFontSize.BODY)
-        .fontColor(MembershipIcons.nameColor('ANNUAL', this.appDarkMode))
-    }
-    .width('100%')
-    .padding(AppSpacing.XL)
-    .borderRadius(ThemeRuntime.cardRadius())
-    .backgroundColor(this.cardColor())
-    .onClick(() => {
-      if (!this.memberBusy) this.selectedSku = 'ANNUAL';
-    })
-  }
-
-  @Builder
-  giftCard() {
-    Column({ space: AppSpacing.MD }) {
-      Row() {
-        Column({ space: AppSpacing.XXS }) {
-          Text('本期朗读礼包')
-            .fontSize(AppFontSize.BODY_LARGE)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(this.primaryTextColor())
-          Text(this.giftPeriodText())
-            .fontSize(AppFontSize.CAPTION)
-            .fontColor(this.subTextColor())
-        }
-        .alignItems(HorizontalAlign.Start)
-        .layoutWeight(1)
-        if (this.membership.claim) {
-          Text('已领取')
-            .fontSize(AppFontSize.CAPTION)
-            .fontColor(ThemeRuntime.successColor(this.appDarkMode))
-        }
-      }
-      .width('100%')
-      Row({ space: AppSpacing.MD }) {
-        this.giftTile('STANDARD', '标准音色')
-        this.giftTile('PREMIUM', '精品音色')
-      }
-      .width('100%')
-      Text('已领字数在连续会员期内有效，永久会员可累计使用')
-        .fontSize(AppFontSize.CAPTION)
-        .fontColor(this.subTextColor())
-    }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start)
-    .padding(AppSpacing.XL)
-    .borderRadius(ThemeRuntime.cardRadius())
-    .backgroundColor(this.cardColor())
-  }
-
-  @Builder
-  giftTile(tier: string, title: string) {
-    Column({ space: AppSpacing.XXS }) {
-      Row({ space: AppSpacing.XS }) {
-        Text(`${this.giftChars(tier)}`)
-          .fontSize(AppFontSize.TITLE)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(this.membership.claim && this.membership.claim.tier !== tier ? this.subTextColor() :
-            this.primaryTextColor())
-        Text('字')
-          .fontSize(AppFontSize.CAPTION)
-          .fontColor(this.subTextColor())
-      }
-      .alignItems(VerticalAlign.Bottom)
-      Text(this.membership.claim?.tier === tier ? `${title} · 已领取` : title)
-        .fontSize(AppFontSize.CAPTION)
-        .fontColor(this.membership.claim?.tier === tier ? ThemeRuntime.successColor(this.appDarkMode) :
-          this.subTextColor())
-    }
-    .layoutWeight(1)
-    .alignItems(HorizontalAlign.Start)
-    .padding(AppSpacing.LG)
-    .borderRadius(ThemeRuntime.mediumRadius())
-    .backgroundColor(this.inputColor())
-    .border({ width: this.membership.claim?.tier === tier ? 1.5 : 0,
-      color: ThemeRuntime.successColor(this.appDarkMode) })
-    .opacity(this.membership.claim && this.membership.claim.tier !== tier ? 0.55 : 1)
-    .onClick(() => {
-      if (!this.membership.claim) this.confirmClaim(tier, title);
-    })
-  }
-
-  async confirmClaim(tier: string, title: string): Promise<void> {
-    const decision = await promptAction.showDialog({
-      title: '领取本期礼包',
-      message: `领取${title} ${this.giftChars(tier)} 字？每个自然月只能二选一，领取后不能更换；已领字数可累计使用。`,
-      buttons: [{ text: '取消', color: this.subTextColor() }, { text: '领取', color: this.accentColor() }]
-    });
-    if (decision.index === 1) await this.claimGift(tier);
   }
 
   // 对比表的五列：免费、月度、年度、永久、永久超级。单元格 '✓' 表示包含，'—' 表示没有。
@@ -1532,6 +1441,19 @@ struct AccountCenterPage {
   }
 
   @Builder
+  compareEntry() {
+    Column() {
+      this.serviceRow($r('sys.symbol.list_bullet'), '权益对比', '查看各档会员权益', false, () => {
+        this.compareExpanded = true;
+      })
+    }
+    .width('100%')
+    .borderRadius(ThemeRuntime.cardRadius())
+    .clip(true)
+    .backgroundColor(this.cardColor())
+  }
+
+  @Builder
   benefitsCard() {
     Column({ space: AppSpacing.LG }) {
       Row() {
@@ -1540,9 +1462,18 @@ struct AccountCenterPage {
           .fontWeight(FontWeight.Bold)
           .fontColor(this.primaryTextColor())
           .layoutWeight(1)
-        Text('左右滑动 · 点按列切换方案')
-          .fontSize(AppFontSize.CAPTION)
-          .fontColor(this.subTextColor())
+        if (this.isSuperMember()) {
+          Text('收起')
+            .fontSize(AppFontSize.BODY)
+            .fontColor(this.accentColor())
+            .onClick(() => {
+              this.compareExpanded = false;
+            })
+        } else {
+          Text('左右滑动 · 点按列切换方案')
+            .fontSize(AppFontSize.CAPTION)
+            .fontColor(this.subTextColor())
+        }
       }
       .width('100%')
 
@@ -1773,23 +1704,10 @@ struct AccountCenterPage {
   }
 
   @Builder
-  cloudSpaceCard() {
-    Column() {
-      this.serviceRow($r('sys.symbol.folder'), '我的云空间', this.cloudSpaceText(), false, () => {
-        this.openCloudFiles();
-      })
-    }
-    .width('100%')
-    .borderRadius(ThemeRuntime.cardRadius())
-    .clip(true)
-    .backgroundColor(this.cardColor())
-  }
-
-  @Builder
   serviceList() {
     Column() {
-      this.serviceRow($r('sys.symbol.doc_text'), '会员订单', this.ordersExpanded ? '收起' : '最近 50 笔会员订单', false,
-        () => {
+      this.serviceRow($r('sys.symbol.doc_text'), '会员订单', this.ordersExpanded ? '收起' : '最近 50 笔会员订单',
+        !this.ordersExpanded, () => {
           this.toggleOrders();
         })
       if (this.ordersExpanded) {
@@ -1826,20 +1744,19 @@ struct AccountCenterPage {
         .width('100%')
         .alignItems(HorizontalAlign.Start)
         .padding({ left: 56, right: AppSpacing.XL, bottom: AppSpacing.LG })
+        Divider()
+          .strokeWidth(0.5)
+          .color(this.dividerColor())
+          .margin({ left: 56, right: AppSpacing.XL })
       }
+      this.serviceRow($r('sys.symbol.info_circle'), '会员权益与购买说明', '开通、续费、礼包与云空间规则', false, () => {
+        this.showPurchaseTerms();
+      })
     }
     .width('100%')
     .borderRadius(ThemeRuntime.cardRadius())
     .clip(true)
     .backgroundColor(this.cardColor())
-  }
-
-  cloudSpaceText(): string {
-    if (!this.isSuperMember()) return '永久超级会员专享 · 书籍、字体与书源云同步';
-    if (!this.cloudSummary) return '书籍、字体与书源共用 1GB';
-    if (!this.cloudSummary.configured) return '云空间服务尚未启用';
-    return `已用 ${this.formatBytes(this.cloudSummary.usedBytes)} / 1GB · 本月下载 ` +
-      `${this.formatBytes(this.cloudSummary.downloadBytes)}`;
   }
 
   @Builder
@@ -2164,6 +2081,20 @@ struct AccountCenterPage {
       this.getUIContext().getPromptAction().closeCustomDialog(this.pointsUsageDialogId);
       this.pointsUsageDialogId = -1;
     }
+  }
+
+  @Builder
+  rechargeSheet() {
+    Column({ space: AppSpacing.SM }) {
+      this.rechargeSection()
+      Text(`当前充值点 ${this.paidPoints} · 可开通会员、兑换朗读字数包与主题`)
+        .fontSize(AppFontSize.CAPTION)
+        .fontColor(this.subTextColor())
+        .width('100%')
+        .padding({ left: AppSpacing.XL, right: AppSpacing.XL })
+    }
+    .width('100%')
+    .padding({ bottom: AppSpacing.XL + this.navBarHeight })
   }
 
   @Builder

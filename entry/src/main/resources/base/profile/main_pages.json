@@ -30,6 +30,7 @@
     "pages/ThemeColorSettings",
     "pages/ThemeSettings",
     "pages/AccountCenter",
+    "pages/MemberBenefits",
     "pages/DataSync",
     "pages/ReadingStats",
     "pages/SyncDevices",
