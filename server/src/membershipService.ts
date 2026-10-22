@@ -282,7 +282,7 @@ export async function claimMembershipGift(db: MembershipDb, userId: string, tier
   }
   const chars = membershipGiftChars(await membershipTierSku(db, state, now), tier);
   if (chars <= 0) {
-    throw new MembershipError(403, 'MEMBERSHIP_GIFT_NOT_INCLUDED', '月度会员不含每月朗读礼包，年度及永久会员可领取');
+    throw new MembershipError(403, 'MEMBERSHIP_GIFT_NOT_INCLUDED', '月度会员不含每月朗读礼包，年度及终身会员可领取');
   }
   await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`tts-quota:${userId}:${tier}`]);
   const key = `membership-gift-month:${userId}:${cycle.index}`;

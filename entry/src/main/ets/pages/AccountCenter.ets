@@ -183,7 +183,7 @@ struct AccountCenterPage {
         if (this.purchasableProducts().length > 0) {
           this.planSection()
         }
-        // 永久超级会员已是最高档，对比表收成一行，需要时再展开。
+        // 终身超级会员已是最高档，对比表收成一行，需要时再展开。
         if (this.isSuperMember() && !this.compareExpanded) {
           this.compareEntry()
         } else {
@@ -321,7 +321,7 @@ struct AccountCenterPage {
     if (available) {
       this.selectedSku = available.sku;
     } else if (this.membershipSku) {
-      // 没有可买的档位（永久超级会员）时，对比表停在当前档位。
+      // 没有可买的档位（终身超级会员）时，对比表停在当前档位。
       this.selectedSku = this.membershipSku;
     }
   }
@@ -447,7 +447,7 @@ struct AccountCenterPage {
       file = fs.openSync(this.cropSourceUri, fs.OpenMode.READ_ONLY);
       if (this.cropAnimated) {
         if (!this.canUseAnimatedAvatar()) {
-          HdsFeedback.showToast('动态头像仅限有效的永久会员和永久超级会员使用');
+          HdsFeedback.showToast('动态头像仅限有效的终身会员和终身超级会员使用');
           return;
         }
         const size = fs.statSync(file.fd).size;
@@ -662,11 +662,11 @@ struct AccountCenterPage {
 
   async ensureAnimatedAvatarAccess(): Promise<boolean> {
     try {
-      // 旧缓存或旧服务端缺少新字段，并不代表用户没有永久会员身份。
+      // 旧缓存或旧服务端缺少新字段，并不代表用户没有终身会员身份。
       await HuaweiAccountService.refresh(this.context);
       this.membership = AccountSessionStore.account().membership || new MembershipSnapshot();
       if (!this.canUseAnimatedAvatar()) {
-        HdsFeedback.showToast('动态头像仅限有效的永久会员和永久超级会员使用');
+        HdsFeedback.showToast('动态头像仅限有效的终身会员和终身超级会员使用');
         return false;
       }
       if (this.membership.benefits?.animatedAvatar !== true) {
@@ -793,10 +793,10 @@ struct AccountCenterPage {
     const state = this.membership.active ? this.membership.state : null;
     if (!state || state.expiresAt !== null) return '';
     if (state.sku === 'SUPER_LIFETIME') return '已是最高档位';
-    return product.sku === 'SUPER_LIFETIME' ? '' : '已拥有永久权益';
+    return product.sku === 'SUPER_LIFETIME' ? '' : '已拥有终身权益';
   }
 
-  /** 当前档位还能买的方案：永久会员只剩超级会员升级，永久超级会员没有。 */
+  /** 当前档位还能买的方案：终身会员只剩超级会员升级，终身超级会员没有。 */
   purchasableProducts(): MembershipProduct[] {
     return this.memberProducts.filter((item: MembershipProduct) => this.purchaseBlockReason(item) === '');
   }
@@ -884,10 +884,10 @@ struct AccountCenterPage {
 
   purchaseTerms(): string {
     return '1. 会员使用充值点开通，赠送点不可抵扣，不自动续费；确认前会显示服务端报价和实际扣点。\n' +
-      '2. 月度、年度会员可叠加续费，有效期顺延；永久会员不重复购买，可补差价升级为永久超级会员。定期会员升级永久时，按尚未使用的时长折算抵扣，抵扣不退回、不提现。\n' +
+      '2. 月度、年度会员可叠加续费，有效期顺延；终身会员不重复购买，可补差价升级为终身超级会员。定期会员升级终身时，按尚未使用的时长折算抵扣，抵扣不退回、不提现。\n' +
       '3. 会员主题包含现有及以后加入会员主题库的主题，单独售卖的主题除外；已单独购买的主题保留原有效期。\n' +
-      '4. 月度会员不含每月朗读礼包。年度会员每月标准 5000 字或精品 2500 字，永久会员 8000/4000 字，永久超级会员 12000/6000 字。按北京时间自然月（每月1日至月末）领取，每个账号每月标准或精品二选一，升级或重新开通不重复领取，未领不补发。领取时须有有效的年度或永久权益；年度会员用月度续费延长的时段不含礼包。已领字数可累计，在连续会员期内有效，到期后重新开通不恢复旧周期额度。\n' +
-      '5. 永久超级会员的云空间为书籍、字体与书源共用 1GB。下载额度按北京时间自然月计算，每月 1GB，每月1日零点重置，未用额度不结转。\n' +
+      '4. 月度会员不含每月朗读礼包。年度会员每月标准 5000 字或精品 2500 字，终身会员 8000/4000 字，终身超级会员 12000/6000 字。按北京时间自然月（每月1日至月末）领取，每个账号每月标准或精品二选一，升级或重新开通不重复领取，未领不补发。领取时须有有效的年度或终身权益；年度会员用月度续费延长的时段不含礼包。已领字数可累计，在连续会员期内有效，到期后重新开通不恢复旧周期额度。\n' +
+      '5. 终身超级会员的云空间为书籍、字体与书源共用 1GB。下载额度按北京时间自然月计算，每月 1GB，每月1日零点重置，未用额度不结转。\n' +
       '6. 发生内购退款形成欠款时，会员权益暂停，补齐后恢复。';
   }
 
@@ -936,7 +936,7 @@ struct AccountCenterPage {
       if (decision.index !== 1) return;
       await MembershipCommerceService.purchase(this.context, quote.quoteId, purchaseUserId);
       this.membership = AccountSessionStore.account().membership || new MembershipSnapshot();
-      // 升级为永久超级会员后立即开始云端书籍与字体同步。
+      // 升级为终身超级会员后立即开始云端书籍与字体同步。
       CloudAutoSync.schedule(this.context, 0);
       this.agreed = false;
       this.orders = [];
@@ -965,7 +965,7 @@ struct AccountCenterPage {
     if (!this.accountLoggedIn) return '登录后查看会员、点数与主题权益';
     if (this.membership.restricted) return '权益暂停中';
     const state = this.membership.state;
-    if (!this.membershipSku || !state) return '开通会员畅享主题库，年度及永久会员每月领朗读礼包';
+    if (!this.membershipSku || !state) return '开通会员畅享主题库，年度及终身会员每月领朗读礼包';
     if (state.expiresAt === null) return '永久有效';
     return `有效期至 ${this.formatDate(state.expiresAt)} · 不自动续费`;
   }
@@ -1254,10 +1254,10 @@ struct AccountCenterPage {
       .scrollBar(BarState.Off)
       .edgeEffect(EdgeEffect.Spring)
       .width('100%')
-      Text(this.membershipSku === 'LIFETIME' ? '补差价升级为永久超级会员，扣点前会显示服务端报价。' :
+      Text(this.membershipSku === 'LIFETIME' ? '补差价升级为终身超级会员，扣点前会显示服务端报价。' :
         this.membership.active ?
-        '定期会员续费顺延有效期；升级永久按未使用时长折算抵扣。扣点前会显示服务端报价。' :
-        '仅限充值点，不自动续费。永久会员可补差价升级为永久超级会员。')
+        '定期会员续费顺延有效期；升级终身按未使用时长折算抵扣。扣点前会显示服务端报价。' :
+        '仅限充值点，不自动续费。终身会员可补差价升级为终身超级会员。')
         .fontSize(AppFontSize.CAPTION)
         .lineHeight(18)
         .fontColor(this.subTextColor())
@@ -1375,7 +1375,7 @@ struct AccountCenterPage {
     return '';
   }
 
-  // 对比表的五列：免费、月度、年度、永久、永久超级。单元格 '✓' 表示包含，'—' 表示没有。
+  // 对比表的五列：免费、月度、年度、终身、终身超级。单元格 '✓' 表示包含，'—' 表示没有。
   compareRows(): BenefitCompareRow[] {
     const limits = this.sourceUsage.membershipLimitsEnabled;
     const rows: BenefitCompareRow[] = [
@@ -1408,7 +1408,7 @@ struct AccountCenterPage {
   }
 
   compareColumnTitle(column: number): string {
-    return ['免费', '月度', '年度', '永久', '永久超级'][column];
+    return ['免费', '月度', '年度', '终身', '终身超级'][column];
   }
 
   compareHeadline(): string {
@@ -1995,7 +1995,7 @@ struct AccountCenterPage {
       }
       .width('100%')
       Text(this.canUseAnimatedAvatar() ? '支持 GIF / WebP 动态头像：2MB 内，最多 120 帧，单帧不超过 1024×1024。'
-        : '永久会员和永久超级会员支持 GIF / WebP 动态头像。')
+        : '终身会员和终身超级会员支持 GIF / WebP 动态头像。')
         .fontSize(AppFontSize.CAPTION)
         .fontColor(this.subTextColor())
         .width('100%')

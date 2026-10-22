@@ -14,7 +14,7 @@ export async function claimSuperTheme(db: MembershipDb, userId: string, themeId:
   await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`membership:${userId}`]);
   const member = await membershipSnapshot(db, userId, now);
   if (!member.active || member.state?.sku !== 'SUPER_LIFETIME') {
-    throw new MembershipError(403, 'SUPER_THEME_REQUIRED', '仅有效的永久超级会员可领取专属主题');
+    throw new MembershipError(403, 'SUPER_THEME_REQUIRED', '仅有效的终身超级会员可领取专属主题');
   }
   // The catalog is administrator-owned in production; application access is SELECT-only.
   // Claim serialization uses the user advisory lock, not a catalog row lock (which needs UPDATE).

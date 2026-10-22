@@ -121,11 +121,11 @@ struct CloudFilesPage {
           .height(44)
           .objectFit(ImageFit.Contain)
         Column({ space: AppSpacing.XXS }) {
-          Text(!this.summaryLoaded ? '正在读取云空间' : this.summary.configured ? '永久超级会员云空间' : '云空间服务尚未启用')
+          Text(!this.summaryLoaded ? '正在读取云空间' : this.summary.configured ? '终身超级会员云空间' : '云空间服务尚未启用')
             .fontSize(AppFontSize.BODY_LARGE)
             .fontWeight(FontWeight.Bold)
             .fontColor(MembershipIcons.cardTextColor(this.dark))
-          Text(this.summary.eligible ? '书籍 · 字体' : '需要有效的永久超级会员')
+          Text(this.summary.eligible ? '书籍 · 字体' : '需要有效的终身超级会员')
             .fontSize(AppFontSize.CAPTION)
             .fontColor(MembershipIcons.cardSubTextColor(this.dark))
         }

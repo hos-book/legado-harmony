@@ -52,7 +52,7 @@ export class CloudFileService {
   private async member(db: MembershipDb, userId: string, now = this.now()) {
     const member = await membershipSnapshot(db, userId, now);
     if (!member.active || member.state?.sku !== 'SUPER_LIFETIME') {
-      fail(403, 'CLOUD_SUPER_REQUIRED', '此功能需要有效的永久超级会员');
+      fail(403, 'CLOUD_SUPER_REQUIRED', '此功能需要有效的终身超级会员');
     }
     return member;
   }

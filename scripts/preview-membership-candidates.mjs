@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 
 const root = resolve('output/membership-icons');
 const sets = ['A · 轻页书叶', 'B · 克制宝石', 'C · 星轨羽翼'];
-const tiers = ['月度会员 · 60 点', '年度会员 · 480 点', '永久会员 · 1290 点', '永久超级会员 · 2490 点'];
+const tiers = ['月度会员 · 60 点', '年度会员 · 480 点', '终身会员 · 1290 点', '终身超级会员 · 2490 点'];
 const layers = [];
 const width = 1560;
 const height = 1340;

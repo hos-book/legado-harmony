@@ -67,7 +67,7 @@ export class AppIconManager {
 
   static async applyIcon(context: Context, option: AppIconOption): Promise<void> {
     if (option.id === 'theme_obsidian_archive' && !AccountSessionStore.hasOwnedEntitlement(ThemeIds.OBSIDIAN_ARCHIVE)) {
-      throw new Error('请先领取永久超级会员专属主题');
+      throw new Error('请先领取终身超级会员专属主题');
     }
     if (!AppIconManager.isSupported()) throw new Error(AppIconManager.UNSUPPORTED_MESSAGE);
     if (AppIconManager.applying) throw new Error('桌面图标正在切换，请稍后重试');

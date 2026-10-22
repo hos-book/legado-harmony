@@ -305,7 +305,7 @@ struct FontSettingsPage {
     return options;
   }
 
-  /** 云端有、本机未下载的字体（永久超级会员字体云同步），排在本机字体之后。 */
+  /** 云端有、本机未下载的字体（终身超级会员字体云同步），排在本机字体之后。 */
   remoteFonts(): CloudRemoteFont[] {
     return CloudAutoSync.parseRemoteFonts(this.cloudRemoteFontsRaw);
   }

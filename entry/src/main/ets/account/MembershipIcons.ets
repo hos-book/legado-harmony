@@ -1,6 +1,6 @@
 /**
  * 会员档位的视觉资料。昵称颜色、卡片渐变取自对应图标的主色：
- * 月度青蓝星页、年度紫色环绕星页、永久金色无限星轨、永久超级曜黑香槟金。
+ * 月度青蓝星页、年度紫色环绕星页、终身金色无限星轨、终身超级曜黑香槟金。
  */
 export class MembershipIcons {
   static readonly SKUS: string[] = ['MONTHLY', 'ANNUAL', 'LIFETIME', 'SUPER_LIFETIME'];
@@ -15,8 +15,8 @@ export class MembershipIcons {
   static label(sku: string): string {
     if (sku === 'MONTHLY') return '月度会员';
     if (sku === 'ANNUAL') return '年度会员';
-    if (sku === 'LIFETIME') return '永久会员';
-    if (sku === 'SUPER_LIFETIME') return '永久超级会员';
+    if (sku === 'LIFETIME') return '终身会员';
+    if (sku === 'SUPER_LIFETIME') return '终身超级会员';
     return '';
   }
 

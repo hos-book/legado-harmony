@@ -14,7 +14,7 @@ export interface SanitizedAvatar { data: Buffer; mime: 'image/jpeg' | 'image/gif
 
 export class InvalidAvatarError extends Error {}
 export class AnimatedAvatarMembershipError extends MembershipError {
-  constructor() { super(403, 'ANIMATED_AVATAR_MEMBERSHIP_REQUIRED', '动态头像仅限有效的永久会员和永久超级会员使用'); }
+  constructor() { super(403, 'ANIMATED_AVATAR_MEMBERSHIP_REQUIRED', '动态头像仅限有效的终身会员和终身超级会员使用'); }
 }
 
 export async function sanitizeAvatarBase64(value: string): Promise<Buffer> {

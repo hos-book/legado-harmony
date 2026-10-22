@@ -19,7 +19,7 @@ const sets = [
   { key: 'C', name: '星轨羽翼', style: 'Dreamy but sophisticated celestial reading badge, a clean folded-page silhouette integrated with one broad orbital arc, smooth pearlescent glass and metallic edges, bold legible curves, front-facing.',
     forms: ['an aqua folded page and one clear four-point silver star with a short crescent orbit', 'a violet folded open-book page with one four-point star and a complete lavender orbit', 'a warm gold four-point star above an open book, a single thick infinity orbit framing it', 'a midnight-blue four-point star above a dark open book, two broad symmetrical gold feather wings and a restrained golden orbital arc'] }
 ];
-const tiers = ['月度会员', '年度会员', '永久会员', '永久超级会员'];
+const tiers = ['月度会员', '年度会员', '终身会员', '终身超级会员'];
 const specs = sets.flatMap(set => set.forms.map((form, i) => ({
   key: `${set.key}${i + 1}`, set: set.name, tier: tiers[i],
   prompt: `Create ONE isolated app membership badge icon. ${set.style} Subject: ${form}. Square 1:1 composition, one centered object occupying about 68 percent of canvas, pure clean white background, subtle short ambient contact shadow only. Orthographic front view, broad crisp edges, tasteful soft studio light. Must remain distinguishable at 24px and 32px. No text, no letters, no numbers, no watermark, no panels, no app UI, no border, no repeated objects, no grid, no floating glitter. Production-quality coherent emblem, not a realistic scene.`

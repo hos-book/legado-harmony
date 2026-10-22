@@ -6,7 +6,7 @@ export class CloudSyncSettings {
   autoSyncEnabled: boolean = true;
   wifiOnly: boolean = false;
   foregroundSyncEnabled: boolean = false;
-  // 保存用户偏好；实际启用还须通过永久超级会员校验。
+  // 保存用户偏好；实际启用还须通过终身超级会员校验。
   localBooksEnabled: boolean = true;
   customFontsEnabled: boolean = true;
   readingDataEnabled: boolean = true;

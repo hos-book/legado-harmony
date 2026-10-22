@@ -274,7 +274,7 @@ struct MemberBenefitsPage {
           .fontSize(AppFontSize.CAPTION)
           .fontColor(this.primaryTextColor())
       }
-      Text('已领字数在连续会员期内有效，永久会员可累计使用')
+      Text('已领字数在连续会员期内有效，终身会员可累计使用')
         .fontSize(AppFontSize.CAPTION)
         .fontColor(this.subTextColor())
     }
@@ -333,7 +333,7 @@ struct MemberBenefitsPage {
       return;
     }
     const choice = await promptAction.showDialog({ title: '领取「曜金藏书」',
-      message: '永久超级会员专属，不扣除点数。领取后有效一年，到期后可再次手动领取。',
+      message: '终身超级会员专属，不扣除点数。领取后有效一年，到期后可再次手动领取。',
       buttons: [{ text: '取消', color: this.subTextColor() }, { text: '领取一年', color: this.accentColor() }] });
     if (choice.index !== 1) return;
     this.memberBusy = true;
@@ -369,11 +369,11 @@ struct MemberBenefitsPage {
   // ---- 其余权益 ----
 
   largeSourceSyncText(): string {
-    return this.isSuperMember() ? '单个书源最大 960KB · 已生效' : '永久超级会员专享 · 单个书源最大 960KB';
+    return this.isSuperMember() ? '单个书源最大 960KB · 已生效' : '终身超级会员专享 · 单个书源最大 960KB';
   }
 
   cloudSpaceText(): string {
-    if (!this.isSuperMember()) return '永久超级会员专享';
+    if (!this.isSuperMember()) return '终身超级会员专享';
     if (!this.cloudSummary) return '书籍、字体与书源共用 1GB';
     if (!this.cloudSummary.configured) return '云空间服务尚未启用';
     return `已用 ${this.formatBytes(this.cloudSummary.usedBytes)} / 1GB · 本月下载 ` +

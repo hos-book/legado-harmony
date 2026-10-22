@@ -643,14 +643,14 @@ struct ThemeSettingsPage {
 
   async claimExclusiveTheme(): Promise<boolean> {
     if (!this.accountLoggedIn) {
-      HdsFeedback.showToast('请登录永久超级会员账号后领取');
+      HdsFeedback.showToast('请登录终身超级会员账号后领取');
       router.pushUrl({ url: 'pages/AccountCenter' });
       return false;
     }
     try {
       await HuaweiAccountService.refresh(getContext(this));
       if (AccountSessionStore.activeMembershipSku() !== 'SUPER_LIFETIME') {
-        HdsFeedback.showToast('「曜金藏书」仅供永久超级会员领取，不支持点数购买');
+        HdsFeedback.showToast('「曜金藏书」仅供终身超级会员领取，不支持点数购买');
         router.pushUrl({ url: 'pages/AccountCenter' });
         return false;
       }
@@ -664,7 +664,7 @@ struct ThemeSettingsPage {
       }
       const choice = await promptAction.showDialog({
         title: '领取「曜金藏书」',
-        message: '永久超级会员专属，不扣除点数。领取后有效一年，到期后可再次手动领取；有效期内不重复叠加。',
+        message: '终身超级会员专属，不扣除点数。领取后有效一年，到期后可再次手动领取；有效期内不重复叠加。',
         buttons: [{ text: '取消', color: this.subTextColor() }, { text: '领取一年', color: this.accentColor() }]
       });
       if (choice.index !== 1) return false;
@@ -2620,7 +2620,7 @@ struct ThemeSettingsPage {
 
   /** Price text for a paid theme; never a guessed price while the catalog is missing. */
   storeThemePriceLabel(themeId: string): string {
-    if (themeId === ThemeIds.OBSIDIAN_ARCHIVE) return '永久超级会员专属';
+    if (themeId === ThemeIds.OBSIDIAN_ARCHIVE) return '终身超级会员专属';
     const offer = this.themeOffer(themeId);
     if (offer) return `${offer.pricePoints}点`;
     if (this.themeCatalogLoaded) return '暂未上架';
@@ -2630,7 +2630,7 @@ struct ThemeSettingsPage {
   acquireButtonLabel(themeId: string, action: string): string {
     if (themeId === ThemeIds.OBSIDIAN_ARCHIVE) {
       return AccountSessionStore.hasOwnedEntitlement(themeId) ? '已领取 · 应用主题' :
-        (AccountSessionStore.activeMembershipSku() === 'SUPER_LIFETIME' ? '领取一年' : '永久超级会员专属');
+        (AccountSessionStore.activeMembershipSku() === 'SUPER_LIFETIME' ? '领取一年' : '终身超级会员专属');
     }
     const offer = this.themeOffer(themeId);
     if (offer) return `${action} · ${offer.pricePoints}点`;
@@ -2656,7 +2656,7 @@ struct ThemeSettingsPage {
     if (theme.id === ThemeIds.OBSIDIAN_ARCHIVE) {
       const owned = AccountSessionStore.entitlement(theme.id);
       return AccountSessionStore.hasOwnedEntitlement(theme.id) && owned ?
-        `已领取 · 有效至 ${this.formatDate(owned.expiresAt)}` : '永久超级会员手动领取 · 每次一年 · 不售卖';
+        `已领取 · 有效至 ${this.formatDate(owned.expiresAt)}` : '终身超级会员手动领取 · 每次一年 · 不售卖';
     }
     if (theme.id === ThemeIds.CUSTOM) {
       return '自定义方案';
@@ -2682,7 +2682,7 @@ struct ThemeSettingsPage {
 
   themeAccessLabel(themeId: string): string {
     if (themeId === ThemeIds.OBSIDIAN_ARCHIVE && !AccountSessionStore.hasOwnedEntitlement(themeId)) {
-      return '永久超级会员专属 · 领取一年';
+      return '终身超级会员专属 · 领取一年';
     }
     if (AccountSessionStore.hasMemberThemeAccess(themeId)) return '会员免费';
     if (BuiltinThemeRegistry.isFree(themeId)) {

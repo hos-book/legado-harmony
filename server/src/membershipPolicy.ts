@@ -16,8 +16,8 @@ export interface MembershipProduct {
 export const MEMBERSHIP_PRODUCTS: readonly MembershipProduct[] = Object.freeze([
   { sku: 'MONTHLY', name: '月度会员', points: 60, months: 1, tier: 'STANDARD' },
   { sku: 'ANNUAL', name: '年度会员', points: 480, months: 12, tier: 'STANDARD' },
-  { sku: 'LIFETIME', name: '永久会员', points: 1290, months: null, tier: 'STANDARD' },
-  { sku: 'SUPER_LIFETIME', name: '永久超级会员', points: 2490, months: null, tier: 'SUPER' }
+  { sku: 'LIFETIME', name: '终身会员', points: 1290, months: null, tier: 'STANDARD' },
+  { sku: 'SUPER_LIFETIME', name: '终身超级会员', points: 2490, months: null, tier: 'SUPER' }
 ] satisfies MembershipProduct[]);
 
 export interface MembershipState {
@@ -152,7 +152,7 @@ export function planMembershipPurchase(
   const active = membershipActive(current, now) ? current : null;
   if (active?.expiresAt === null &&
       (active.sku === 'SUPER_LIFETIME' || sku !== 'SUPER_LIFETIME')) {
-    throw new MembershipError(409, 'MEMBERSHIP_ALREADY_OWNED', '已拥有永久权益，无需重复购买或降级');
+    throw new MembershipError(409, 'MEMBERSHIP_ALREADY_OWNED', '已拥有终身权益，无需重复购买或降级');
   }
   let creditPoints = 0;
   if (active && product.months === null) {

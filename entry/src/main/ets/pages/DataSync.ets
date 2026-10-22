@@ -250,7 +250,7 @@ struct DataSyncPage {
       .width('100%')
 
       if (!this.accountLoggedIn) {
-        Text('登录华为账号后，可跨设备同步书架、阅读进度和阅读设置；永久超级会员还可同步本地书籍和自定义字体。')
+        Text('登录华为账号后，可跨设备同步书架、阅读进度和阅读设置；终身超级会员还可同步本地书籍和自定义字体。')
           .fontSize(AppFontSize.BODY)
           .fontColor(this.subTextColor())
           .lineHeight(20)
@@ -308,7 +308,7 @@ struct DataSyncPage {
   @Builder
   fileSyncRow(title: string, description: string, books: boolean) {
     SettingRow({ title: title,
-      description: this.isSuperMember() ? description : '永久超级会员专享 · 请开通或升级',
+      description: this.isSuperMember() ? description : '终身超级会员专享 · 请开通或升级',
       onTap: () => {
         if (!this.isSuperMember()) this.promptSuperMembership();
       } }) {
@@ -328,8 +328,8 @@ struct DataSyncPage {
 
   async promptSuperMembership(): Promise<void> {
     const result = await promptAction.showDialog({
-      title: '永久超级会员专享',
-      message: '本地书籍和自定义字体同步仅限永久超级会员，请开通或升级为永久超级会员。',
+      title: '终身超级会员专享',
+      message: '本地书籍和自定义字体同步仅限终身超级会员，请开通或升级为终身超级会员。',
       buttons: [
         { text: '取消', color: this.subTextColor() },
         { text: '开通或升级', color: this.accentColor() }
