@@ -624,15 +624,18 @@ export class WebBookService {
       if (result.kind === 'images' && result.images.length > 0) {
         // 漫画图片按显式图片列表处理，地址后附带的请求头选项会在取图时生效。
         return await this.normalizeReaderContent(source, '',
-          result.baseUrl || chapter.url || book.bookUrl || source.bookSourceUrl, result.images);
+          result.baseUrl || chapter.url || book.bookUrl || source.bookSourceUrl, result.images,
+          (): boolean => this.contentRequestCanceled(shouldCancel));
       }
       if (!result.text.trim()) {
         SourceEngineHost.setError(source, '正文规则没有取到内容');
         return '';
       }
       return await this.normalizeReaderContent(source, result.text,
-        result.baseUrl || chapter.url || book.bookUrl || source.bookSourceUrl);
+        result.baseUrl || chapter.url || book.bookUrl || source.bookSourceUrl, [],
+        (): boolean => this.contentRequestCanceled(shouldCancel));
     } catch (e) {
+      if (this.contentRequestCanceled(shouldCancel)) return '';
       console.warn('[WS] native content failed:', source.bookSourceName, (e as Error).message);
       SourceEngineHost.setError(source, (e as Error).message || '正文解析失败');
       return '';
@@ -1331,11 +1334,11 @@ export class WebBookService {
   }
 
   private async normalizeReaderContent(source: BookSource, content: string, baseUrl: string,
-    imageRuleValues: string[] = []): Promise<string> {
+    imageRuleValues: string[] = [], cancelled: () => boolean = (): boolean => false): Promise<string> {
     const explicitImages = this.collectReaderImageUrls(imageRuleValues, baseUrl, true);
     if (explicitImages.length > 0) {
       return await this.materializeReaderImageMarkers(source,
-        explicitImages.map((url: string): string => ReaderImageMarker.create(url)).join('\n\n'));
+        explicitImages.map((url: string): string => ReaderImageMarker.create(url)).join('\n\n'), cancelled);
     }
 
     let value = content || '';
@@ -1372,7 +1375,7 @@ export class WebBookService {
       .replace(/&amp;/g, '&')
       .replace(/\n{3,}/g, '\n\n')
       .trim();
-    return await this.materializeReaderImageMarkers(source, ReaderActionMarker.limit(normalized));
+    return await this.materializeReaderImageMarkers(source, ReaderActionMarker.limit(normalized), cancelled);
   }
 
   private convertReaderNativeActions(_source: BookSource, content: string, _baseUrl: string): string {
@@ -1500,7 +1503,8 @@ export class WebBookService {
     return ReaderActionMarker.create(label, url, title);
   }
 
-  private async materializeReaderImageMarkers(source: BookSource, content: string): Promise<string> {
+  private async materializeReaderImageMarkers(source: BookSource, content: string,
+    cancelled: () => boolean = (): boolean => false): Promise<string> {
     if (!content || !content.includes(ReaderImageMarker.PREFIX)) return content;
     const pattern = new RegExp(`${this.escapeRegex(ReaderImageMarker.PREFIX)}([^\\]]+)` +
       `${this.escapeRegex(ReaderImageMarker.SUFFIX)}`, 'g');
@@ -1516,9 +1520,10 @@ export class WebBookService {
     if (values.length === 0) return content;
     const resolved: Record<string, string> = {};
     for (let start = 0; start < values.length; start += 4) {
+      if (cancelled()) throw new Error(HttpClient.CANCELLED_ERROR);
       const batch = values.slice(start, start + 4);
-      const paths = await Promise.all(batch.map((value: string): Promise<string> =>
-        ComicImagePipeline.materialize(this.http, source, value, true)));
+      const paths = await Promise.all(batch.map((value: string, index: number): Promise<string> =>
+        ComicImagePipeline.materialize(this.http, source, value, true, cancelled, start + index)));
       for (let index = 0; index < batch.length; index++) {
         resolved[batch[index]] = paths[index] || batch[index];
       }
