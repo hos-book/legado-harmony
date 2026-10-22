@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { PoolClient } from 'pg';
 import type { MembershipSalesPilot } from './membershipSales.js';
+import { claimSuperTheme } from './superThemeService.js';
 import { MEMBERSHIP_PRODUCTS, MembershipError, MembershipSku, VoiceTier } from './membershipPolicy.js';
 import { claimMembershipGift, membershipCatalog, membershipSnapshot, purchaseMembership, quoteMembership } from './membershipService.js';
 
@@ -86,4 +87,14 @@ export function registerMembershipRoutes(app: FastifyInstance, deps: MembershipR
       ttsWallet: await deps.wallet(client, userId)
     }));
   });
+  app.post<{ Params: { themeId: string }; Body: { requestId: string } }>(
+    '/v1/membership/themes/:themeId/claim', { preHandler: deps.authenticate }, async request => {
+      requireEnabled();
+      const userId = deps.userId(request);
+      await deps.limit(userId);
+      return deps.transaction(async client => {
+        const claim = await claimSuperTheme(client, userId, request.params.themeId, request.body?.requestId);
+        return { claim, account: await deps.account(client, userId) };
+      });
+    });
 }

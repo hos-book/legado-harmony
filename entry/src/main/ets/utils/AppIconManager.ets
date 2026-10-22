@@ -3,6 +3,7 @@ import { deviceInfo } from '@kit.BasicServicesKit';
 import { AppIconSettings, AppIconSettingsStore } from './AppIconSettingsStore';
 import { BuiltinThemeRegistry } from '../theme/BuiltinThemeRegistry';
 import { ThemeIds } from '../theme/ThemeModels';
+import { AccountSessionStore } from '../account/AccountSessionStore';
 
 export class AppIconOption {
   id: string = '';
@@ -37,6 +38,7 @@ export class AppIconManager {
     AppIconManager.themeOption(ThemeIds.AZURE_MECHA, 'theme_azure_mecha', $r('app.media.ic_app_theme_azure_mecha')),
     AppIconManager.themeOption(ThemeIds.STARWISH_MAGIC, 'theme_starwish_magic', $r('app.media.ic_app_theme_starwish_magic')),
     AppIconManager.themeOption(ThemeIds.LETTERPRESS_PAGE, 'theme_letterpress_page', $r('app.media.ic_app_theme_letterpress_page')),
+    AppIconManager.themeOption(ThemeIds.OBSIDIAN_ARCHIVE, 'theme_obsidian_archive', $r('app.media.ic_app_theme_obsidian_archive')),
     AppIconManager.themeOption(ThemeIds.CUSTOM, 'theme_custom', $r('app.media.ic_app_theme_custom'))
   ];
   private static changeRevision: number = 0;
@@ -64,6 +66,9 @@ export class AppIconManager {
   }
 
   static async applyIcon(context: Context, option: AppIconOption): Promise<void> {
+    if (option.id === 'theme_obsidian_archive' && !AccountSessionStore.hasOwnedEntitlement(ThemeIds.OBSIDIAN_ARCHIVE)) {
+      throw new Error('请先领取永久超级会员专属主题');
+    }
     if (!AppIconManager.isSupported()) throw new Error(AppIconManager.UNSUPPORTED_MESSAGE);
     if (AppIconManager.applying) throw new Error('桌面图标正在切换，请稍后重试');
     AppIconManager.applying = true;

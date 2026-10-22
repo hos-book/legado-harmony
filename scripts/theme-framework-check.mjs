@@ -83,7 +83,7 @@ const pages = JSON.parse(read('entry/src/main/resources/base/profile/main_pages.
 
 const expectedThemes = [
   'classic-blue', 'warm-paper', 'forest-mist', 'ink-wash', 'neon-night', 'sword-frost',
-  'qingluan-water', 'cat-pipi', 'azure-mecha', 'starwish-magic', 'letterpress-page'
+  'qingluan-water', 'cat-pipi', 'azure-mecha', 'starwish-magic', 'letterpress-page', 'obsidian-archive'
 ];
 for (const themeId of expectedThemes) {
   assert(models.includes(`'${themeId}'`), `Theme id is missing from ThemeModels: ${themeId}`);
@@ -202,6 +202,13 @@ const swordFrostJpegs = [
   'theme_cover_sword_frost_05.jpg', 'theme_cover_sword_frost_06.jpg',
   'theme_folder_art_sword_frost.jpg'
 ];
+for (const fileName of ['theme_startup_obsidian_archive.jpg', 'theme_cover_obsidian_archive_01.jpg',
+  'theme_cover_obsidian_archive_02.jpg', 'theme_folder_art_obsidian_archive.jpg']) {
+  const dimensions = jpegDimensions(path.join(mediaRoot, fileName));
+  const expected = fileName.includes('startup') ? { width: 841, height: 1870 } : { width: 450, height: 660 };
+  assert(dimensions.width === expected.width && dimensions.height === expected.height,
+    `Invalid Obsidian artwork dimensions: ${fileName}`);
+}
 for (const fileName of swordFrostJpegs) {
   const filePath = path.join(mediaRoot, fileName);
   assert(fs.existsSync(filePath), `Sword Frost artwork is missing: ${fileName}`);
@@ -280,7 +287,7 @@ for (const fileName of catPipiSvgs) {
 }
 
 const bubbleStyles = ['qq-soft', 'qq-solid', 'capsule', 'paper', 'neon', 'sword-talisman', 'qingluan-jade',
-  'pipi-soft-paw', 'mecha-comm', 'starwish-ribbon', 'pencil-mark'];
+  'pipi-soft-paw', 'mecha-comm', 'starwish-ribbon', 'pencil-mark', 'gilded-orbit'];
 for (const styleId of bubbleStyles) {
   assert(models.includes(`'${styleId}'`), `Bubble style is missing from ThemeModels: ${styleId}`);
   assert(regexModel.includes(`'${styleId}'`), `Bubble resolver/codec is missing style: ${styleId}`);

@@ -3,6 +3,7 @@ import { AppThemeSettings, AppThemeSettingsStore } from './AppThemeSettingsStore
 import { RecentReadCardUpdater } from './RecentReadCardUpdater';
 import { BuiltinThemeRegistry } from '../theme/BuiltinThemeRegistry';
 import { ReaderFontBootstrap } from './ReaderFontBootstrap';
+import { ThemeIds } from '../theme/ThemeModels';
 
 export class ThemeTrialManager {
   static readonly STORAGE_TRIAL_THEME_ID: string = 'themeTrialThemeId';
@@ -21,6 +22,7 @@ export class ThemeTrialManager {
   }
 
   static async start(context: common.UIAbilityContext, themeId: string): Promise<void> {
+    if (themeId === ThemeIds.OBSIDIAN_ARCHIVE) throw new Error('永久超级会员专属主题，请先领取后使用');
     if (!ThemeTrialManager.originalSettings) {
       ThemeTrialManager.originalSettings = await AppThemeSettingsStore.load(context);
     }

@@ -16,6 +16,18 @@ export class ThemeCatalogItem {
   displayName: string = '';
   pricePoints: number = 60;
   validDays: number = 365;
+  acquisition: string = 'POINTS';
+}
+
+export class SuperThemeClaim {
+  themeId: string = '';
+  expiresAt: number = 0;
+  duplicate: boolean = false;
+}
+
+export class SuperThemeClaimResponse {
+  claim: SuperThemeClaim = new SuperThemeClaim();
+  account: AccountSnapshot = new AccountSnapshot();
 }
 
 export class ThemeCatalogResponse {

@@ -7,6 +7,7 @@ import { ThemeIds } from '../theme/ThemeModels';
 import { AppThemeSettingsStore } from '../utils/AppThemeSettingsStore';
 import { ThemeTrialManager } from '../utils/ThemeTrialManager';
 import { ReaderFontBootstrap } from '../utils/ReaderFontBootstrap';
+import { AppIconManager } from '../utils/AppIconManager';
 
 export class MembershipThemeGuard {
   private static readonly STORE_NAME: string = 'membership_theme_guard';
@@ -34,8 +35,17 @@ export class MembershipThemeGuard {
       const themeId = settings.themeId;
       const store = await preferences.getPreferences(context, MembershipThemeGuard.STORE_NAME);
       const marked = await store.get(MembershipThemeGuard.KEY_GRANTED_THEME, '') as string;
-      if (!themeId || themeId === ThemeIds.CUSTOM || BuiltinThemeRegistry.isFree(themeId) ||
-        AccountSessionStore.hasOwnedEntitlement(themeId) || AccountSessionStore.hasMemberThemeAccess(themeId)) {
+      const exclusiveAllowed = AccountSessionStore.hasOwnedEntitlement(ThemeIds.OBSIDIAN_ARCHIVE);
+      const customUsesExclusive = themeId === ThemeIds.CUSTOM &&
+        (settings.customBaseThemeId === ThemeIds.OBSIDIAN_ARCHIVE ||
+        (JSON.stringify(settings.customLightSources) || '').includes(ThemeIds.OBSIDIAN_ARCHIVE) ||
+        (JSON.stringify(settings.customDarkSources) || '').includes(ThemeIds.OBSIDIAN_ARCHIVE));
+      const withdrawExclusive = !exclusiveAllowed && (themeId === ThemeIds.OBSIDIAN_ARCHIVE || customUsesExclusive);
+      if (!exclusiveAllowed && AppStorage.get<string>('appIconId') === 'theme_obsidian_archive') {
+        await AppIconManager.applyIcon(context, AppIconManager.optionById('default')).catch(() => {});
+      }
+      if (!withdrawExclusive && (!themeId || themeId === ThemeIds.CUSTOM || BuiltinThemeRegistry.isFree(themeId) ||
+        AccountSessionStore.hasOwnedEntitlement(themeId) || AccountSessionStore.hasMemberThemeAccess(themeId))) {
         // Remember themes that are in use only through membership; everything else clears the mark.
         const next = AccountSessionStore.hasMemberThemeAccess(themeId) &&
           !AccountSessionStore.hasOwnedEntitlement(themeId) ? themeId : '';
@@ -47,7 +57,7 @@ export class MembershipThemeGuard {
       }
       // Withdraw only a theme this guard saw granted by membership. Other active themes keep the
       // long-standing ThemeAccessPolicy behavior (e.g. a separately bought theme after logout).
-      if (marked !== themeId) return;
+      if (marked !== themeId && !withdrawExclusive) return;
       const fallback = AppThemeSettingsStore.activateTheme(AppThemeSettingsStore.DEFAULT_THEME_ID, settings);
       await AppThemeSettingsStore.save(context, fallback);
       AppThemeSettingsStore.applyToStorage(fallback);

@@ -20,6 +20,7 @@ let failSet = false;
 let failSave = false;
 let deferredQuery = null;
 let deferredSet = null;
+let exclusiveGranted = false;
 const manifest = JSON.parse(read('AppScope/app.json5')).app.alternateIcons;
 const snapshot = () => manifest.map(({ name }, index) =>
   ({ iconName: name, iconId: index + 1, enabled: name === enabled }));
@@ -27,6 +28,7 @@ const sandbox = {
   console: { warn() {} },
   $r: (name) => name,
   deviceInfo: { sdkApiVersion: 26 },
+  AccountSessionStore: { hasOwnedEntitlement: id => id === 'obsidian-archive' && exclusiveGranted },
   AppIconSettings: class { iconId = 'default'; },
   AppIconSettingsStore: {
     DEFAULT_ICON_ID: 'default',
@@ -81,6 +83,31 @@ for (const item of manager.OPTIONS) assertResource(item.preview, false);
 for (const theme of sandbox.themes) {
   assert.equal(manager.optionForTheme(theme.id).title, theme.name, `Theme/icon name mismatch: ${theme.id}`);
 }
+// Exercise the production color selector with both variants of the exclusive theme.
+vm.runInContext(source('theme/ThemeRuntime') + '\nglobalThis.runtime = ThemeRuntime;', sandbox);
+const exclusive = sandbox.themes.find(theme => theme.id === 'obsidian-archive');
+function luminance(hex) {
+  const rgb = [1, 3, 5].map(start => parseInt(hex.slice(start, start + 2), 16) / 255)
+    .map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+  return rgb[0] * .2126 + rgb[1] * .7152 + rgb[2] * .0722;
+}
+function contrast(a, b) {
+  const x = luminance(a), y = luminance(b);
+  return (Math.max(x, y) + .05) / (Math.min(x, y) + .05);
+}
+for (const variant of [exclusive.light, exclusive.dark]) {
+  for (const background of [variant.colors.pageColor, variant.colors.cardColor]) {
+    for (const foreground of [variant.colors.primaryTextColor, variant.colors.subTextColor, variant.colors.accentColor]) {
+      assert(contrast(background, foreground) >= 4.5, `Insufficient theme text contrast: ${background}/${foreground}`);
+    }
+  }
+  for (const background of [variant.colors.accentColor, variant.colors.buttonColor, variant.colors.dangerColor]) {
+    assert(contrast(background, sandbox.runtime.onAccentColor(background)) >= 4.5);
+  }
+  assert(contrast(variant.reader.backgroundColor, variant.reader.textColor) >= 7);
+  assert(contrast(variant.reader.backgroundColor, variant.reader.subTextColor) >= 4.5);
+}
+assert.equal(sandbox.runtime.onAccentColor(), '#FFFFFF', 'Preserve existing callers without an explicit fill');
 assert.equal(manager.optionForTheme('custom').title, '自定义主题');
 
 // Old devices must never call the new APIs, including the default-icon path.
@@ -92,6 +119,14 @@ assert.equal(queries, 0);
 assert.equal(calls.length, 0);
 assert.equal(current, 'default');
 sandbox.deviceInfo.sdkApiVersion = 26;
+
+await assert.rejects(manager.applyIcon({}, option('theme_obsidian_archive')));
+assert.equal(calls.length, 0, 'Unclaimed exclusive icon must never call the system setter');
+exclusiveGranted = true;
+await manager.applyIcon({}, option('theme_obsidian_archive'));
+assert.equal(current, 'theme_obsidian_archive');
+exclusiveGranted = false;
+await manager.applyIcon({}, option('default'));
 
 await manager.applyIcon({}, option('theme_cat_pipi'));
 assert.equal(enabled, 'theme_cat_pipi');

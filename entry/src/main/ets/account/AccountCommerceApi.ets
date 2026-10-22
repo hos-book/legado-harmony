@@ -2,6 +2,7 @@ import http from '@ohos.net.http';
 import { util } from '@kit.ArkTS';
 import { AccountCommerceConfig } from './AccountCommerceConfig';
 import { MembershipCatalog, MembershipQuote, MembershipSnapshot, MembershipOrderList } from './MembershipModels';
+import { SuperThemeClaimResponse } from './AccountCommerceModels';
 import {
   AccountApiError,
   AvatarCrop,
@@ -133,6 +134,14 @@ export class AccountCommerceApi {
   static async fetchThemeCatalog(): Promise<ThemeCatalogResponse> {
     const value = await AccountCommerceApi.request('/v1/themes/catalog', 'GET', '', '');
     return JSON.parse(value) as ThemeCatalogResponse;
+  }
+
+  static async claimSuperTheme(themeId: string, requestId: string, token: string): Promise<SuperThemeClaimResponse> {
+    const value = await AccountCommerceApi.request(`/v1/membership/themes/${encodeURIComponent(themeId)}/claim`,
+      'POST', JSON.stringify({ requestId: requestId }), token);
+    const response = JSON.parse(value) as SuperThemeClaimResponse;
+    response.account = AccountCommerceApi.normalizeAccount(response.account);
+    return response;
   }
 
   static async creditIapPurchase(purchaseData: string, sessionToken: string): Promise<IapCreditResponse> {

@@ -272,6 +272,12 @@ BuiltinThemeRegistry.register(theme);
 
 ## 验证
 
+### 永久超级会员领取型主题
+
+`obsidian-archive`（曜金藏书）是手动领取型主题，不能套用普通主题的点数购买、会员主题库自动授权或试用逻辑。它使用 `gilded-orbit` 气泡、配套浅深阅读角饰及独立即梦位图。授权同时要求永久超级会员身份和一年内的有效领取记录；到期后才能再次领取。
+
+修改相关入口时，保持 `ThemeAccessPolicy`、自定义部件选择、`ThemeTrialManager`、`AppIconManager` 和 `MembershipThemeGuard` 的一致性。详细规则、资源记录和数据库迁移顺序见 [专属主题说明](membership/super-exclusive-theme.md)。
+
 运行主题回归脚本：
 
 ```powershell

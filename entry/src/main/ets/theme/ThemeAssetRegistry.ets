@@ -30,7 +30,9 @@ export class ThemeAssetRegistry {
   static readonly BACKGROUND_STARWISH_MAGIC_LIGHT: string = 'starwish-magic-light';
   static readonly BACKGROUND_STARWISH_MAGIC_DARK: string = 'starwish-magic-dark';
   static readonly BACKGROUND_LETTERPRESS_PAGE_LIGHT: string = 'letterpress-page-light';
+  static readonly BACKGROUND_OBSIDIAN_ARCHIVE_LIGHT: string = 'obsidian-archive-light';
   static readonly BACKGROUND_LETTERPRESS_PAGE_DARK: string = 'letterpress-page-dark';
+  static readonly BACKGROUND_OBSIDIAN_ARCHIVE_DARK: string = 'obsidian-archive-dark';
 
   static readonly ICON_PACK_CLASSIC: string = 'classic';
   static readonly ICON_PACK_ROUNDED: string = 'rounded';
@@ -46,6 +48,7 @@ export class ThemeAssetRegistry {
   static readonly ICON_PACK_AZURE_MECHA: string = 'azure-mecha';
   static readonly ICON_PACK_STARWISH_MAGIC: string = 'starwish-magic';
   static readonly ICON_PACK_LETTERPRESS_PAGE: string = 'letterpress-page';
+  static readonly ICON_PACK_OBSIDIAN_ARCHIVE: string = 'obsidian-archive';
 
   static readonly TAB_BOOKSHELF: string = 'bookshelf';
   static readonly TAB_EXPLORE: string = 'explore';
@@ -112,8 +115,12 @@ export class ThemeAssetRegistry {
         return $r('app.media.reader_bg_starwish_magic_dark');
       case ThemeAssetRegistry.BACKGROUND_LETTERPRESS_PAGE_LIGHT:
         return $r('app.media.reader_bg_letterpress_page_light');
+      case ThemeAssetRegistry.BACKGROUND_OBSIDIAN_ARCHIVE_LIGHT:
+        return $r('app.media.reader_bg_obsidian_archive_light');
       case ThemeAssetRegistry.BACKGROUND_LETTERPRESS_PAGE_DARK:
         return $r('app.media.reader_bg_letterpress_page_dark');
+      case ThemeAssetRegistry.BACKGROUND_OBSIDIAN_ARCHIVE_DARK:
+        return $r('app.media.reader_bg_obsidian_archive_dark');
       default:
         return '';
     }
@@ -179,8 +186,12 @@ export class ThemeAssetRegistry {
         return $r('app.media.reader_decor_starwish_magic_dark');
       case ThemeAssetRegistry.BACKGROUND_LETTERPRESS_PAGE_LIGHT:
         return $r('app.media.reader_decor_letterpress_page_light');
+      case ThemeAssetRegistry.BACKGROUND_OBSIDIAN_ARCHIVE_LIGHT:
+        return $r('app.media.reader_decor_obsidian_archive_light');
       case ThemeAssetRegistry.BACKGROUND_LETTERPRESS_PAGE_DARK:
         return $r('app.media.reader_decor_letterpress_page_dark');
+      case ThemeAssetRegistry.BACKGROUND_OBSIDIAN_ARCHIVE_DARK:
+        return $r('app.media.reader_decor_obsidian_archive_dark');
       default:
         return '';
     }
@@ -249,8 +260,12 @@ export class ThemeAssetRegistry {
         return $r('app.media.reader_decor_starwish_magic_trailing_dark');
       case ThemeAssetRegistry.BACKGROUND_LETTERPRESS_PAGE_LIGHT:
         return $r('app.media.reader_decor_letterpress_page_trailing_light');
+      case ThemeAssetRegistry.BACKGROUND_OBSIDIAN_ARCHIVE_LIGHT:
+        return $r('app.media.reader_decor_obsidian_archive_trailing_light');
       case ThemeAssetRegistry.BACKGROUND_LETTERPRESS_PAGE_DARK:
         return $r('app.media.reader_decor_letterpress_page_trailing_dark');
+      case ThemeAssetRegistry.BACKGROUND_OBSIDIAN_ARCHIVE_DARK:
+        return $r('app.media.reader_decor_obsidian_archive_trailing_dark');
       default:
         return ThemeAssetRegistry.readerBackgroundDecoration(assetId);
     }
@@ -280,7 +295,8 @@ export class ThemeAssetRegistry {
       normalizedPackId === ThemeAssetRegistry.ICON_PACK_CAT_PIPI ||
       normalizedPackId === ThemeAssetRegistry.ICON_PACK_AZURE_MECHA ||
       normalizedPackId === ThemeAssetRegistry.ICON_PACK_STARWISH_MAGIC ||
-      normalizedPackId === ThemeAssetRegistry.ICON_PACK_LETTERPRESS_PAGE) {
+      normalizedPackId === ThemeAssetRegistry.ICON_PACK_LETTERPRESS_PAGE ||
+      normalizedPackId === ThemeAssetRegistry.ICON_PACK_OBSIDIAN_ARCHIVE) {
       return ThemeAssetRegistry.themedNavigationIcon(normalizedPackId, normalizedTabId);
     }
     return ThemeAssetRegistry.classicNavigationIcon(normalizedTabId);
@@ -322,6 +338,8 @@ export class ThemeAssetRegistry {
         return $r('app.media.theme_logo_starwish_magic');
       case ThemeIds.LETTERPRESS_PAGE:
         return $r('app.media.theme_logo_letterpress_page');
+      case ThemeIds.OBSIDIAN_ARCHIVE:
+        return $r('app.media.theme_logo_obsidian_archive');
       default:
         return $r('app.media.theme_logo_classic_blue');
     }
@@ -344,6 +362,7 @@ export class ThemeAssetRegistry {
       case ThemeIds.AZURE_MECHA: return $r('app.media.theme_startup_azure_mecha');
       case ThemeIds.STARWISH_MAGIC: return $r('app.media.theme_startup_starwish_magic');
       case ThemeIds.LETTERPRESS_PAGE: return $r('app.media.theme_startup_letterpress_page');
+      case ThemeIds.OBSIDIAN_ARCHIVE: return $r('app.media.theme_startup_obsidian_archive');
       default: return $r('app.media.theme_startup_classic_blue');
     }
   }
@@ -427,6 +446,9 @@ export class ThemeAssetRegistry {
         $r('app.media.theme_cover_letterpress_page_03'), $r('app.media.theme_cover_letterpress_page_04'),
         $r('app.media.theme_cover_letterpress_page_05'), $r('app.media.theme_cover_letterpress_page_06')
       ];
+      case ThemeIds.OBSIDIAN_ARCHIVE: return [
+        $r('app.media.theme_cover_obsidian_archive_01'), $r('app.media.theme_cover_obsidian_archive_02')
+      ];
       default: return [
         $r('app.media.theme_cover_classic_blue_01'), $r('app.media.theme_cover_classic_blue_02'),
         $r('app.media.theme_cover_classic_blue_03'), $r('app.media.theme_cover_classic_blue_04')
@@ -452,6 +474,7 @@ export class ThemeAssetRegistry {
       case ThemeIds.AZURE_MECHA: return $r('app.media.theme_frame_azure_mecha');
       case ThemeIds.STARWISH_MAGIC: return $r('app.media.theme_frame_starwish_magic');
       case ThemeIds.LETTERPRESS_PAGE: return $r('app.media.theme_frame_letterpress_page');
+      case ThemeIds.OBSIDIAN_ARCHIVE: return $r('app.media.theme_frame_obsidian_archive');
       default: return $r('app.media.theme_frame_classic_blue');
     }
   }
@@ -474,6 +497,7 @@ export class ThemeAssetRegistry {
       case ThemeIds.AZURE_MECHA: return $r('app.media.theme_folder_art_azure_mecha');
       case ThemeIds.STARWISH_MAGIC: return $r('app.media.theme_folder_art_starwish_magic');
       case ThemeIds.LETTERPRESS_PAGE: return $r('app.media.theme_folder_art_letterpress_page');
+      case ThemeIds.OBSIDIAN_ARCHIVE: return $r('app.media.theme_folder_art_obsidian_archive');
       default: return $r('app.media.theme_folder_art_classic_blue');
     }
   }
@@ -496,6 +520,7 @@ export class ThemeAssetRegistry {
       case 'mecha-comm': return $r('app.media.regex_frame_mecha_comm');
       case 'starwish-ribbon': return $r('app.media.regex_frame_starwish_ribbon');
       case 'pencil-mark': return $r('app.media.regex_frame_pencil_mark');
+      case 'gilded-orbit': return $r('app.media.regex_frame_gilded_orbit');
       default: return '';
     }
   }
@@ -522,6 +547,7 @@ export class ThemeAssetRegistry {
       case 'mecha-comm': return $r('app.media.regex_cap_mecha_comm');
       case 'starwish-ribbon': return $r('app.media.regex_cap_starwish_ribbon');
       case 'pencil-mark': return $r('app.media.regex_cap_pencil_mark');
+      case 'gilded-orbit': return $r('app.media.regex_cap_gilded_orbit');
       default: return '';
     }
   }
@@ -563,6 +589,8 @@ export class ThemeAssetRegistry {
       case ThemeAssetRegistry.BACKGROUND_STARWISH_MAGIC_DARK:
       case ThemeAssetRegistry.BACKGROUND_LETTERPRESS_PAGE_LIGHT:
       case ThemeAssetRegistry.BACKGROUND_LETTERPRESS_PAGE_DARK:
+      case ThemeAssetRegistry.BACKGROUND_OBSIDIAN_ARCHIVE_LIGHT:
+      case ThemeAssetRegistry.BACKGROUND_OBSIDIAN_ARCHIVE_DARK:
         return normalized;
       default:
         return '';
@@ -583,7 +611,8 @@ export class ThemeAssetRegistry {
       normalized === ThemeAssetRegistry.ICON_PACK_CAT_PIPI ||
       normalized === ThemeAssetRegistry.ICON_PACK_AZURE_MECHA ||
       normalized === ThemeAssetRegistry.ICON_PACK_STARWISH_MAGIC ||
-      normalized === ThemeAssetRegistry.ICON_PACK_LETTERPRESS_PAGE) {
+      normalized === ThemeAssetRegistry.ICON_PACK_LETTERPRESS_PAGE ||
+      normalized === ThemeAssetRegistry.ICON_PACK_OBSIDIAN_ARCHIVE) {
       return normalized;
     }
     return ThemeAssetRegistry.ICON_PACK_CLASSIC;
@@ -717,6 +746,14 @@ export class ThemeAssetRegistry {
         case ThemeAssetRegistry.TAB_SEARCH: return $r('app.media.ic_theme_letterpress_page_search');
         case ThemeAssetRegistry.TAB_MINE: return $r('app.media.ic_theme_letterpress_page_mine');
         default: return $r('app.media.ic_theme_letterpress_page_bookshelf');
+      }
+    }
+    if (iconPackId === ThemeAssetRegistry.ICON_PACK_OBSIDIAN_ARCHIVE) {
+      switch (tabId) {
+        case ThemeAssetRegistry.TAB_EXPLORE: return $r('app.media.ic_theme_obsidian_archive_explore');
+        case ThemeAssetRegistry.TAB_SEARCH: return $r('app.media.ic_theme_obsidian_archive_search');
+        case ThemeAssetRegistry.TAB_MINE: return $r('app.media.ic_theme_obsidian_archive_mine');
+        default: return $r('app.media.ic_theme_obsidian_archive_bookshelf');
       }
     }
     switch (tabId) {

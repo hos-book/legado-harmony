@@ -24,6 +24,7 @@ import { AccountApiError, ThemeCatalogItem, ThemeCatalogResponse,
   ThemeEntitlement } from '../account/AccountCommerceModels';
 import { AccountCommerceApi } from '../account/AccountCommerceApi';
 import { AccountSessionStore } from '../account/AccountSessionStore';
+import { MembershipCommerceService } from '../account/MembershipCommerceService';
 import { HuaweiAccountService } from '../account/HuaweiAccountService';
 import {
   ReaderRegexBubbleStyleResolver,
@@ -107,6 +108,10 @@ class ThemeApplyChoice {
 }
 
 /** One theme the user can apply right away; customSchemeId is set for custom schemes. */
+class ThemeSettingsRouteParams {
+  themeId: string = '';
+}
+
 class ThemeListEntry {
   theme: ThemePack;
   customSchemeId: string;
@@ -205,6 +210,10 @@ struct ThemeSettingsPage {
     this.initializeAccount();
     this.refreshThemeCatalog();
     this.syncBars();
+    const params = router.getParams() as ThemeSettingsRouteParams;
+    if (params?.themeId === ThemeIds.OBSIDIAN_ARCHIVE) {
+      this.openThemePager([new ThemeListEntry(BuiltinThemeRegistry.findById(params.themeId))], 0);
+    }
   }
 
   onPageShow(): void {
@@ -423,7 +432,7 @@ struct ThemeSettingsPage {
     if (customScheme) {
       const unavailableStartupTheme = this.unavailableCustomStartupTheme(customScheme.settings);
       if (unavailableStartupTheme) {
-        HdsFeedback.showToast(`启动封面主题「${unavailableStartupTheme}」尚未获取或已过期`);
+        HdsFeedback.showToast(`方案使用的主题「${unavailableStartupTheme}」尚未获取或已过期`);
         return;
       }
     }
@@ -554,6 +563,7 @@ struct ThemeSettingsPage {
     if (themeId === ThemeIds.CUSTOM || this.hasThemeAccess(themeId)) {
       return true;
     }
+    if (themeId === ThemeIds.OBSIDIAN_ARCHIVE) return this.claimExclusiveTheme();
     const offer = this.themeOffer(themeId);
     if (!offer) {
       if (this.themeCatalogLoaded) {
@@ -623,11 +633,48 @@ struct ThemeSettingsPage {
   themeOffer(themeId: string): ThemeCatalogItem | null {
     for (let index = 0; index < this.themeCatalog.length; index++) {
       const offer = this.themeCatalog[index];
-      if (offer && offer.themeId === themeId && offer.pricePoints > 0 && offer.validDays > 0) {
+      if (offer && offer.themeId === themeId &&
+        (offer.pricePoints > 0 || offer.acquisition === 'SUPER_CLAIM') && offer.validDays > 0) {
         return offer;
       }
     }
     return null;
+  }
+
+  async claimExclusiveTheme(): Promise<boolean> {
+    if (!this.accountLoggedIn) {
+      HdsFeedback.showToast('请登录永久超级会员账号后领取');
+      router.pushUrl({ url: 'pages/AccountCenter' });
+      return false;
+    }
+    try {
+      await HuaweiAccountService.refresh(getContext(this));
+      if (AccountSessionStore.activeMembershipSku() !== 'SUPER_LIFETIME') {
+        HdsFeedback.showToast('「曜金藏书」仅供永久超级会员领取，不支持点数购买');
+        router.pushUrl({ url: 'pages/AccountCenter' });
+        return false;
+      }
+      if (AccountSessionStore.hasOwnedEntitlement(ThemeIds.OBSIDIAN_ARCHIVE)) return true;
+      if (!this.themeOffer(ThemeIds.OBSIDIAN_ARCHIVE)) {
+        await this.refreshThemeCatalog();
+        if (!this.themeOffer(ThemeIds.OBSIDIAN_ARCHIVE)) {
+          HdsFeedback.showToast('专属主题暂未开放领取，请稍后再试');
+          return false;
+        }
+      }
+      const choice = await promptAction.showDialog({
+        title: '领取「曜金藏书」',
+        message: '永久超级会员专属，不扣除点数。领取后有效一年，到期后可再次手动领取；有效期内不重复叠加。',
+        buttons: [{ text: '取消', color: this.subTextColor() }, { text: '领取一年', color: this.accentColor() }]
+      });
+      if (choice.index !== 1) return false;
+      await MembershipCommerceService.claimSuperTheme(getContext(this), ThemeIds.OBSIDIAN_ARCHIVE);
+      HdsFeedback.showToast('已领取「曜金藏书」，有效一年');
+      return AccountSessionStore.hasOwnedEntitlement(ThemeIds.OBSIDIAN_ARCHIVE);
+    } catch (e) {
+      HdsFeedback.showToast((e as Error).message || '领取失败，请稍后重试');
+      return false;
+    }
   }
 
   async setThemeBookCoverEnabled(enabled: boolean): Promise<void> {
@@ -1337,7 +1384,7 @@ struct ThemeSettingsPage {
           .borderRadius(this.storeButtonRadius(theme))
           .height(40)
           .fontSize(AppFontSize.BODY)
-          .fontColor(ThemeRuntime.onAccentColor())
+          .fontColor(ThemeRuntime.onAccentColor(this.activeVariant(theme).colors.buttonColor))
           .backgroundColor(this.activeVariant(theme).colors.buttonColor)
           .layoutWeight(1)
           .enabled(!this.isSelected(theme, customSchemeId))
@@ -1363,14 +1410,16 @@ struct ThemeSettingsPage {
         .width('100%')
         .height(40)
         .fontSize(AppFontSize.BODY)
-        .fontColor(ThemeRuntime.onAccentColor())
+        .fontColor(ThemeRuntime.onAccentColor(this.activeVariant(theme).colors.buttonColor))
         .backgroundColor(this.activeVariant(theme).colors.buttonColor)
         .onClick(() => {
           this.selectTheme(theme.id);
         })
     } else {
       Row({ space: AppSpacing.MD }) {
-        this.storeTrialButton(theme)
+        if (theme.id !== ThemeIds.OBSIDIAN_ARCHIVE) {
+          this.storeTrialButton(theme)
+        }
         this.storeAcquireButton(theme)
       }
       .width('100%')
@@ -1401,7 +1450,7 @@ struct ThemeSettingsPage {
       .borderRadius(this.storeButtonRadius(theme))
       .height(40)
       .fontSize(AppFontSize.BODY)
-      .fontColor(ThemeRuntime.onAccentColor())
+      .fontColor(ThemeRuntime.onAccentColor(this.activeVariant(theme).colors.buttonColor))
       .backgroundColor(this.activeVariant(theme).colors.buttonColor)
       .layoutWeight(1)
       .enabled(this.acquireButtonEnabled(theme.id))
@@ -1418,7 +1467,7 @@ struct ThemeSettingsPage {
     } else if (this.isTrialTheme(theme.id) || this.isSelected(theme, customSchemeId)) {
       Text(this.isTrialTheme(theme.id) ? '试用中' : '使用中')
         .fontSize(AppFontSize.MICRO)
-        .fontColor(ThemeRuntime.onAccentColor())
+        .fontColor(ThemeRuntime.onAccentColor(this.activeVariant(theme).colors.accentColor))
         .padding({ left: AppSpacing.SM, right: AppSpacing.SM, top: AppSpacing.XXS, bottom: AppSpacing.XXS })
         .borderRadius(10)
         .backgroundColor(this.activeVariant(theme).colors.accentColor)
@@ -1738,7 +1787,7 @@ struct ThemeSettingsPage {
             .height(42)
             .borderRadius(ThemeRuntime.buttonRadius())
             .backgroundColor(this.accentColor())
-            .fontColor(ThemeRuntime.onAccentColor())
+            .fontColor(ThemeRuntime.onAccentColor(this.accentColor()))
             .enabled(!!this.renameCustomThemeName.trim())
             .onClick(() => this.renameCustomTheme())
         }
@@ -1794,7 +1843,7 @@ struct ThemeSettingsPage {
             .height(42)
             .borderRadius(ThemeRuntime.buttonRadius())
             .backgroundColor(ThemeRuntime.dangerColor(this.appDarkMode))
-            .fontColor(ThemeRuntime.onAccentColor())
+            .fontColor(ThemeRuntime.onAccentColor(ThemeRuntime.dangerColor(this.appDarkMode)))
             .onClick(() => this.confirmDeleteCustomTheme())
         }
         .width('100%')
@@ -1893,7 +1942,7 @@ struct ThemeSettingsPage {
             .height(42)
             .borderRadius(ThemeRuntime.buttonRadius())
             .backgroundColor(this.accentColor())
-            .fontColor(ThemeRuntime.onAccentColor())
+            .fontColor(ThemeRuntime.onAccentColor(this.accentColor()))
             .onClick(() => this.saveStartupText())
         }
         .width('100%')
@@ -1947,7 +1996,7 @@ struct ThemeSettingsPage {
             .height(42)
             .borderRadius(ThemeRuntime.buttonRadius())
             .backgroundColor(this.accentColor())
-            .fontColor(ThemeRuntime.onAccentColor())
+            .fontColor(ThemeRuntime.onAccentColor(this.accentColor()))
             .onClick(() => this.confirmThemeApply())
         }
         .width('100%')
@@ -2238,14 +2287,14 @@ struct ThemeSettingsPage {
         if (this.isTrialTheme(theme.id)) {
           Text('试用中')
             .fontSize(AppFontSize.CAPTION)
-            .fontColor(ThemeRuntime.onAccentColor())
+            .fontColor(ThemeRuntime.onAccentColor(this.activeVariant(theme).colors.accentColor))
             .padding({ left: AppSpacing.MD, right: AppSpacing.MD, top: AppSpacing.XS, bottom: AppSpacing.XS })
             .borderRadius(12)
             .backgroundColor(this.activeVariant(theme).colors.accentColor)
         } else if (this.isSelected(theme, customSchemeId)) {
           Text('已启用')
             .fontSize(AppFontSize.CAPTION)
-            .fontColor(ThemeRuntime.onAccentColor())
+            .fontColor(ThemeRuntime.onAccentColor(this.activeVariant(theme).colors.accentColor))
             .padding({ left: AppSpacing.MD, right: AppSpacing.MD, top: AppSpacing.XS, bottom: AppSpacing.XS })
             .borderRadius(12)
             .backgroundColor(this.activeVariant(theme).colors.accentColor)
@@ -2285,7 +2334,7 @@ struct ThemeSettingsPage {
           Button('编辑主题')
             .height(32)
             .fontSize(AppFontSize.CAPTION)
-            .fontColor(ThemeRuntime.onAccentColor())
+            .fontColor(ThemeRuntime.onAccentColor(this.activeVariant(theme).colors.buttonColor))
             .backgroundColor(this.activeVariant(theme).colors.buttonColor)
             .onClick(() => {
               router.pushUrl({
@@ -2315,7 +2364,7 @@ struct ThemeSettingsPage {
           Button(this.acquireButtonLabel(theme.id, '获取主题'))
             .height(34)
             .fontSize(AppFontSize.CAPTION)
-            .fontColor(ThemeRuntime.onAccentColor())
+            .fontColor(ThemeRuntime.onAccentColor(this.activeVariant(theme).colors.buttonColor))
             .backgroundColor(this.activeVariant(theme).colors.buttonColor)
             .layoutWeight(1)
             .enabled(this.acquireButtonEnabled(theme.id))
@@ -2347,12 +2396,19 @@ struct ThemeSettingsPage {
   }
 
   hasThemeAccess(themeId: string): boolean {
+    if (themeId === ThemeIds.OBSIDIAN_ARCHIVE) return AccountSessionStore.hasOwnedEntitlement(themeId);
     return BuiltinThemeRegistry.isFree(themeId) ||
       (themeId === this.appThemeId && !this.isTrialTheme(themeId)) ||
       AccountSessionStore.hasValidEntitlement(themeId);
   }
 
   unavailableCustomStartupTheme(settings: AppThemeSettings): string {
+    const usesExclusive = settings.customBaseThemeId === ThemeIds.OBSIDIAN_ARCHIVE ||
+      (JSON.stringify(settings.customLightSources) || '').includes(ThemeIds.OBSIDIAN_ARCHIVE) ||
+      (JSON.stringify(settings.customDarkSources) || '').includes(ThemeIds.OBSIDIAN_ARCHIVE);
+    if (usesExclusive && !AccountSessionStore.hasOwnedEntitlement(ThemeIds.OBSIDIAN_ARCHIVE)) {
+      return BuiltinThemeRegistry.findById(ThemeIds.OBSIDIAN_ARCHIVE).name;
+    }
     const lightThemeId = settings.customLightSources.startupThemeId;
     if (!BuiltinThemeRegistry.isFree(lightThemeId) &&
       !AccountSessionStore.hasValidEntitlement(lightThemeId)) {
@@ -2372,7 +2428,7 @@ struct ThemeSettingsPage {
   }
 
   isThemeTrialCandidate(themeId: string): boolean {
-    return themeId !== ThemeIds.CUSTOM && !BuiltinThemeRegistry.isFree(themeId) &&
+    return themeId !== ThemeIds.CUSTOM && themeId !== ThemeIds.OBSIDIAN_ARCHIVE && !BuiltinThemeRegistry.isFree(themeId) &&
       !AccountSessionStore.hasValidEntitlement(themeId);
   }
 
@@ -2564,6 +2620,7 @@ struct ThemeSettingsPage {
 
   /** Price text for a paid theme; never a guessed price while the catalog is missing. */
   storeThemePriceLabel(themeId: string): string {
+    if (themeId === ThemeIds.OBSIDIAN_ARCHIVE) return '永久超级会员专属';
     const offer = this.themeOffer(themeId);
     if (offer) return `${offer.pricePoints}点`;
     if (this.themeCatalogLoaded) return '暂未上架';
@@ -2571,6 +2628,10 @@ struct ThemeSettingsPage {
   }
 
   acquireButtonLabel(themeId: string, action: string): string {
+    if (themeId === ThemeIds.OBSIDIAN_ARCHIVE) {
+      return AccountSessionStore.hasOwnedEntitlement(themeId) ? '已领取 · 应用主题' :
+        (AccountSessionStore.activeMembershipSku() === 'SUPER_LIFETIME' ? '领取一年' : '永久超级会员专属');
+    }
     const offer = this.themeOffer(themeId);
     if (offer) return `${action} · ${offer.pricePoints}点`;
     if (this.themeCatalogLoaded) return '暂未上架';
@@ -2579,11 +2640,12 @@ struct ThemeSettingsPage {
 
   /** Greyed out until the price is known; after a failed load the button becomes the retry. */
   acquireButtonEnabled(themeId: string): boolean {
+    if (themeId === ThemeIds.OBSIDIAN_ARCHIVE) return !this.applyingThemeId;
     return this.themeCatalogLoaded ? !!this.themeOffer(themeId) : this.themeCatalogFailed;
   }
 
   onAcquireButtonTap(themeId: string): void {
-    if (this.themeCatalogLoaded) {
+    if (themeId === ThemeIds.OBSIDIAN_ARCHIVE || this.themeCatalogLoaded) {
       this.acquireTheme(themeId);
     } else {
       this.refreshThemeCatalog();
@@ -2591,6 +2653,11 @@ struct ThemeSettingsPage {
   }
 
   storeThemeCaption(theme: ThemePack): string {
+    if (theme.id === ThemeIds.OBSIDIAN_ARCHIVE) {
+      const owned = AccountSessionStore.entitlement(theme.id);
+      return AccountSessionStore.hasOwnedEntitlement(theme.id) && owned ?
+        `已领取 · 有效至 ${this.formatDate(owned.expiresAt)}` : '永久超级会员手动领取 · 每次一年 · 不售卖';
+    }
     if (theme.id === ThemeIds.CUSTOM) {
       return '自定义方案';
     }
@@ -2614,6 +2681,9 @@ struct ThemeSettingsPage {
   }
 
   themeAccessLabel(themeId: string): string {
+    if (themeId === ThemeIds.OBSIDIAN_ARCHIVE && !AccountSessionStore.hasOwnedEntitlement(themeId)) {
+      return '永久超级会员专属 · 领取一年';
+    }
     if (AccountSessionStore.hasMemberThemeAccess(themeId)) return '会员免费';
     if (BuiltinThemeRegistry.isFree(themeId)) {
       return '免费';

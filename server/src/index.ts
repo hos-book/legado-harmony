@@ -1151,7 +1151,7 @@ async function snapshot(db: Queryable, userId: string) {
   const row = account.rows[0]!;
   const membership = config.membershipEnabled ? await membershipSnapshot(db, userId) : null;
   const memberThemes = membership?.active ? await db.query<{ theme_id: string }>(
-    'SELECT theme_id FROM theme_catalog WHERE member_included = TRUE') : null;
+    "SELECT theme_id FROM theme_catalog WHERE member_included = TRUE AND acquisition = 'POINTS'") : null;
   return {
     userId: row.id,
     displayName: row.display_name,

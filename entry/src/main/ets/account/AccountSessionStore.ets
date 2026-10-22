@@ -132,13 +132,21 @@ export class AccountSessionStore {
       (membership.tierSku || membership.state.sku) : '';
   }
 
-  /** A separately bought theme, independent of membership. */
+  /** Owned themes; the exclusive annual grant additionally requires super membership. */
   static hasOwnedEntitlement(themeId: string, now: number = Date.now()): boolean {
     const entitlement = AccountSessionStore.entitlement(themeId);
+    if (themeId === 'obsidian-archive') {
+      const account = AccountSessionStore.snapshot;
+      const elapsed = now - account.memberVerifiedAt;
+      if (AccountSessionStore.activeMembershipSku(now) !== 'SUPER_LIFETIME' || elapsed < 0 || !account.membership) return false;
+      return entitlement !== null && entitlement.expiresAt > account.membership.serverNow + elapsed;
+    }
     return entitlement !== null && entitlement.expiresAt > now;
   }
 
   static hasMemberThemeAccess(themeId: string, now: number = Date.now()): boolean {
+    // This theme requires an explicit annual claim, never the general member theme library.
+    if (themeId === 'obsidian-archive') return false;
     const account = AccountSessionStore.snapshot;
     const membership = account.membership;
     const elapsed = now - account.memberVerifiedAt;

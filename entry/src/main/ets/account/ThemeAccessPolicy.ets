@@ -11,6 +11,7 @@ export class ThemeAccessPolicy {
     if (BuiltinThemeRegistry.isFree(normalized)) {
       return true;
     }
+    if (normalized === ThemeIds.OBSIDIAN_ARCHIVE) return AccountSessionStore.hasOwnedEntitlement(normalized);
     const activeThemeId = AppStorage.get<string>('appThemeId') || '';
     // The currently applied theme must retain its complete runtime appearance,
     // including during a timed trial. Theme selection and component-source
@@ -37,6 +38,7 @@ export class ThemeAccessPolicy {
     if (normalized === 'mecha-comm') return ThemeIds.AZURE_MECHA;
     if (normalized === 'starwish-ribbon') return ThemeIds.STARWISH_MAGIC;
     if (normalized === 'pencil-mark') return ThemeIds.LETTERPRESS_PAGE;
+    if (normalized === 'gilded-orbit') return ThemeIds.OBSIDIAN_ARCHIVE;
     return '';
   }
 

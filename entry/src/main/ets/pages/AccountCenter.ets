@@ -22,6 +22,7 @@ import { MembershipOrder, MembershipProduct, MembershipPromotion, MembershipSnap
 import { CloudSyncSummary } from '../account/CloudSyncModels';
 import { HuaweiAccountService } from '../account/HuaweiAccountService';
 import { ThemeRuntime } from '../theme/ThemeRuntime';
+import { ThemeIds } from '../theme/ThemeModels';
 import { syncSystemBars } from '../utils/SystemBars';
 import { HdsFeedback } from '../utils/HdsFeedback';
 import { AppFontSize } from '../theme/AppFontSize';
@@ -966,9 +967,16 @@ struct AccountCenterPage {
     return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
   }
 
-  /** 会员卡上“领取会员权益”入口的提示：本期礼包还有没有领。 */
+  /** 会员卡上“领取会员权益”入口的提示：本期礼包、专属主题还有没有没领的。 */
   benefitsEntryHint(): string {
-    return MembershipGiftRules.pending(this.membership, this.membershipSku) ? '本期礼包待领取' : '';
+    const revision = this.entitlementsRevision;
+    const gift = MembershipGiftRules.pending(this.membership, this.membershipSku);
+    const theme = revision >= 0 && this.isSuperMember() &&
+      !AccountSessionStore.hasOwnedEntitlement(ThemeIds.OBSIDIAN_ARCHIVE);
+    if (gift && theme) return '2 项权益待领取';
+    if (gift) return '本期礼包待领取';
+    if (theme) return '专属主题待领取';
+    return '';
   }
 
   @Builder
@@ -1069,7 +1077,7 @@ struct AccountCenterPage {
             .fontSize(AppFontSize.BODY)
             .enabled(!this.loading)
             .backgroundColor(this.accentColor())
-            .fontColor(ThemeRuntime.onAccentColor())
+            .fontColor(ThemeRuntime.onAccentColor(this.accentColor()))
             .onClick(() => {
               this.login();
             })
@@ -1340,8 +1348,9 @@ struct AccountCenterPage {
   }
 
   memberCardBenefits(): string {
-    if (!this.membershipSku) return '专属主题 · 朗读礼包 · 在线朗读优先 · 书源同步';
-    const items: string[] = ['专属主题'];
+    if (!this.membershipSku) return '会员主题库 · 朗读礼包 · 在线朗读优先 · 书源同步';
+    const items: string[] = ['会员主题库'];
+    if (this.isSuperMember()) items.push('专属主题');
     if (MembershipGiftRules.included(this.membership, this.membershipSku)) items.push('每月朗读礼包');
     items.push('在线朗读优先', '书源同步');
     if (this.isSuperMember()) items.push('1GB 云空间');
@@ -1363,6 +1372,7 @@ struct AccountCenterPage {
     const limits = this.sourceUsage.membershipLimitsEnabled;
     const rows: BenefitCompareRow[] = [
       new BenefitCompareRow('会员主题库', '现有及新增会员主题', ['—', '✓', '✓', '✓', '✓']),
+      new BenefitCompareRow('专属主题', '曜金藏书 · 手动领取一年', ['—', '—', '—', '—', '✓']),
       new BenefitCompareRow('每月朗读礼包', '标准 / 精品（字）', ['—', '—', '5000\n2500', '8000\n4000', '12000\n6000']),
       new BenefitCompareRow('在线朗读优先排队', '高峰期优先', ['—', '✓', '✓', '✓', '✓']),
       new BenefitCompareRow('有效期', '不自动续费', ['—', '1 个月', '12 个月', '永久', '永久'])
@@ -1897,7 +1907,7 @@ struct AccountCenterPage {
         Button(this.processingCrop ? '处理中' : '确认裁剪')
           .layoutWeight(1.35)
           .height(40)
-          .fontColor(ThemeRuntime.onAccentColor())
+          .fontColor(ThemeRuntime.onAccentColor(this.accentColor()))
           .backgroundColor(this.accentColor())
           .enabled(!this.processingCrop)
           .onClick(() => {
@@ -2012,7 +2022,7 @@ struct AccountCenterPage {
         Button(this.savingProfile ? '保存中' : '保存')
           .layoutWeight(1)
           .height(40)
-          .fontColor(ThemeRuntime.onAccentColor())
+          .fontColor(ThemeRuntime.onAccentColor(this.accentColor()))
           .backgroundColor(this.accentColor())
           .enabled(!this.savingProfile)
           .onClick(() => {

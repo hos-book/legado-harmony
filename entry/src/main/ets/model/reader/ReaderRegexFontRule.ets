@@ -156,7 +156,7 @@ export class ReaderRegexFontCodec {
       value === 'crimson-stamp' || value === 'celadon-slip' || value === 'rose-frame' ||
       value === 'moon-halo' || value === 'sword-talisman' || value === 'qingluan-jade' ||
       value === 'pipi-soft-paw' || value === 'mecha-comm' || value === 'starwish-ribbon' ||
-      value === 'pencil-mark') {
+      value === 'pencil-mark' || value === 'gilded-orbit') {
       return value;
     }
     // Compatibility with early theme drafts.
@@ -490,6 +490,12 @@ export class ReaderRegexBubbleStyleResolver {
       ReaderRegexBubbleStyleResolver.addShadow(result, 1.4,
         ReaderRegexBubbleStyleResolver.withAlpha(base, 104), 0.5, 1);
       ReaderRegexBubbleStyleResolver.addShadow(result, 0.5, '#88B4935C', -0.5, 0.5);
+      return;
+    }
+    if (result.bubbleStyleId === 'gilded-orbit') {
+      result.backgroundColor = context.darkMode ? '#4C402D' : '#E9D8B3';
+      result.textColor = context.darkMode ? '#F1DEB4' : '#493B25';
+      ReaderRegexBubbleStyleResolver.setUniformRadius(result, 7);
       return;
     }
     if (result.bubbleStyleId === 'pencil-mark') {

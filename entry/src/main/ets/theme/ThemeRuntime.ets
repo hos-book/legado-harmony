@@ -394,7 +394,17 @@ export class ThemeRuntime {
   }
 
   /** 强调色、按钮色、危险色等实色背景上的文字。 */
-  static onAccentColor(): string {
+  static onAccentColor(backgroundColor: string = ''): string {
+    // Detail previews may use another theme's champagne accent before that theme is applied.
+    // Preserve the legacy default; callers painting a light fill can supply its actual color.
+    if (/^#[0-9a-fA-F]{6}$/.test(backgroundColor)) {
+      const channels: number[] = [1, 3, 5].map((start: number): number => {
+        const value = Number.parseInt(backgroundColor.slice(start, start + 2), 16) / 255;
+        return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+      });
+      const luminance = channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+      return luminance > 0.179 ? '#000000' : '#FFFFFF';
+    }
     return '#FFFFFF';
   }
 

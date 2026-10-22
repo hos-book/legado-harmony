@@ -98,6 +98,10 @@
         "icon": "$media:ic_app_theme_letterpress_page"
       },
       {
+        "name": "theme_obsidian_archive",
+        "icon": "$media:ic_app_theme_obsidian_archive"
+      },
+      {
         "name": "theme_custom",
         "icon": "$media:ic_app_theme_custom"
       }
