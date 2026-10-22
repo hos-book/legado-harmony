@@ -183,6 +183,58 @@ test('membership SQL transactions and quota lifecycle (embedded PostgreSQL)', as
     await assert.rejects(tx(c => claimMembershipGift(c, annual, 'PREMIUM', membershipAnniversary(now, 12))),
       rejectedCode('MEMBERSHIP_GIFT_NOT_INCLUDED'));
   });
+  await t.test('every product and voice tier issues the exact gift or writes nothing when denied', async () => {
+    const amounts: Record<MembershipSku, [number, number]> = {
+      MONTHLY: [0, 0], ANNUAL: [5000, 2500], LIFETIME: [8000, 4000], SUPER_LIFETIME: [12000, 6000]
+    };
+    for (const sku of Object.keys(amounts) as MembershipSku[]) {
+      for (const tier of ['STANDARD', 'PREMIUM'] as const) {
+        const id = await user();
+        await buy(id, sku);
+        const chars = amounts[sku][tier === 'STANDARD' ? 0 : 1];
+        if (chars === 0) {
+          await assert.rejects(tx(c => claimMembershipGift(c, id, tier, now)), rejectedCode('MEMBERSHIP_GIFT_NOT_INCLUDED'));
+        } else {
+          assert.deepEqual(await tx(c => claimMembershipGift(c, id, tier, now)), { tier, chars, duplicate: false });
+          assert.deepEqual(await tx(c => claimMembershipGift(c, id, tier, now)), { tier, chars, duplicate: true });
+          const grant = await db.query<{ total_chars: number; remaining_chars: number }>(
+            'SELECT total_chars,remaining_chars FROM tts_quota_grants WHERE user_id=$1', [id]);
+          assert.equal(Number(grant.rows[0]!.total_chars), chars);
+          assert.equal(Number(grant.rows[0]!.remaining_chars), chars);
+        }
+        for (const table of ['membership_gift_claims', 'tts_quota_grants', 'tts_quota_ledger']) {
+          const rows = await db.query(`SELECT * FROM ${table} WHERE user_id=$1`, [id]);
+          assert.equal(rows.rows.length, chars > 0 ? 1 : 0, `${sku}/${tier}/${table}`);
+        }
+      }
+    }
+  });
+  await t.test('a prepaid annual term starts gifts only when the current monthly term ends', async () => {
+    const id = await user();
+    await buy(id, 'MONTHLY');
+    const monthlyEnd = (await readMembership(query, id))!.expiresAt!;
+    await buy(id, 'ANNUAL', now + 1000);
+    assert.equal((await readMembership(query, id))!.sku, 'ANNUAL');
+    const before = await membershipSnapshot(query, id, monthlyEnd - 1);
+    assert.equal(before.tierSku, 'MONTHLY');
+    assert.equal(before.benefits.standardGiftChars, 0);
+    await assert.rejects(tx(c => claimMembershipGift(c, id, 'PREMIUM', monthlyEnd - 1)),
+      rejectedCode('MEMBERSHIP_GIFT_NOT_INCLUDED'));
+    const after = await membershipSnapshot(query, id, monthlyEnd);
+    assert.equal(after.tierSku, 'ANNUAL');
+    assert.equal(after.benefits.premiumGiftChars, 2500);
+    assert.equal((await tx(c => claimMembershipGift(c, id, 'PREMIUM', monthlyEnd))).chars, 2500);
+    await assert.rejects(tx(c => claimMembershipGift(c, id, 'STANDARD', after.state!.expiresAt!)),
+      rejectedCode('MEMBERSHIP_INACTIVE'));
+  });
+  await t.test('free users and invalid voice tiers cannot create gift records', async () => {
+    const id = await user();
+    await assert.rejects(tx(c => claimMembershipGift(c, id, 'STANDARD', now)), rejectedCode('MEMBERSHIP_INACTIVE'));
+    await assert.rejects(tx(c => claimMembershipGift(c, id, 'INVALID' as 'STANDARD', now)), rejectedCode('INVALID_TTS_TIER'));
+    for (const table of ['membership_gift_claims', 'tts_quota_grants', 'tts_quota_ledger']) {
+      assert.equal((await db.query(`SELECT * FROM ${table} WHERE user_id=$1`, [id])).rows.length, 0);
+    }
+  });
   await t.test('lifetime upgrade makes existing gifts permanent without granting twice', async () => {
     const id = await user();
     await buy(id, 'ANNUAL');
@@ -279,7 +331,15 @@ test('membership SQL transactions and quota lifecycle (embedded PostgreSQL)', as
     assert.equal(snapshot.active, false);
     assert.equal(snapshot.restricted, true);
     assert.equal(snapshot.benefits.memberThemes, false);
+    assert.equal(snapshot.benefits.animatedAvatar, false);
+    assert.equal(snapshot.benefits.ttsPriority, false);
+    assert.equal(snapshot.benefits.standardGiftChars, 0);
+    assert.equal(snapshot.benefits.premiumGiftChars, 0);
+    assert.equal(snapshot.claim, null);
     await assert.rejects(tx(client => claimMembershipGift(client, id, 'STANDARD', now)), rejectedCode('ACCOUNT_PAYMENT_RESTRICTED'));
+    await db.query('UPDATE account_debts SET iap_debt_points=0 WHERE user_id=$1', [id]);
+    assert.equal((await membershipSnapshot(query, id, now)).benefits.animatedAvatar, true);
+    assert.equal((await tx(c => claimMembershipGift(c, id, 'STANDARD', now))).chars, 8000);
   });
   await t.test('icyn revoke script preserves points/history, expires only test gift and refuses paid membership', async () => {
     const id = 'd105489a-3d17-4f18-af36-7a15e5e1b3ae';

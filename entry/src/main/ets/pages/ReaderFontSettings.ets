@@ -23,7 +23,7 @@ import { AppFontSize } from '../theme/AppFontSize';
 import { AppSpacing } from '../theme/AppSpacing';
 import { PageScaffold } from '../components/common/PageScaffold';
 import { CloudAutoSync, CloudRemoteFont } from '../account/CloudAutoSync';
-import { CloudFontMenuModifier } from '../account/CloudFontMenu';
+import { CloudFontMenu } from '../account/CloudFontMenu';
 
 class ReaderCustomFontItem {
   familyName: string = '';
@@ -395,7 +395,7 @@ struct ReaderFontSettingsPage {
       options.push({ value: item.sourceName || item.familyName || '自定义字体' });
     }
     for (const font of this.remoteFonts()) {
-      options.push({ value: CloudFontMenuModifier.label(font) });
+      options.push({ value: CloudFontMenu.label(font) });
     }
     return options;
   }
@@ -407,11 +407,6 @@ struct ReaderFontSettingsPage {
 
   remoteFontStart(): number {
     return 2 + this.customFonts().length;
-  }
-
-  fontMenuModifier(): CloudFontMenuModifier {
-    return new CloudFontMenuModifier(this.remoteFontStart(), this.primaryTextColor(), this.subTextColor(),
-      this.accentColor(), ThemeRuntime.accentSurfaceColor(this.appDarkMode));
   }
 
   /** 选中云端字体：静默下载导入，完成后按本机字体应用。 */
@@ -467,7 +462,7 @@ struct ReaderFontSettingsPage {
       const source = Array.isArray(parsed) ? parsed as ReaderCustomFontItem[] : ((parsed as ReaderCustomFontData).fonts || []);
       const result: ReaderCustomFontItem[] = [];
       for (const item of source) {
-        if (!item || !item.familyName) {
+        if (!item || !item.familyName || !ReaderFontHelper.fontFileExists(item.filePath)) {
           continue;
         }
         const font = new ReaderCustomFontItem();
@@ -491,7 +486,12 @@ struct ReaderFontSettingsPage {
       const fonts = this.customFonts();
       const fontIndex = index - 2;
       if (fontIndex >= 0 && fontIndex < fonts.length) {
-        return ['custom', this.registerCustomFont(fonts[fontIndex]) || fonts[fontIndex].familyName];
+        const family = this.registerCustomFont(fonts[fontIndex]);
+        if (!family) {
+          HdsFeedback.showToast('字体注册失败，请更换字体文件');
+          return [];
+        }
+        return ['custom', family];
       }
     }
     return ['global', ''];
@@ -499,14 +499,14 @@ struct ReaderFontSettingsPage {
 
   registerCustomFont(font: ReaderCustomFontItem): string {
     if (!font || !font.filePath) {
-      return font ? font.familyName : '';
+      return '';
     }
     const item = new ReaderFontItem();
     item.familyName = font.familyName || ReaderFontHelper.normalizeFontFamily(font.filePath);
     item.filePath = font.filePath;
     item.sourceName = ReaderFontHelper.resolveDisplayName(font.sourceName, font.filePath);
     const result = ReaderFontHelper.registerFont(this.getUIContext(), item);
-    return result.registered ? result.familyName : item.familyName;
+    return result.registered ? result.familyName : '';
   }
 
   resolveCustomFontFamily(family: string): string {
@@ -594,17 +594,16 @@ struct ReaderFontSettingsPage {
         .menuBackgroundColor(ThemeRuntime.dropdownPanelColor(this.appDarkMode))
         .menuBackgroundBlurStyle(BlurStyle.NONE)
         .attributeModifier(ImmersiveMaterialRuntime.selectMenuModifier())
-        .menuItemContentModifier(this.fontMenuModifier())
         .onSelect((index: number) => {
           if (index >= this.remoteFontStart()) {
             this.selectRemoteFont(index - this.remoteFontStart(), (customIndex: number) => {
               const downloaded = this.modeAndFamilyByIndex(customIndex + 2);
-              onChange(downloaded[0], downloaded[1]);
+              if (downloaded.length === 2) onChange(downloaded[0], downloaded[1]);
             });
             return;
           }
           const result = this.modeAndFamilyByIndex(index);
-          onChange(result[0], result[1]);
+          if (result.length === 2) onChange(result[0], result[1]);
         })
     }
     .width('calc(100% - 32vp)')
@@ -1461,17 +1460,16 @@ struct ReaderFontSettingsPage {
         .menuBackgroundColor(ThemeRuntime.dropdownPanelColor(this.appDarkMode))
         .menuBackgroundBlurStyle(BlurStyle.NONE)
         .attributeModifier(ImmersiveMaterialRuntime.selectMenuModifier())
-        .menuItemContentModifier(this.fontMenuModifier())
         .onSelect((index: number) => {
           if (index >= this.remoteFontStart()) {
             this.selectRemoteFont(index - this.remoteFontStart(), (customIndex: number) => {
               const downloaded = this.modeAndFamilyByIndex(customIndex + 2);
-              onChange(downloaded[0], downloaded[1]);
+              if (downloaded.length === 2) onChange(downloaded[0], downloaded[1]);
             });
             return;
           }
           const result = this.modeAndFamilyByIndex(index);
-          onChange(result[0], result[1]);
+          if (result.length === 2) onChange(result[0], result[1]);
         })
     }
     .width('100%')

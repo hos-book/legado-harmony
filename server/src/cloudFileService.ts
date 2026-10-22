@@ -101,6 +101,7 @@ export class CloudFileService {
 
   async prepare(userId: string, input: CloudPrepare) {
     this.configured();
+    if (input?.kind === 'SOURCE') fail(400, 'CLOUD_SOURCE_SYNC_ONLY', '书源请通过数据同步管理，无需上传到云文件');
     if (!input || !/^[a-zA-Z0-9_-]{8,100}$/.test(input.requestId) || !['BOOK','FONT','SOURCE'].includes(input.kind)
       || typeof input.name !== 'string' || !input.name.trim() || input.name.length > 200
       || /[\\/\x00-\x1f]/.test(input.name) || !Number.isSafeInteger(input.bytes) || input.bytes < 1 || input.bytes > CLOUD_QUOTA_BYTES) {

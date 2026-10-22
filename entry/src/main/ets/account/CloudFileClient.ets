@@ -62,6 +62,7 @@ export class CloudFileClient {
   }
   static async stage(context: Context, uri: string, name: string, kind: string,
     meta: CloudFileMeta | null = null, auto: boolean = false, manifestHash: string = ''): Promise<void> {
+    if (kind !== 'BOOK' && kind !== 'FONT') throw new Error('书源请通过数据同步管理');
     if (await CloudFileClient.pending(context)) throw new Error('请先继续或取消上次上传');
     const userId = AccountSessionStore.account().userId;
     if (!userId) throw new Error('请先登录');
@@ -90,13 +91,15 @@ export class CloudFileClient {
     await store.delete(`upload_${AccountSessionStore.account().userId}`); await store.flush();
     if (fs.accessSync(task.path)) await fs.unlink(task.path);
   }
-  static async upload(context: Context, progress: (done: number, total: number) => void): Promise<string> {
+  static async upload(context: Context, progress: (done: number, total: number) => void,
+    onWait?: (seconds: number) => void, onUploaded?: (task: CloudUploadTask) => Promise<void>): Promise<string> {
     if (CloudFileClient.transferring) throw new Error('已有文件正在传输');
     CloudFileClient.transferring = true; CloudFileClient.paused = false;
     const userId = AccountSessionStore.account().userId, token = AccountSessionStore.token();
     try {
       const task = await CloudFileClient.pending(context);
       if (!task) throw new Error('没有待上传文件');
+      if (task.kind !== 'BOOK' && task.kind !== 'FONT') throw new Error('书源请通过数据同步管理，请取消此上传任务');
       const store = await preferences.getPreferences(context, 'cloud_file_transfers');
       if (!task.manifestHash) {
         const hashes: string[] = [];
@@ -112,14 +115,14 @@ export class CloudFileClient {
         task.manifestHash = CloudFileClient.sha256(new util.TextEncoder().encodeInto(hashes.join('\n')));
         await store.put(`upload_${userId}`, JSON.stringify(task)); await store.flush();
       }
-      const prepared = JSON.parse(await AccountCommerceApi.cloudRequest('/prepare', 'POST', JSON.stringify({
+      const prepared = JSON.parse(await CloudFileClient.transferRequest('/prepare', 'POST', JSON.stringify({
         requestId: task.requestId, name: task.name, kind: task.kind, bytes: task.bytes, manifestHash: task.manifestHash,
         meta: task.meta ?? undefined
-      }), token)) as CloudFileItem;
+      }), token, userId, onWait)) as CloudFileItem;
       task.fileId = prepared.id;
       task.reused = prepared.state === 'READY';
       await store.put(`upload_${userId}`, JSON.stringify(task)); await store.flush();
-      const manifest = JSON.parse(await AccountCommerceApi.cloudRequest(`/${task.fileId}`, 'GET', '', token)) as CloudManifest;
+      const manifest = JSON.parse(await CloudFileClient.transferRequest(`/${task.fileId}`, 'GET', '', token, userId, onWait)) as CloudManifest;
       const file = await fs.open(task.path, fs.OpenMode.READ_ONLY);
       try {
         for (let offset = 0, index = 0; offset < task.bytes; index++) {
@@ -132,35 +135,38 @@ export class CloudFileClient {
           if (!old) {
             const md = cryptoFramework.createMd('MD5'); md.updateSync({ data: bytes });
             const md5 = new util.Base64Helper().encodeToStringSync(md.digestSync().data);
-            const ticket = JSON.parse(await CloudFileClient.ticketRequest(`/${task.fileId}/upload-ticket`,
-              JSON.stringify({ index: index, bytes: length, sha256: hash, md5: md5 }), token, userId)) as CloudTransferTicket;
+            const ticket = JSON.parse(await CloudFileClient.transferRequest(`/${task.fileId}/upload-ticket`, 'POST',
+              JSON.stringify({ index: index, bytes: length, sha256: hash, md5: md5 }), token, userId, onWait)) as CloudTransferTicket;
             if (ticket.bytes !== length || ticket.sha256 !== hash) throw new Error('上传授权校验失败');
             if (!ticket.ready) {
               if (ticket.md5 !== md5) throw new Error('上传授权校验失败');
               await CloudFileClient.directRequest(ticket, bytes, userId);
             }
             CloudFileClient.check(userId);
-            const response = JSON.parse(await AccountCommerceApi.cloudRequest(`/${task.fileId}/chunks/${index}/confirm`,
-              'POST', '{}', token)) as CloudTransferTicket;
+            const response = JSON.parse(await CloudFileClient.transferRequest(`/${task.fileId}/chunks/${index}/confirm`,
+              'POST', '{}', token, userId, onWait)) as CloudTransferTicket;
             if (response.sha256 !== hash) throw new Error('上传校验失败，请重试');
           }
           offset += length; progress(offset, task.bytes);
         }
       } finally { await fs.close(file); }
       CloudFileClient.check(userId);
-      await AccountCommerceApi.cloudRequest(`/${task.fileId}/complete`, 'POST', '{}', token);
+      await CloudFileClient.transferRequest(`/${task.fileId}/complete`, 'POST', '{}', token, userId, onWait);
+      CloudFileClient.check(userId);
+      // Keep the staged original until the caller has registered it locally. Failed import can be retried.
+      if (onUploaded) await onUploaded(task);
       await store.delete(`upload_${userId}`); await store.flush();
       await fs.unlink(task.path);
       return task.fileId;
     } finally { CloudFileClient.transferring = false; }
   }
   static async download(context: Context, item: CloudFileItem,
-    progress: (done: number, total: number) => void): Promise<string> {
+    progress: (done: number, total: number) => void, onWait?: (seconds: number) => void): Promise<string> {
     if (CloudFileClient.transferring) throw new Error('已有文件正在传输');
     CloudFileClient.transferring = true; CloudFileClient.paused = false;
     const userId = AccountSessionStore.account().userId, token = AccountSessionStore.token();
     try {
-      const manifest = JSON.parse(await AccountCommerceApi.cloudRequest(`/${item.id}`, 'GET', '', token)) as CloudManifest;
+      const manifest = JSON.parse(await CloudFileClient.transferRequest(`/${item.id}`, 'GET', '', token, userId, onWait)) as CloudManifest;
       if (manifest.state !== 'READY' || manifest.chunkBytes !== 1048576 || manifest.bytes < 1 || manifest.bytes > 1073741824
         || manifest.chunks.length !== Math.ceil(manifest.bytes / manifest.chunkBytes)) throw new Error('云文件清单无效');
       const dir = `${context.filesDir}/cloud_transfers`;
@@ -178,8 +184,8 @@ export class CloudFileClient {
           let valid = false;
           if (size >= offset + chunk.bytes) valid = CloudFileClient.sha256(await CloudFileClient.read(file.fd, offset, chunk.bytes)) === chunk.sha256;
           if (!valid) {
-            const ticket = JSON.parse(await CloudFileClient.ticketRequest(`/${item.id}/chunks/${index}/download-ticket`,
-              JSON.stringify({ requestId: util.generateRandomUUID() }), token, userId)) as CloudTransferTicket;
+            const ticket = JSON.parse(await CloudFileClient.transferRequest(`/${item.id}/chunks/${index}/download-ticket`, 'POST',
+              JSON.stringify({ requestId: util.generateRandomUUID() }), token, userId, onWait)) as CloudTransferTicket;
             if (ticket.bytes !== chunk.bytes || ticket.sha256 !== chunk.sha256) throw new Error('下载授权校验失败');
             const data = await CloudFileClient.directRequest(ticket, null, userId);
             CloudFileClient.check(userId);
@@ -199,18 +205,37 @@ export class CloudFileClient {
       return path;
     } finally { CloudFileClient.transferring = false; }
   }
-  // Repeat an ambiguous API request with the same body/requestId, never a new charge identifier.
-  private static async ticketRequest(path: string, body: string, token: string, userId: string): Promise<string> {
-    for (let attempt = 0; attempt < 2; attempt++) {
+  // All calls here are idempotent. Keep the same body/requestId when waiting for a rate-limit window.
+  private static async transferRequest(path: string, method: string, body: string, token: string, userId: string,
+    onWait?: (seconds: number) => void): Promise<string> {
+    for (let attempt = 0; attempt < 4; attempt++) {
       CloudFileClient.check(userId);
-      try { return await AccountCommerceApi.cloudRequest(path, 'POST', body, token); }
+      try { return await AccountCommerceApi.cloudRequest(path, method, body, token); }
       catch (error) {
-        if (attempt === 1 || (error instanceof AccountApiError && error.statusCode > 0 && error.statusCode < 500)) {
+        const apiError = error as AccountApiError;
+        const limited = apiError.statusCode === 429;
+        if (attempt === 3 || (apiError.statusCode > 0 && apiError.statusCode < 500 && !limited)) {
           throw error as Error;
         }
+        const seconds = limited ? Math.max(1, apiError.retryAfterSeconds || 1) : Math.pow(2, attempt);
+        // Never retry before the advertised window; very long outages remain resumable manually.
+        if (seconds > 120) throw error as Error;
+        await CloudFileClient.waitForRetry(seconds * 1000, userId, onWait);
       }
     }
-    throw new Error('获取传输授权失败');
+    throw new Error('传输暂未完成，可稍后继续');
+  }
+  private static async waitForRetry(milliseconds: number, userId: string,
+    onWait?: (seconds: number) => void): Promise<void> {
+    let remaining = milliseconds;
+    while (remaining > 0) {
+      CloudFileClient.check(userId);
+      if (onWait) onWait(Math.ceil(remaining / 1000));
+      const delay = Math.min(250, remaining);
+      await new Promise<void>(resolve => { setTimeout(resolve, delay); });
+      remaining -= delay;
+    }
+    CloudFileClient.check(userId);
   }
   private static async directRequest(ticket: CloudTransferTicket, body: Uint8Array | null, userId: string): Promise<Uint8Array> {
     if (!ticket.url.startsWith('https://') || ticket.bytes < 1 || ticket.bytes > 1048576) throw new Error('云文件授权无效');

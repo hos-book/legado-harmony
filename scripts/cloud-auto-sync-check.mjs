@@ -9,17 +9,21 @@ import { stripTypeScriptTypes } from 'node:module';
 const source = fs.readFileSync(new URL('../entry/src/main/ets/account/CloudAutoSync.ets', import.meta.url), 'utf8');
 const compiled = stripTypeScriptTypes(source.replace(/^import\s[\s\S]*?;\r?\n/gm, '').replace(/^export /gm, ''),
   { mode: 'strip' });
+const settingsSource = fs.readFileSync(new URL('../entry/src/main/ets/account/CloudSyncSettingsStore.ets', import.meta.url), 'utf8');
+const settingsCompiled = stripTypeScriptTypes(settingsSource.replace(/^import\s[\s\S]*?;\r?\n/gm, '').replace(/^export /gm, ''),
+  { mode: 'strip' });
 
 const NOW = Date.parse('2026-11-10T12:00:00+08:00');
 const HASH = { a: 'a'.repeat(64), b: 'b'.repeat(64), c: 'c'.repeat(64), d: 'd'.repeat(64) };
 
-function fixture() {
+function fixture(settings = {}) {
   const storage = new Map();
   const prefs = new Map();
+  prefs.set('settings_u1', JSON.stringify(settings));
   const files = new Map(); // path -> { mtime (seconds), size, hash }
   const books = [];
   const cloud = { files: [], tombstones: [] };
-  const log = { staged: [], removed: [], inserted: [], deleted: [], fontSaves: 0 };
+  const log = { staged: [], removed: [], inserted: [], deleted: [], imports: [], downloads: [], copies: [], fontNames: [], fontSaves: 0 };
   let sku = 'SUPER_LIFETIME';
 
   class Book {
@@ -41,7 +45,7 @@ function fixture() {
       stat: async path => { const f = files.get(path); if (!f) throw new Error('missing'); return f; },
       unlinkSync: path => { files.delete(path); },
       unlink: async path => { files.delete(path); },
-      mkdir: async () => {}, copy: async () => {}
+      mkdir: async () => {}, copy: async (source, target) => { log.copies.push({ source, target }); files.set(target, files.get(source)); }
     },
     fileUri: { getUriFromPath: path => path },
     AccountSessionStore: { account: () => ({ userId: 'u1' }), isLoggedIn: () => true, activeMembershipSku: () => sku },
@@ -58,12 +62,22 @@ function fixture() {
       upload: async () => 'uploaded-id',
       cancelUpload: async () => {},
       manifestHashOfFile: async path => files.get(path).hash,
-      download: async () => '/data/files/cloud_transfers/tmp'
+      download: async (_ctx, file) => { log.downloads.push(file.id); return '/data/files/cloud_transfers/tmp'; }
     },
     CloudFontImport: {
       uploadName: (name, path) => `${name}.${path.split('.').pop()}`,
       localPath: (dir, file) => `${dir}/reader_fonts/cloud_${file.id}.ttf`,
-      saveNames: async () => {}
+      saveNames: async (_ctx, dir, items) => {
+        log.fontNames.push(...items);
+        const data = JSON.parse(storage.get('readerCustomFontsRaw') || '{"fonts":[]}');
+        for (const item of items) {
+          const path = `${dir}/reader_fonts/cloud_${item.id}.ttf`;
+          if (!data.fonts.some(font => font.filePath === path)) {
+            data.fonts.push({ filePath: path, familyName: item.id, sourceName: item.name });
+          }
+        }
+        storage.set('readerCustomFontsRaw', JSON.stringify(data));
+      }
     },
     CloudFileItem: class { constructor() { this.meta = null; } },
     CloudFileMeta: class {},
@@ -71,6 +85,7 @@ function fixture() {
       initWithContext: async () => {},
       getAllBooks: async () => books.slice(),
       insertBook: async book => { log.inserted.push(book); books.push(book); },
+      updateBook: async book => { const i = books.findIndex(b => b.bookUrl === book.bookUrl); if (i >= 0) books[i] = book; },
       deleteBook: async url => { log.deleted.push(url); const i = books.findIndex(b => b.bookUrl === url); if (i >= 0) books.splice(i, 1); }
     }) },
     LocalBookService: {
@@ -81,13 +96,26 @@ function fixture() {
       sanitizeFileName: value => value,
       extensionOf: path => path.split('.').pop(),
       fileStem: path => path.replace(/\.[^.]+$/, ''),
+      importCloudBook: async (_ctx, path, format, name, url, clearVariables) => {
+        log.imports.push({ path, format, name, url });
+        let book = books.find(b => b.bookUrl === url);
+        if (!book) { book = new Book(); book.bookUrl = url; books.push(book); }
+        book.name = name.replace(/\.[^.]+$/, ''); book.origin = 'local'; book.type = format === 'epub' ? 2 : 1;
+        book.putVariable('localFilePath', `/data/files/local_books/${name}`);
+        book.putVariable('localFormat', format); book.putVariable('localContentHash', HASH.a);
+        files.set(book.getVariable('localFilePath'), { mtime: 0, size: 100, hash: HASH.b });
+        for (const key of clearVariables) book.putVariable(key, '');
+        return book;
+      },
       deleteLocalBookFiles: () => {}
     },
     ReaderFontHelper: { fileNameFromPath: path => path.split('/').pop(), resolveDisplayName: name => name },
     ReaderSettingsStore: { saveFontSettings: async () => { log.fontSaves++; } }
   });
+  vm.runInContext(settingsCompiled, sandbox);
   vm.runInContext(compiled, sandbox);
   const sync = vm.runInContext('CloudAutoSync', sandbox);
+  const settingsStore = vm.runInContext('CloudSyncSettingsStore', sandbox);
 
   const addFont = (path, name, hash, importedAt) => {
     files.set(path, { mtime: Math.floor(importedAt / 1000), size: 100, hash });
@@ -109,7 +137,7 @@ function fixture() {
   };
   const cloudFile = (id, kind, manifestHash, meta = null, name = 'f.ttf') =>
     cloud.files.push({ id, kind, name, bytes: 100, state: 'READY', manifestHash, meta });
-  return { sync, context, storage, prefs, files, books, cloud, log, addFont, fontPaths, addBook, cloudFile,
+  return { sync, settingsStore, context, storage, prefs, files, books, cloud, log, addFont, fontPaths, addBook, cloudFile,
     setSku: value => { sku = value; } };
 }
 
@@ -125,6 +153,96 @@ test('fonts: new ones upload, cloud copies link, others show as downloadable', a
   assert.equal(f.log.staged[0].manifestHash, HASH.a); // Fingerprint reused, not recomputed during upload.
   assert.equal(f.log.staged[0].meta.fontName, '霞鹜文楷');
   assert.deepEqual(f.sync.remoteFonts().map(r => r.name), ['方正楷体.otf']);
+});
+
+test('file scope preferences: old accounts default on; explicit off survives saves, runtime updates and account switches', async () => {
+  const f = fixture();
+  const settings = await f.settingsStore.load(f.context, 'u1');
+  assert.equal(settings.localBooksEnabled, true);
+  assert.equal(settings.customFontsEnabled, true);
+  settings.localBooksEnabled = false;
+  settings.customFontsEnabled = false;
+  await f.settingsStore.saveUserPreferences(f.context, 'u1', settings);
+  await f.settingsStore.saveRuntimeState(f.context, 'u1', 'synced', NOW, 0, '');
+  const other = await f.settingsStore.load(f.context, 'u2');
+  assert.equal(other.localBooksEnabled, true);
+  assert.equal(other.customFontsEnabled, true);
+  const restored = await f.settingsStore.load(f.context, 'u1');
+  assert.equal(restored.localBooksEnabled, false);
+  assert.equal(restored.customFontsEnabled, false);
+});
+
+for (const kind of ['BOOK', 'FONT']) {
+  test(`${kind}: disabled scope skips upload, cloud imports and deletions while the other scope works`, async () => {
+    const f = fixture({ localBooksEnabled: kind !== 'BOOK', customFontsEnabled: kind !== 'FONT' });
+    const book = f.addBook('local://aaaa', '本地书', HASH.a, NOW);
+    f.addFont('/data/files/reader_fonts/a.ttf', '本地字体', HASH.b, NOW);
+    f.cloudFile('remote-book', 'BOOK', 'm', { title: '云端书', contentHash: HASH.c, format: 'txt' });
+    f.cloudFile('remote-font', 'FONT', HASH.d);
+    await f.sync.reconcile(f.context);
+    assert.deepEqual(f.log.staged.map(s => s.kind), [kind === 'BOOK' ? 'FONT' : 'BOOK']);
+    assert.equal(f.log.inserted.length, kind === 'BOOK' ? 0 : 1);
+    assert.equal(f.sync.remoteFonts().length, kind === 'FONT' ? 0 : 1);
+    if (kind === 'BOOK') await f.sync.onBookRemoved(f.context, book);
+    else await f.sync.onFontDeleted(f.context, '/data/files/reader_fonts/a.ttf');
+    assert.equal(f.log.removed.length, 0);
+    assert.ok(![...f.prefs.values()].some(value => typeof value === 'string' && value.includes('REMOVED')));
+  });
+}
+
+test('both file scopes off leaves local and cloud contents untouched', async () => {
+  const f = fixture({ localBooksEnabled: false, customFontsEnabled: false });
+  f.addBook('local://aaaa', '本地书', HASH.a, NOW);
+  f.addFont('/data/files/reader_fonts/a.ttf', '本地字体', HASH.b, NOW);
+  f.cloudFile('remote-book', 'BOOK', 'm', { title: '云端书', contentHash: HASH.c, format: 'txt' });
+  f.cloudFile('remote-font', 'FONT', HASH.d);
+  await f.sync.reconcile(f.context);
+  assert.equal(f.log.staged.length, 0);
+  assert.equal(f.log.inserted.length, 0);
+  assert.equal(f.log.deleted.length, 0);
+  assert.equal(f.sync.remoteFonts().length, 0);
+});
+
+test('sync page gates both switches by membership and restores the previous value on save failure', async () => {
+  const pageSource = fs.readFileSync(new URL('../entry/src/main/ets/pages/DataSync.ets', import.meta.url), 'utf8');
+  const match = /^  async setFileScopeEnabled\([\s\S]*?\n  }/m.exec(pageSource);
+  assert.ok(match);
+  let sku = '';
+  let prompts = 0;
+  let saves = 0;
+  let scheduled = 0;
+  let saveSucceeds = true;
+  const sandbox = vm.createContext({
+    AccountSessionStore: { activeMembershipSku: () => sku },
+    CloudAutoSync: { schedule: () => { scheduled++; } }, getContext: () => ({})
+  });
+  vm.runInContext(stripTypeScriptTypes(`globalThis.page = { ${match[0]} }`, { mode: 'strip' }), sandbox);
+  const page = sandbox.page;
+  Object.assign(page, { saving: false, localBooksEnabled: false, customFontsEnabled: false,
+    promptSuperMembership: async () => { prompts++; },
+    saveSettings: async () => { saves++; return saveSucceeds; } });
+  for (const tier of ['', 'MONTHLY', 'ANNUAL', 'LIFETIME']) {
+    sku = tier;
+    await page.setFileScopeEnabled(true, true);
+    await page.setFileScopeEnabled(false, true);
+    assert.equal(page.localBooksEnabled, false);
+    assert.equal(page.customFontsEnabled, false);
+  }
+  assert.equal(prompts, 8);
+  assert.equal(saves, 0);
+  assert.equal(scheduled, 0);
+  sku = 'SUPER_LIFETIME';
+  await page.setFileScopeEnabled(true, true);
+  await page.setFileScopeEnabled(false, true);
+  assert.equal(page.localBooksEnabled, true);
+  assert.equal(page.customFontsEnabled, true);
+  assert.equal(scheduled, 2);
+  saveSucceeds = false;
+  await page.setFileScopeEnabled(true, false);
+  await page.setFileScopeEnabled(false, false);
+  assert.equal(page.localBooksEnabled, true);
+  assert.equal(page.customFontsEnabled, true);
+  assert.equal(scheduled, 2);
 });
 
 test('fonts: removal elsewhere follows; DETACHED keeps; re-import after removal uploads again', async () => {
@@ -217,4 +335,109 @@ test('books: shelf removal deletes the cloud file with REMOVED; not eligible mea
   assert.equal(g.log.staged.length, 0);
   assert.equal(g.log.inserted.length, 0);
   assert.equal(g.sync.remoteFonts().length, 0);
+});
+
+test('manual EPUB without metadata appears under local books, then downloads into the same shelf row', async () => {
+  const f = fixture();
+  f.cloudFile('manual-epub', 'BOOK', HASH.b, null, '手动上传.epub');
+  await f.sync.reconcile(f.context);
+  assert.equal(f.books.length, 1);
+  const book = f.books[0];
+  assert.equal(book.origin, 'local');
+  assert.equal(book.type, 2);
+  assert.equal(book.name, '手动上传');
+  assert.equal(book.getVariable('localContentHash'), ''); // Chunk manifest is NOT the content hash.
+  assert.equal(f.sync.isPlaceholder(book), true);
+  book.group = 8; book.durChapterIndex = 12;
+  await f.sync.reconcile(f.context);
+  assert.equal(f.books.length, 1);
+  const ready = await f.sync.ensureBookDownloaded(f.context, book);
+  assert.equal(ready.bookUrl, book.bookUrl);
+  assert.equal(ready.group, 8);
+  assert.equal(ready.durChapterIndex, 12);
+  assert.equal(f.sync.isPlaceholder(ready), false);
+  assert.equal(ready.getVariable('cloudFileId'), 'manual-epub');
+  assert.deepEqual(f.log.downloads, ['manual-epub']);
+  await f.sync.reconcile(f.context);
+  assert.equal(f.books.length, 1);
+  assert.equal(f.log.staged.length, 0);
+  await f.sync.onBookRemoved(f.context, ready);
+  f.books.length = 0;
+  await f.sync.reconcile(f.context);
+  assert.deepEqual(f.log.removed, [{ id: 'manual-epub', reason: 'REMOVED' }]);
+});
+
+test('historical manual upload links matching local bytes instead of adding or uploading another copy', async () => {
+  const f = fixture();
+  const book = f.addBook('local://same', '已有的书', HASH.a, NOW);
+  f.files.set(book.getVariable('localFilePath'), { mtime: 0, size: 100, hash: HASH.b });
+  f.cloudFile('manual-txt', 'BOOK', HASH.b, null, '已有的书.txt');
+  await f.sync.reconcile(f.context);
+  assert.equal(f.books.length, 1);
+  assert.equal(book.getVariable('cloudFileId'), 'manual-txt');
+  assert.equal(book.getVariable('localContentHash'), HASH.a);
+  assert.equal(f.log.staged.length, 0);
+  assert.equal(f.log.inserted.length, 0);
+});
+
+test('new manual upload imports staged bytes without downloading, repeated import reuses the shelf row', async () => {
+  const f = fixture();
+  f.cloudFile('new-upload', 'BOOK', HASH.b, null, '新书.epub');
+  const ready = await f.sync.importBookFile(f.context, f.cloud.files[0], '/data/staged.epub');
+  assert.equal(f.books.length, 1);
+  assert.equal(ready.origin, 'local');
+  assert.equal(ready.type, 2);
+  assert.equal(f.sync.isPlaceholder(ready), false);
+  assert.equal(f.log.imports[0].path, '/data/staged.epub');
+  assert.equal(f.log.downloads.length, 0);
+  assert.ok(f.storage.get('shelfUpdateTime'));
+  ready.group = 4; ready.durChapterIndex = 7;
+  await f.sync.importBookFile(f.context, f.cloud.files[0], '/data/staged-again.epub');
+  await f.sync.reconcile(f.context);
+  assert.equal(f.books.length, 1);
+  assert.equal(f.log.imports.length, 1);
+  assert.equal(f.log.staged.length, 0);
+  assert.equal(ready.group, 4);
+  assert.equal(ready.durChapterIndex, 7);
+});
+
+test('metadata-free remote deletion follows the linked id; detached files stay local', async () => {
+  const f = fixture();
+  const removed = f.addBook('local://gone', '移除', HASH.a, NOW - 1000);
+  const kept = f.addBook('local://keep', '保留', HASH.b, NOW - 1000);
+  removed.putVariable('cloudFileId', 'removed');
+  kept.putVariable('cloudFileId', 'detached');
+  f.cloud.tombstones.push({ id: 'removed', kind: 'BOOK', meta: null, reason: 'REMOVED', removedAt: NOW });
+  f.cloud.tombstones.push({ id: 'detached', kind: 'BOOK', meta: null, reason: 'DETACHED', removedAt: NOW });
+  await f.sync.reconcile(f.context);
+  assert.deepEqual(f.log.deleted, ['local://gone']);
+  assert.equal(f.books[0].bookUrl, 'local://keep');
+  assert.equal(f.log.staged.length, 0);
+});
+
+test('manual font upload registers staged bytes without downloading or changing the selected font', async () => {
+  const f = fixture();
+  f.storage.set('readerFontFilePath', '/existing.ttf');
+  f.files.set('/staged.upload', { mtime: 0, size: 100, hash: HASH.b });
+  f.cloudFile('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'FONT', HASH.b, null, '中文字体.ttf');
+  const path = await f.sync.importFontFile(f.context, f.cloud.files[0], '/staged.upload');
+  assert.equal(f.log.downloads.length, 0);
+  assert.equal(f.log.fontNames[0].name, '中文字体.ttf');
+  assert.deepEqual(f.log.copies, [{ source: '/staged.upload', target: path }]);
+  assert.equal(f.storage.get('readerFontFilePath'), '/existing.ttf');
+  await f.sync.importFontFile(f.context, f.cloud.files[0], '/staged.upload');
+  await f.sync.reconcile(f.context);
+  assert.equal(f.fontPaths().length, 1);
+  assert.equal(f.log.copies.length, 1);
+  assert.equal(f.log.staged.length, 0);
+  assert.equal(f.sync.remoteFonts().length, 0);
+});
+
+test('uploading an existing local font reuses its path without a duplicate cloud-named copy', async () => {
+  const f = fixture();
+  f.addFont('/data/files/reader_fonts/local.ttf', '已有字体', HASH.b, NOW);
+  f.cloudFile('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'FONT', HASH.b, null, '已有字体.ttf');
+  assert.equal(await f.sync.importFontFile(f.context, f.cloud.files[0], '/staged.upload'), '/data/files/reader_fonts/local.ttf');
+  assert.equal(f.log.copies.length, 0);
+  assert.equal(f.fontPaths().length, 1);
 });

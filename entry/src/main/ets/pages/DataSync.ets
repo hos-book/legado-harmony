@@ -3,13 +3,15 @@ import { AccountSessionStore } from '../account/AccountSessionStore';
 import { CloudSyncSettings, CloudSyncSettingsStore } from '../account/CloudSyncSettingsStore';
 import { CloudSyncCoordinator } from '../account/CloudSyncCoordinator';
 import { CloudSyncStateStore } from '../account/CloudSyncStateStore';
+import { CloudAutoSync } from '../account/CloudAutoSync';
 import { ThemeRuntime } from '../theme/ThemeRuntime';
 import { syncSystemBars } from '../utils/SystemBars';
 import { HdsFeedback } from '../utils/HdsFeedback';
 import { AppFontSize } from '../theme/AppFontSize';
 import { AppSpacing } from '../theme/AppSpacing';
 import { PageScaffold } from '../components/common/PageScaffold';
-import { SettingNavRow, SettingSwitchRow } from '../components/common/SettingRow';
+import { SettingNavRow, SettingSwitchRow, SettingRow } from '../components/common/SettingRow';
+import { AdaptiveSwitch } from '../components/AdaptiveSwitch';
 
 @Entry
 @Component
@@ -17,10 +19,13 @@ struct DataSyncPage {
   @StorageLink('appDarkMode') appDarkMode: boolean = false;
   @StorageLink('themeRevision') themeRevision: number = 0;
   @StorageLink('accountLoggedIn') accountLoggedIn: boolean = false;
+  @StorageLink('accountMembershipSku') membershipSku: string = '';
   @State cloudSyncEnabled: boolean = false;
   @State autoSyncEnabled: boolean = true;
   @State wifiOnly: boolean = false;
   @State foregroundSyncEnabled: boolean = false;
+  @State localBooksEnabled: boolean = true;
+  @State customFontsEnabled: boolean = true;
   @State readingDataEnabled: boolean = true;
   @State bookSourcesEnabled: boolean = true;
   @State readingPreferencesEnabled: boolean = true;
@@ -131,6 +136,8 @@ struct DataSyncPage {
 
       this.sectionTitle('同步内容')
       Column() {
+        this.fileSyncRow('本地书籍', '同步加入书架的本地书籍文件', true)
+        this.fileSyncRow('自定义字体', '同步导入的自定义字体文件', false)
         SettingSwitchRow({
           title: '阅读数据',
           description: '在线书架、分组、排序、进度、书签；本地书仅同步进度',
@@ -239,7 +246,7 @@ struct DataSyncPage {
       .width('100%')
 
       if (!this.accountLoggedIn) {
-        Text('登录华为账号后，可跨设备同步书架、阅读进度和阅读设置；本地书不会上传文件。')
+        Text('登录华为账号后，可跨设备同步书架、阅读进度和阅读设置；永久超级会员还可同步本地书籍和自定义字体。')
           .fontSize(AppFontSize.BODY)
           .fontColor(this.subTextColor())
           .lineHeight(20)
@@ -292,6 +299,56 @@ struct DataSyncPage {
     .borderRadius(ThemeRuntime.cardRadius())
     .backgroundColor(this.cardColor())
     .alignItems(VerticalAlign.Center)
+  }
+
+  @Builder
+  fileSyncRow(title: string, description: string, books: boolean) {
+    SettingRow({ title: title,
+      description: this.isSuperMember() ? description : '永久超级会员专享 · 请开通或升级',
+      onTap: () => {
+        if (!this.isSuperMember()) this.promptSuperMembership();
+      } }) {
+      AdaptiveSwitch({
+        isOn: this.isSuperMember() && (books ? this.localBooksEnabled : this.customFontsEnabled),
+        switchEnabled: this.isSuperMember() && !this.saving,
+        accessibilityLabel: title,
+        onChange: (value: boolean) => { this.setFileScopeEnabled(books, value); }
+      })
+        .opacity(this.isSuperMember() ? 1 : 0.45)
+    }
+  }
+
+  isSuperMember(): boolean {
+    return this.accountLoggedIn && this.membershipSku === 'SUPER_LIFETIME';
+  }
+
+  async promptSuperMembership(): Promise<void> {
+    const result = await promptAction.showDialog({
+      title: '永久超级会员专享',
+      message: '本地书籍和自定义字体同步仅限永久超级会员，请开通或升级为永久超级会员。',
+      buttons: [
+        { text: '取消', color: this.subTextColor() },
+        { text: '开通或升级', color: this.accentColor() }
+      ]
+    });
+    if (result.index === 1) router.pushUrl({ url: 'pages/AccountCenter' });
+  }
+
+  async setFileScopeEnabled(books: boolean, value: boolean): Promise<void> {
+    if (AccountSessionStore.activeMembershipSku() !== 'SUPER_LIFETIME') {
+      await this.promptSuperMembership();
+      return;
+    }
+    if (this.saving) return;
+    const previous = books ? this.localBooksEnabled : this.customFontsEnabled;
+    if (books) this.localBooksEnabled = value;
+    else this.customFontsEnabled = value;
+    if (!await this.saveSettings()) {
+      if (books) this.localBooksEnabled = previous;
+      else this.customFontsEnabled = previous;
+      return;
+    }
+    CloudAutoSync.schedule(getContext(this), 0);
   }
 
   @Builder
@@ -391,16 +448,18 @@ struct DataSyncPage {
     }
   }
 
-  async saveSettings(): Promise<void> {
+  async saveSettings(): Promise<boolean> {
     this.saving = true;
     try {
       const settings = this.currentSettings();
       const userId = AccountSessionStore.isLoggedIn() ? AccountSessionStore.account().userId : '';
       await CloudSyncSettingsStore.saveUserPreferences(getContext(this), userId, settings);
       this.loadedUserId = userId;
+      return true;
     } catch (e) {
       console.warn('保存云同步设置失败:', e);
       HdsFeedback.showToast('保存同步设置失败');
+      return false;
     } finally {
       this.saving = false;
     }
@@ -457,6 +516,8 @@ struct DataSyncPage {
     settings.autoSyncEnabled = this.autoSyncEnabled;
     settings.wifiOnly = this.wifiOnly;
     settings.foregroundSyncEnabled = this.foregroundSyncEnabled;
+    settings.localBooksEnabled = this.localBooksEnabled;
+    settings.customFontsEnabled = this.customFontsEnabled;
     settings.readingDataEnabled = this.readingDataEnabled;
     settings.bookSourcesEnabled = this.bookSourcesEnabled;
     settings.readingPreferencesEnabled = this.readingPreferencesEnabled;
@@ -473,6 +534,8 @@ struct DataSyncPage {
     this.autoSyncEnabled = settings.autoSyncEnabled;
     this.wifiOnly = settings.wifiOnly;
     this.foregroundSyncEnabled = settings.foregroundSyncEnabled;
+    this.localBooksEnabled = settings.localBooksEnabled;
+    this.customFontsEnabled = settings.customFontsEnabled;
     this.readingDataEnabled = settings.readingDataEnabled;
     this.bookSourcesEnabled = settings.bookSourcesEnabled;
     this.readingPreferencesEnabled = settings.readingPreferencesEnabled;

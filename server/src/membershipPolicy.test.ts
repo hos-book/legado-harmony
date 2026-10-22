@@ -2,12 +2,36 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   membershipAnniversary, membershipCycle, membershipGiftCycle, membershipGiftChars, membershipBenefits,
-  planMembershipPurchase, MembershipState, MembershipError
+  planMembershipPurchase, MembershipState, MembershipError, MembershipSku
 } from './membershipPolicy.js';
 
 const time = (value: string) => Date.parse(value + '+08:00');
 const jan31 = time('2028-01-31T00:15:00');
 const initial = planMembershipPurchase(null, [], 'MONTHLY', jan31, 'period-a');
+
+test('complete entitlement matrix denies paid benefits before activation and at expiry', () => {
+  const free = {
+    memberThemes: false, animatedAvatar: false, ttsPriority: false,
+    sourceCount: 50, sourceBytes: 50 * 1024, cloudStorageBytes: 0, monthlyDownloadBytes: 0,
+    standardGiftChars: 0, premiumGiftChars: 0
+  };
+  assert.deepEqual(membershipBenefits(null, jan31), free);
+  const gifts: Record<MembershipSku, [number, number]> = {
+    MONTHLY: [0, 0], ANNUAL: [5000, 2500], LIFETIME: [8000, 4000], SUPER_LIFETIME: [12000, 6000]
+  };
+  for (const sku of Object.keys(gifts) as MembershipSku[]) {
+    const state = planMembershipPurchase(null, [], sku, jan31, sku).next;
+    const superMember = sku === 'SUPER_LIFETIME';
+    assert.deepEqual(membershipBenefits(state, jan31), {
+      memberThemes: true, animatedAvatar: state.expiresAt === null, ttsPriority: true,
+      sourceCount: superMember ? null : 500, sourceBytes: superMember ? null : 512 * 1024,
+      cloudStorageBytes: superMember ? 1024 ** 3 : 0, monthlyDownloadBytes: superMember ? 1024 ** 3 : 0,
+      standardGiftChars: gifts[sku][0], premiumGiftChars: gifts[sku][1]
+    }, sku);
+    assert.deepEqual(membershipBenefits(state, jan31 - 1), free, `${sku}: not started`);
+    if (state.expiresAt !== null) assert.deepEqual(membershipBenefits(state, state.expiresAt), free, `${sku}: expired`);
+  }
+});
 
 test('Beijing month-end anchors recover their day, including leap years', () => {
   assert.equal(membershipAnniversary(jan31, 1), time('2028-02-29T00:15:00'));

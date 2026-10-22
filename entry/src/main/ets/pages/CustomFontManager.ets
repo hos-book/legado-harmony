@@ -294,7 +294,7 @@ struct CustomFontManagerPage {
       }
       return result.familyName;
     }
-    return this.readerSystemFontFamily || ReaderSystemFontHelper.currentFromStorage(this.getUIContext());
+    return '';
   }
 
   applyApplicationFont(familyName: string): void {

@@ -127,6 +127,9 @@ test('cloud files: isolation, reservations, integrity, retries and quota enforce
   };
   const downloadChunk = (user: string, id: string, index: number, requestId = randomUUID()) => service.downloadTicket(user, id, index, requestId);
   const input = { requestId: randomUUID(), kind: 'BOOK', name: '测试.txt', bytes: CLOUD_CHUNK_BYTES + 3 };
+  await assert.rejects(service.prepare(owner, { ...input, kind: 'SOURCE', name: '书源.json' }),
+    { code: 'CLOUD_SOURCE_SYNC_ONLY' });
+  assert.equal((await service.summary(owner)).usedBytes, 0, 'source file rejection must not reserve storage');
   await assert.rejects(service.prepare(free, input), { code: 'CLOUD_SUPER_REQUIRED' });
   const upload = await service.prepare(owner, input);
   assert.equal((await service.prepare(owner, input)).id, upload.id);

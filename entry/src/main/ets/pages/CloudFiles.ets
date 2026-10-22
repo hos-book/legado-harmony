@@ -1,19 +1,16 @@
 import { common } from '@kit.AbilityKit';
 import { router, promptAction } from '@kit.ArkUI';
 import picker from '@ohos.file.picker';
-import fileUri from '@ohos.file.fileuri';
 import fs from '@ohos.file.fs';
 import { PageScaffold } from '../components/common/PageScaffold';
 import { ThemeRuntime } from '../theme/ThemeRuntime';
 import { CloudFileClient } from '../account/CloudFileClient';
+import { CloudAutoSync } from '../account/CloudAutoSync';
 import { CloudFontImport } from '../account/CloudFontImport';
-import { CloudFileItem, CloudFileSummary } from '../account/CloudFileModels';
-import { LocalBookService } from '../core/book/LocalBookService';
+import { CloudFileItem, CloudFileSummary, CloudUploadTask } from '../account/CloudFileModels';
 import { HdsFeedback } from '../utils/HdsFeedback';
 import { syncSystemBars } from '../utils/SystemBars';
 import { AppDatabase } from '../model/data/AppDatabase';
-import { BookSourceExport } from '../utils/BookSourceExport';
-import { util } from '@kit.ArkTS';
 import { AppFontSize } from '../theme/AppFontSize';
 import { AppSpacing } from '../theme/AppSpacing';
 import { MembershipIcons } from '../account/MembershipIcons';
@@ -22,7 +19,6 @@ class LocalCloudFile {
   name: string = '';
   path: string = '';
   kind: string = '';
-  sourceUrl: string = '';
 }
 class LocalCloudFont { filePath: string = ''; sourceName: string = ''; }
 class LocalCloudFonts { fonts: LocalCloudFont[] = []; }
@@ -33,6 +29,7 @@ struct CloudFilesPage {
   @StorageLink('appDarkMode') dark: boolean = false;
   @StorageLink('themeRevision') themeRevision: number = 0;
   @State summary: CloudFileSummary = new CloudFileSummary();
+  @State summaryLoaded: boolean = false;
   @State files: CloudFileItem[] = [];
   @State nextCursor: string = '';
   @State busy: boolean = false;
@@ -104,7 +101,7 @@ struct CloudFilesPage {
           .padding(AppSpacing.LG)
           .onClick(() => { this.more() })
       }
-      Text('书籍、字体与书源共用 1GB。每个北京时间自然月有 1GB 下载额度，每月1日零点重置，未用不结转。下载按签发授权的分块计量：短时重试复用授权，过期后重新下载会再次计量，失败不自动退还额度。上传中和待清理的文件仍占用空间。')
+      Text('此处管理书籍和字体文件。书源通过数据同步自动保存，无需在这里上传；其占用计入共用的 1GB 空间。每个北京时间自然月有 1GB 文件下载额度，每月1日零点重置，未用不结转。短时重试复用下载授权，过期后重新下载会再次计量。上传中和待清理的文件仍占用空间。')
         .fontSize(AppFontSize.CAPTION)
         .lineHeight(18)
         .fontColor(ThemeRuntime.subTextColor(this.dark))
@@ -124,11 +121,11 @@ struct CloudFilesPage {
           .height(44)
           .objectFit(ImageFit.Contain)
         Column({ space: AppSpacing.XXS }) {
-          Text(this.summary.configured ? '永久超级会员云空间' : '云空间服务尚未启用')
+          Text(!this.summaryLoaded ? '正在读取云空间' : this.summary.configured ? '永久超级会员云空间' : '云空间服务尚未启用')
             .fontSize(AppFontSize.BODY_LARGE)
             .fontWeight(FontWeight.Bold)
             .fontColor(MembershipIcons.cardTextColor(this.dark))
-          Text(this.summary.eligible ? '书籍 · 字体 · 书源' : '需要有效的永久超级会员')
+          Text(this.summary.eligible ? '书籍 · 字体' : '需要有效的永久超级会员')
             .fontSize(AppFontSize.CAPTION)
             .fontColor(MembershipIcons.cardSubTextColor(this.dark))
         }
@@ -136,9 +133,8 @@ struct CloudFilesPage {
         .alignItems(HorizontalAlign.Start)
       }
       .width('100%')
-      this.meter('存储空间', this.summary.usedBytes, this.summary.quotaBytes, '')
-      this.meter('本月下载额度', this.summary.downloadBytes, this.summary.downloadQuotaBytes,
-        this.summary.cycleEndsAt ? `${this.formatDate(this.summary.cycleEndsAt)} 00:00 重置（北京时间）` : '')
+      this.meter(false)
+      this.meter(true)
     }
     .width('100%')
     .padding(AppSpacing.XL)
@@ -147,24 +143,28 @@ struct CloudFilesPage {
   }
 
   @Builder
-  meter(title: string, used: number, total: number, hint: string) {
+  meter(download: boolean) {
     Column({ space: AppSpacing.XS }) {
       Row() {
-        Text(title)
+        Text(download ? '本月下载额度' : '存储空间')
           .fontSize(AppFontSize.CAPTION)
           .fontColor(MembershipIcons.cardSubTextColor(this.dark))
           .layoutWeight(1)
-        Text(`${this.formatBytes(used)} / ${this.formatBytes(total)}`)
+        // Read @State inside the builder's update callbacks, not from captured initial numbers.
+        Text(this.summaryLoaded ? `${this.formatBytes(download ? this.summary.downloadBytes : this.summary.usedBytes)} / ` +
+          `${this.formatBytes(download ? this.summary.downloadQuotaBytes : this.summary.quotaBytes)}` : '暂未获取')
           .fontSize(AppFontSize.CAPTION)
           .fontColor(MembershipIcons.cardTextColor(this.dark))
       }
       .width('100%')
-      if (hint) {
-        Text(hint)
+      if (download && this.summaryLoaded && this.summary.cycleEndsAt) {
+        Text(`${this.formatDate(this.summary.cycleEndsAt)} 00:00 重置（北京时间）`)
           .fontSize(AppFontSize.CAPTION)
           .fontColor(MembershipIcons.cardSubTextColor(this.dark))
       }
-      Progress({ value: Math.min(used, total), total: Math.max(1, total), type: ProgressType.Linear })
+      Progress({ value: this.summaryLoaded ? Math.min(download ? this.summary.downloadBytes : this.summary.usedBytes,
+        download ? this.summary.downloadQuotaBytes : this.summary.quotaBytes) : 0,
+        total: Math.max(1, download ? this.summary.downloadQuotaBytes : this.summary.quotaBytes), type: ProgressType.Linear })
         .width('100%')
         .height(6)
         .color(MembershipIcons.accent('SUPER_LIFETIME', this.dark))
@@ -184,11 +184,10 @@ struct CloudFilesPage {
       Row({ space: AppSpacing.MD }) {
         this.uploadTile($r('sys.symbol.book'), '书籍', 'BOOK')
         this.uploadTile($r('sys.symbol.textformat'), '字体', 'FONT')
-        this.uploadTile($r('sys.symbol.externaldrive'), '书源', 'SOURCE')
       }
       .width('100%')
       Row() {
-        Text('从本机书架、字体与书源中选择')
+        Text('从本机书架与字体中选择')
           .fontSize(AppFontSize.BODY)
           .fontColor(ThemeRuntime.primaryTextColor(this.dark))
           .layoutWeight(1)
@@ -226,7 +225,7 @@ struct CloudFilesPage {
             .onClick(() => { this.uploadLocal(file) })
         }
         .width('100%')
-      }, (file: LocalCloudFile) => file.kind + (file.sourceUrl || file.path))
+      }, (file: LocalCloudFile) => file.kind + file.path)
       if (this.localShown < this.localFiles.length) {
         Text('显示更多')
           .fontSize(AppFontSize.BODY)
@@ -373,29 +372,39 @@ struct CloudFilesPage {
   }
   kind(value: string): string { return value === 'BOOK' ? '书籍' : value === 'FONT' ? '字体' : '书源'; }
   status(value: string): string { return value === 'READY' ? '已同步' : value === 'DELETING' ? '清理中' : '上传中'; }
-  async refresh(): Promise<void> {
+  async refresh(preserveError: boolean = false): Promise<void> {
     if (this.busy) return;
+    if (!preserveError) this.error = '';
+    // A rate-limited summary must not hide the locally persisted resumable task.
+    try {
+      this.pendingName = (await CloudFileClient.pending(this.context))?.name || '';
+    } catch (error) { if (!this.error) this.error = (error as Error).message; }
     try {
       this.summary = await CloudFileClient.summary();
+      this.summaryLoaded = true;
       if (this.summary.configured) {
-        const list = await CloudFileClient.list(); this.files = list.files; this.nextCursor = list.nextCursor;
+        const list = await CloudFileClient.list();
+        this.files = list.files.filter((file: CloudFileItem) => file.kind === 'BOOK' || file.kind === 'FONT');
+        this.nextCursor = list.nextCursor;
         await CloudFontImport.saveNames(this.context, this.context.filesDir, list.files);
+        CloudAutoSync.schedule(this.context);
       }
-      this.pendingName = (await CloudFileClient.pending(this.context))?.name || '';
-    } catch (error) { this.error = (error as Error).message; }
+    } catch (error) { if (!this.error) this.error = (error as Error).message; }
   }
   async more(): Promise<void> {
     try {
       const list = await CloudFileClient.list(this.nextCursor);
-      this.files = this.files.concat(list.files); this.nextCursor = list.nextCursor;
+      this.files = this.files.concat(list.files.filter((file: CloudFileItem) => file.kind === 'BOOK' || file.kind === 'FONT'));
+      this.nextCursor = list.nextCursor;
       await CloudFontImport.saveNames(this.context, this.context.filesDir, list.files);
     }
     catch (error) { this.error = (error as Error).message; }
   }
   async pick(kind: string): Promise<void> {
+    if (kind !== 'BOOK' && kind !== 'FONT') return;
     try {
       const options = new picker.DocumentSelectOptions(); options.maxSelectNumber = 1;
-      options.fileSuffixFilters = kind === 'BOOK' ? ['书籍|.txt,.epub'] : kind === 'FONT' ? ['字体|.ttf,.otf,.ttc'] : ['书源|.json'];
+      options.fileSuffixFilters = kind === 'BOOK' ? ['书籍|.txt,.epub'] : ['字体|.ttf,.otf,.ttc'];
       const picked = await new picker.DocumentViewPicker(this.context).select(options);
       if (!picked.length) return;
       const name = decodeURIComponent(picked[0].split('/').pop() || '云文件').replace(/[\\/\x00-\x1f]/g, '_');
@@ -423,95 +432,69 @@ struct CloudFilesPage {
           item.name = CloudFontImport.uploadName(font.sourceName, font.filePath); result.push(item);
         }
       }
-      for (const source of await db.getBookSourceSummaries()) {
-        const item = new LocalCloudFile(); item.sourceUrl = source.bookSourceUrl; item.kind = 'SOURCE';
-        item.name = `${source.bookSourceName}.json`; result.push(item);
-      }
       this.localFiles = result; this.localShown = 30;
       if (!result.length) HdsFeedback.showToast('本机暂无可上传的内容');
     } catch (error) { this.error = (error as Error).message; }
   }
   async uploadLocal(item: LocalCloudFile): Promise<void> {
-    let temp = '';
+    if (item.kind !== 'BOOK' && item.kind !== 'FONT') return;
     try {
-      let path = item.path;
-      if (item.kind === 'SOURCE') {
-        const source = await AppDatabase.getInstance().getBookSource(item.sourceUrl);
-        if (!source) throw new Error('书源已不存在');
-        const bytes = new util.TextEncoder().encodeInto(JSON.stringify(BookSourceExport.toObject(source)));
-        temp = `${this.context.cacheDir}/cloud_source_${util.generateRandomUUID()}.json`;
-        const file = await fs.open(temp, fs.OpenMode.CREATE | fs.OpenMode.WRITE_ONLY);
-        try {
-          let offset = 0;
-          while (offset < bytes.length) {
-            const remaining = bytes.slice(offset);
-            const count = await fs.write(file.fd, remaining.buffer);
-            if (count <= 0) throw new Error('暂存书源失败');
-            offset += count;
-          }
-        } finally { await fs.close(file); }
-        path = temp;
-      }
-      await CloudFileClient.stage(this.context, path, item.name.replace(/[\\/\x00-\x1f]/g, '_').slice(0, 200), item.kind);
+      await CloudFileClient.stage(this.context, item.path, item.name.replace(/[\\/\x00-\x1f]/g, '_').slice(0, 200), item.kind);
       await this.resume();
     } catch (error) { this.error = (error as Error).message; }
-    finally { if (temp && fs.accessSync(temp)) await fs.unlink(temp); }
   }
   async resume(): Promise<void> {
     this.busy = true; this.error = '';
     try {
-      await CloudFileClient.upload(this.context, (done: number, total: number) => { this.progress = `上传 ${Math.floor(done * 100 / total)}%`; });
+      await CloudFileClient.upload(this.context,
+        (done: number, total: number) => { this.progress = `上传 ${Math.floor(done * 100 / total)}%`; },
+        (seconds: number) => { this.progress = `请求繁忙，${seconds} 秒后自动继续上传`; },
+        async (task: CloudUploadTask) => {
+          if (task.auto) return;
+          this.progress = task.kind === 'BOOK' ? '上传完成，正在加入本地书架…' : '上传完成，正在加入本机字体库…';
+          const file = new CloudFileItem();
+          file.id = task.fileId; file.name = task.name; file.kind = task.kind; file.bytes = task.bytes;
+          file.state = 'READY'; file.manifestHash = task.manifestHash; file.meta = task.meta;
+          try {
+            if (task.kind === 'BOOK') {
+              await CloudAutoSync.importBookFile(this.context, file, task.path);
+              HdsFeedback.showToast('已上传并加入本地书架');
+            } else {
+              await CloudAutoSync.importFontFile(this.context, file, task.path);
+              HdsFeedback.showToast('已上传并加入本机字体库');
+            }
+          } catch (error) {
+            throw new Error(`云端上传已完成，本机导入失败，可点击继续重试：${(error as Error).message}`);
+          }
+        });
       this.progress = '上传完成';
+      CloudAutoSync.schedule(this.context);
     } catch (error) { this.error = (error as Error).message; }
-    finally { this.busy = false; await this.refresh(); }
+    finally { this.busy = false; await this.refresh(true); }
   }
   async cancelUpload(): Promise<void> {
     try { await CloudFileClient.cancelUpload(this.context); await this.refresh(); }
     catch (error) { this.error = (error as Error).message; }
   }
   async download(file: CloudFileItem): Promise<void> {
+    if (file.kind !== 'BOOK' && file.kind !== 'FONT') return;
     this.busy = true; this.error = '';
     try {
       const path = await CloudFileClient.download(this.context, file,
-        (done: number, total: number) => { this.progress = `下载 ${Math.floor(done * 100 / total)}%`; });
-      const extension = file.name.split('.').pop()?.toLowerCase() || '';
+        (done: number, total: number) => { this.progress = `下载 ${Math.floor(done * 100 / total)}%`; },
+        (seconds: number) => { this.progress = `请求繁忙，${seconds} 秒后自动继续下载`; });
       if (file.kind === 'BOOK') {
-        await LocalBookService.importExternalBook(this.context, path, extension, file.name);
+        await CloudAutoSync.importBookFile(this.context, file, path);
         AppStorage.setOrCreate('shelfUpdateTime', Date.now());
         await fs.unlink(path); HdsFeedback.showToast('已导入书架');
       } else if (file.kind === 'FONT') {
-        const fontPath = CloudFontImport.localPath(this.context.filesDir, file);
-        if (!fontPath) throw new Error('字体格式无效');
-        const dir = `${this.context.filesDir}/reader_fonts`;
-        if (!fs.accessSync(dir)) await fs.mkdir(dir);
-        await fs.copy(fileUri.getUriFromPath(path), fileUri.getUriFromPath(fontPath));
-        await CloudFontImport.saveNames(this.context, this.context.filesDir, [file]);
+        await CloudAutoSync.importFontFile(this.context, file, path);
         await fs.unlink(path);
         router.pushUrl({ url: 'pages/CustomFontManager' });
-      } else {
-        if (file.bytes > 25 * 1024 * 1024) {
-          const options = new picker.DocumentSaveOptions(); options.newFileNames = [file.name];
-          const saved = await new picker.DocumentViewPicker(this.context).save(options);
-          if (saved.length) {
-            await fs.copy(fileUri.getUriFromPath(path), saved[0]);
-            HdsFeedback.showToast('已保存书源文件；当前导入器仅支持 25MB 以内的 JSON');
-          }
-          // Saved or canceled, the local transfer copy is no longer needed.
-          await fs.unlink(path);
-          return;
-        }
-        // Existing source importer provides validation and explicit conflict choices. Hand it a cache copy so
-        // the resumable transfer file is removed now; the system may reclaim cache files later.
-        const importPath = `${this.context.cacheDir}/cloud_import_${file.id}.json`;
-        if (fs.accessSync(importPath)) await fs.unlink(importPath);
-        await fs.moveFile(path, importPath);
-        AppStorage.setOrCreate('pendingBookSourceImportUri', fileUri.getUriFromPath(importPath));
-        AppStorage.setOrCreate('pendingBookSourceImportNonce', Date.now());
-        router.pushUrl({ url: 'pages/BookSource' });
       }
       this.progress = '下载完成';
     } catch (error) { this.error = (error as Error).message; }
-    finally { this.busy = false; await this.refresh(); }
+    finally { this.busy = false; await this.refresh(true); }
   }
   async remove(file: CloudFileItem): Promise<void> {
     const answer = await promptAction.showDialog({ title: '删除云文件', message: file.kind === 'SOURCE' ? `删除“${file.name}”的云端副本？已下载到本机的文件会保留。` :

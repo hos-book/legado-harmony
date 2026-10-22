@@ -116,11 +116,10 @@ await app.register(rateLimit, {
   global: true,
   max: config.http.globalRateLimitPerMinute,
   timeWindow: 60_000,
-  errorResponseBuilder: (_request, context) => ({
-    code: 'RATE_LIMITED',
-    message: '请求过于频繁，请稍后重试',
-    retryAfter: context.after
-  })
+  // The plugin throws this value. Return the typed error our handler maps to 429,
+  // with numeric seconds; a plain object would fall through to INTERNAL_ERROR/500.
+  errorResponseBuilder: (_request, context) =>
+    new AccountRateLimitError(Math.max(1, Math.ceil(context.ttl / 1000)))
 });
 type TtsCachedResponse =
   | { kind: 'AUDIO'; audio: Buffer }

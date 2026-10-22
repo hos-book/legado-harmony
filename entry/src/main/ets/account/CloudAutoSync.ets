@@ -4,6 +4,7 @@ import fileUri from '@ohos.file.fileuri';
 import preferences from '@ohos.data.preferences';
 import { Book } from '@legado/sourceengine';
 import { AccountSessionStore } from './AccountSessionStore';
+import { CloudSyncSettingsStore } from './CloudSyncSettingsStore';
 import { CloudFileClient } from './CloudFileClient';
 import { CloudFontImport } from './CloudFontImport';
 import { CloudFileItem, CloudFileMeta, CloudTombstone } from './CloudFileModels';
@@ -127,6 +128,8 @@ export class CloudAutoSync {
   static async onFontDeleted(context: Context, filePath: string): Promise<void> {
     const userId = AccountSessionStore.account().userId;
     if (!userId || !filePath) return;
+    await CloudAutoSync.loadSettings(context, userId);
+    if (!CloudAutoSync.scopeEnabled(userId, 'FONT')) return;
     const removal = new PendingRemoval();
     removal.kind = 'FONT';
     removal.createdAt = Date.now();
@@ -146,10 +149,12 @@ export class CloudAutoSync {
   static async onBookRemoved(context: Context, book: Book): Promise<void> {
     const userId = AccountSessionStore.account().userId;
     if (!userId || !LocalBookService.isLocalBook(book) || book.getVariable('storageKind')) return;
+    await CloudAutoSync.loadSettings(context, userId);
+    if (!CloudAutoSync.scopeEnabled(userId, 'BOOK')) return;
     const removal = new PendingRemoval();
     removal.kind = 'BOOK';
     removal.createdAt = Date.now();
-    removal.id = CloudAutoSync.isPlaceholder(book) ? book.getVariable(CloudAutoSync.CLOUD_FILE_ID_KEY) : '';
+    removal.id = book.getVariable(CloudAutoSync.CLOUD_FILE_ID_KEY);
     removal.hash = book.getVariable(LocalBookService.LOCAL_CONTENT_HASH_KEY);
     if (!removal.id && !removal.hash) return;
     await CloudAutoSync.addRemoval(context, userId, removal);
@@ -178,6 +183,25 @@ export class CloudAutoSync {
     return target;
   }
 
+  /** 上传后直接登记暂存字体；同一字体已在本机时复用路径，不改变当前字体选择。 */
+  static async importFontFile(context: Context, file: CloudFileItem, path: string): Promise<string> {
+    const target = CloudFontImport.localPath(context.filesDir, file);
+    if (!target) throw new Error('字体格式无效');
+    if (file.manifestHash && file.bytes > 0) {
+      for (const font of CloudAutoSync.localFonts()) {
+        if (!CloudAutoSync.exists(font.filePath)) continue;
+        if ((await fs.stat(font.filePath)).size === file.bytes &&
+          await CloudAutoSync.fontHash(context, font.filePath) === file.manifestHash) return font.filePath;
+      }
+    }
+    const dir = `${context.filesDir}/reader_fonts`;
+    if (!fs.accessSync(dir)) await fs.mkdir(dir);
+    if (path !== target) await fs.copy(fileUri.getUriFromPath(path), fileUri.getUriFromPath(target));
+    await CloudFontImport.saveNames(context, context.filesDir, [file]);
+    CloudAutoSync.publishRemoteFonts(CloudAutoSync.remoteFonts().filter((entry: CloudRemoteFont) => entry.id !== file.id));
+    return target;
+  }
+
   /** 打开书架上的云端占位书：下载导入为真正的本地书，书架分组与阅读进度保留。 */
   static async ensureBookDownloaded(context: Context, book: Book): Promise<Book> {
     if (!CloudAutoSync.isPlaceholder(book)) return book;
@@ -186,13 +210,56 @@ export class CloudAutoSync {
     item.kind = 'BOOK';
     item.state = 'READY';
     const format = (book.getVariable('localFormat') || 'txt').toLowerCase();
+    item.name = `${LocalBookService.sanitizeFileName(book.name)}.${format}`;
+    item.manifestHash = book.getVariable('cloudManifestHash');
     const downloaded = await CloudFileClient.download(context, item, () => {});
     try {
-      return await LocalBookService.importCloudBook(context, downloaded, format,
-        `${LocalBookService.sanitizeFileName(book.name)}.${format}`, book.bookUrl, [CloudAutoSync.PLACEHOLDER_KEY]);
+      return await CloudAutoSync.importBookFile(context, item, downloaded);
     } finally {
       try { await fs.unlink(downloaded); } catch (e) { /* the transfer copy is only a cache */ }
     }
+  }
+
+  /** 手动上传使用暂存原文件，下载使用传输文件；复用已有书架行，避免重新下载或重复导入。 */
+  static async importBookFile(context: Context, file: CloudFileItem, path: string): Promise<Book> {
+    const db = AppDatabase.getInstance();
+    await db.initWithContext(context);
+    const books = (await db.getAllBooks()).filter((book: Book) => LocalBookService.isLocalBook(book) &&
+      !book.getVariable('storageKind') && !book.pendingAddToShelf);
+    const existing = await CloudAutoSync.findLocalBook(context, books, file);
+    const format = (file.meta?.format || LocalBookService.extensionOf(file.name)).toLowerCase();
+    const ready = existing && !CloudAutoSync.isPlaceholder(existing) &&
+      LocalBookService.exists(existing.getVariable('localFilePath'));
+    const book = ready ? existing! : await LocalBookService.importCloudBook(context, path, format,
+      file.name, existing?.bookUrl || `cloudbook://${file.id}`, [CloudAutoSync.PLACEHOLDER_KEY]);
+    book.putVariable(CloudAutoSync.CLOUD_FILE_ID_KEY, file.id);
+    book.putVariable('cloudManifestHash', file.manifestHash || '');
+    await db.updateBook(book, false, 'cloud_book_linked');
+    AppStorage.setOrCreate('shelfUpdateTime', Date.now());
+    return book;
+  }
+
+  private static async findLocalBook(context: Context, books: Book[], file: CloudFileItem): Promise<Book | null> {
+    const linked = books.find((book: Book) => book.getVariable(CloudAutoSync.CLOUD_FILE_ID_KEY) === file.id ||
+      (!!file.meta?.contentHash && book.getVariable(LocalBookService.LOCAL_CONTENT_HASH_KEY) === file.meta.contentHash) ||
+      (!!file.manifestHash && book.getVariable('cloudManifestHash') === file.manifestHash));
+    if (linked) return linked;
+    // Historical manual uploads lack contentHash. Match their chunk manifest without inventing a raw content hash.
+    if (file.manifestHash && file.bytes > 0) {
+      for (const book of books) {
+        const path = book.getVariable('localFilePath');
+        if (!path || !CloudAutoSync.exists(path) || CloudAutoSync.isPlaceholder(book)) continue;
+        if ((await fs.stat(path)).size === file.bytes && await CloudAutoSync.fontHash(context, path) === file.manifestHash) {
+          return book;
+        }
+      }
+    }
+    return null;
+  }
+
+  private static bookFileKey(file: CloudFileItem): string {
+    return file.meta?.contentHash ? `content:${file.meta.contentHash}` :
+      file.manifestHash ? `manifest:${file.manifestHash}` : `id:${file.id}`;
   }
 
   private static async run(context: Context): Promise<void> {
@@ -201,6 +268,9 @@ export class CloudAutoSync {
       CloudAutoSync.publishRemoteFonts([]);
       return;
     }
+    await CloudAutoSync.loadSettings(context, userId);
+    if (!CloudAutoSync.scopeEnabled(userId, 'FONT')) CloudAutoSync.publishRemoteFonts([]);
+    if (!CloudAutoSync.scopeEnabled(userId, 'FONT') && !CloudAutoSync.scopeEnabled(userId, 'BOOK')) return;
     const summary = await CloudFileClient.summary();
     if (!summary.configured || !summary.eligible) {
       CloudAutoSync.publishRemoteFonts([]);
@@ -212,9 +282,27 @@ export class CloudAutoSync {
     files = files.filter((file: CloudFileItem) => !removed.has(file.id));
     if (AccountSessionStore.account().userId !== userId) return;
     const uploads: UploadJob[] = [];
-    await CloudAutoSync.syncFonts(context, files, tombstones, uploads);
-    await CloudAutoSync.syncBooks(context, files, tombstones, uploads);
+    if (CloudAutoSync.scopeEnabled(userId, 'FONT')) {
+      await CloudAutoSync.syncFonts(context, files, tombstones, uploads);
+    }
+    if (CloudAutoSync.scopeEnabled(userId, 'BOOK')) {
+      await CloudAutoSync.syncBooks(context, files, tombstones, uploads);
+    }
     await CloudAutoSync.runUploads(context, userId, uploads);
+  }
+
+  private static async loadSettings(context: Context, userId: string): Promise<void> {
+    if (CloudSyncSettingsStore.currentAccountId() !== userId) {
+      await CloudSyncSettingsStore.load(context, userId);
+    }
+  }
+
+  private static scopeEnabled(userId: string, kind: string): boolean {
+    if (!AccountSessionStore.isLoggedIn() || AccountSessionStore.account().userId !== userId ||
+      AccountSessionStore.activeMembershipSku() !== 'SUPER_LIFETIME' ||
+      CloudSyncSettingsStore.currentAccountId() !== userId) return false;
+    const settings = CloudSyncSettingsStore.current();
+    return kind === 'BOOK' ? settings.localBooksEnabled : kind === 'FONT' && settings.customFontsEnabled;
   }
 
   private static async syncFonts(context: Context, files: CloudFileItem[], tombstones: CloudTombstone[],
@@ -272,8 +360,9 @@ export class CloudAutoSync {
     uploads: UploadJob[]): Promise<void> {
     const db = AppDatabase.getInstance();
     await db.initWithContext(context);
-    const cloudBooks = files.filter((file: CloudFileItem) => file.kind === 'BOOK' && !!file.meta?.contentHash);
-    const bookTombs = tombstones.filter((tomb: CloudTombstone) => tomb.kind === 'BOOK' && !!tomb.meta?.contentHash);
+    const cloudBooks = files.filter((file: CloudFileItem) => file.kind === 'BOOK' &&
+      (!!file.meta?.contentHash || ['txt', 'epub'].includes((file.meta?.format || LocalBookService.extensionOf(file.name)).toLowerCase())));
+    const bookTombs = tombstones.filter((tomb: CloudTombstone) => tomb.kind === 'BOOK');
     const present = new Set<string>();
     let changed = false;
     const books = (await db.getAllBooks()).filter((book: Book) => LocalBookService.isLocalBook(book) &&
@@ -286,14 +375,27 @@ export class CloudAutoSync {
           changed = true;
           continue;
         }
-        present.add(file.meta!.contentHash!);
+        present.add(CloudAutoSync.bookFileKey(file));
         continue;
       }
       const hash = await LocalBookService.ensureContentHash(book);
-      if (!hash) continue;
-      present.add(hash);
-      if (cloudBooks.some((item: CloudFileItem) => item.meta!.contentHash === hash)) continue;
-      const tomb = bookTombs.find((item: CloudTombstone) => item.meta!.contentHash === hash);
+      let linked: CloudFileItem | null = null;
+      for (const file of cloudBooks) {
+        if (await CloudAutoSync.findLocalBook(context, [book], file)) { linked = file; break; }
+      }
+      if (linked) {
+        present.add(CloudAutoSync.bookFileKey(linked));
+        if (book.getVariable(CloudAutoSync.CLOUD_FILE_ID_KEY) !== linked.id ||
+          book.getVariable('cloudManifestHash') !== linked.manifestHash) {
+          book.putVariable(CloudAutoSync.CLOUD_FILE_ID_KEY, linked.id);
+          book.putVariable('cloudManifestHash', linked.manifestHash || '');
+          await db.updateBook(book, false, 'cloud_book_linked');
+        }
+        continue;
+      }
+      const tomb = bookTombs.find((item: CloudTombstone) => item.id === book.getVariable(CloudAutoSync.CLOUD_FILE_ID_KEY) ||
+        (!!hash && item.meta?.contentHash === hash) ||
+        (!!item.manifestHash && item.manifestHash === book.getVariable('cloudManifestHash')));
       if (tomb && (Number(book.getVariable('bookAddTime')) || 0) < tomb.removedAt) {
         if (tomb.reason === 'REMOVED') {
           await CloudAutoSync.removeShelfBook(context, book);
@@ -301,6 +403,7 @@ export class CloudAutoSync {
         }
         continue;
       }
+      if (!hash) continue;
       const path = book.getVariable('localFilePath');
       // Private-shelf books stay on the device.
       if (book.isPrivate || !path || !LocalBookService.exists(path)) continue;
@@ -320,8 +423,9 @@ export class CloudAutoSync {
       uploads.push(job);
     }
     for (const file of cloudBooks) {
-      if (present.has(file.meta!.contentHash!)) continue;
-      present.add(file.meta!.contentHash!);
+      const key = CloudAutoSync.bookFileKey(file);
+      if (present.has(key)) continue;
+      present.add(key);
       await CloudAutoSync.insertPlaceholder(db, file);
       changed = true;
     }
@@ -329,7 +433,7 @@ export class CloudAutoSync {
   }
 
   private static async insertPlaceholder(db: AppDatabase, file: CloudFileItem): Promise<void> {
-    const meta = file.meta!;
+    const meta = file.meta || new CloudFileMeta();
     const format = (meta.format || LocalBookService.extensionOf(file.name) || 'txt').toLowerCase();
     const book = new Book();
     book.bookUrl = `cloudbook://${file.id}`;
@@ -343,6 +447,7 @@ export class CloudAutoSync {
     book.type = format === 'epub' ? LocalBookService.TYPE_EPUB : LocalBookService.TYPE_TXT;
     book.putVariable(CloudAutoSync.PLACEHOLDER_KEY, '1');
     book.putVariable(CloudAutoSync.CLOUD_FILE_ID_KEY, file.id);
+    book.putVariable('cloudManifestHash', file.manifestHash || '');
     book.putVariable('localFormat', format);
     book.putVariable(LocalBookService.LOCAL_CONTENT_HASH_KEY, meta.contentHash || '');
     book.putVariable('bookAddTime', `${Date.now()}`);
@@ -395,6 +500,7 @@ export class CloudAutoSync {
     const pending = await CloudFileClient.pending(context);
     if (pending && !pending.auto) return; // A manual upload is waiting for the user; leave it alone.
     if (pending) {
+      if (!CloudAutoSync.scopeEnabled(userId, pending.kind)) return;
       try {
         await CloudFileClient.upload(context, () => {});
       } catch (e) {
@@ -404,6 +510,7 @@ export class CloudAutoSync {
     }
     let uploaded = false;
     for (const job of uploads) {
+      if (!CloudAutoSync.scopeEnabled(userId, job.kind)) continue;
       if (CloudAutoSync.failedUploads.has(job.key) || AccountSessionStore.account().userId !== userId) continue;
       try {
         await CloudFileClient.stage(context, job.path, job.name, job.kind, job.meta, true, job.manifestHash);
@@ -427,6 +534,10 @@ export class CloudAutoSync {
     if (removals.length === 0) return removed;
     const keep: PendingRemoval[] = [];
     for (const removal of removals) {
+      if (!CloudAutoSync.scopeEnabled(userId, removal.kind)) {
+        keep.push(removal);
+        continue;
+      }
       const file = removal.id ? files.find((item: CloudFileItem) => item.id === removal.id) :
         files.find((item: CloudFileItem) => item.kind === removal.kind &&
           (removal.kind === 'BOOK' ? item.meta?.contentHash === removal.hash : item.manifestHash === removal.hash));

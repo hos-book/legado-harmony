@@ -11,7 +11,7 @@ import { AppFontSize } from '../theme/AppFontSize';
 import { AppSpacing } from '../theme/AppSpacing';
 import { PageScaffold } from '../components/common/PageScaffold';
 import { CloudAutoSync, CloudRemoteFont } from '../account/CloudAutoSync';
-import { CloudFontMenuModifier } from '../account/CloudFontMenu';
+import { CloudFontMenu } from '../account/CloudFontMenu';
 
 class ReaderCustomFontItem {
   familyName: string = '';
@@ -242,12 +242,14 @@ struct FontSettingsPage {
       HdsFeedback.showToast('字体文件不存在');
       return;
     }
-    this.readerFontMode = 'custom';
     const registeredFamily = this.registerCustomFont(item);
     if (!registeredFamily) {
       HdsFeedback.showToast('字体注册失败，请更换字体文件');
       return;
     }
+    this.readerFontMode = 'custom';
+    this.readerActiveFontFamily = registeredFamily;
+    this.readerFontRegistered = true;
     this.readerFontFamily = item.familyName;
     this.readerFontFilePath = item.filePath;
     this.readerFontSourceName = ReaderFontHelper.resolveDisplayName(item.sourceName, item.filePath);
@@ -298,7 +300,7 @@ struct FontSettingsPage {
       options.push({ value: item.sourceName || item.familyName });
     }
     for (const font of this.remoteFonts()) {
-      options.push({ value: CloudFontMenuModifier.label(font) });
+      options.push({ value: CloudFontMenu.label(font) });
     }
     return options;
   }
@@ -310,11 +312,6 @@ struct FontSettingsPage {
 
   remoteFontStart(): number {
     return 1 + this.customFonts.length;
-  }
-
-  fontMenuModifier(): CloudFontMenuModifier {
-    return new CloudFontMenuModifier(this.remoteFontStart(), this.primaryTextColor(), this.subTextColor(),
-      this.accentColor(), ThemeRuntime.accentSurfaceColor(this.appDarkMode));
   }
 
   /** 选中云端字体：静默下载导入，完成后按本机字体应用。 */
@@ -534,7 +531,6 @@ struct FontSettingsPage {
         .menuBackgroundColor(ThemeRuntime.dropdownPanelColor(this.appDarkMode))
         .menuBackgroundBlurStyle(BlurStyle.NONE)
         .attributeModifier(ImmersiveMaterialRuntime.selectMenuModifier())
-        .menuItemContentModifier(this.fontMenuModifier())
         .onSelect((index: number) => {
           if (index >= this.remoteFontStart()) {
             this.selectRemoteFont(index - this.remoteFontStart(), (customIndex: number) => {

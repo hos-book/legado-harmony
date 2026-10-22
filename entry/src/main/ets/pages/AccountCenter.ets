@@ -21,7 +21,6 @@ import { MembershipOrder, MembershipProduct, MembershipPromotion, MembershipSnap
 import { CloudSyncSummary } from '../account/CloudSyncModels';
 import { CloudFileClient } from '../account/CloudFileClient';
 import { CloudFileSummary } from '../account/CloudFileModels';
-import { CloudSyncSettingsStore } from '../account/CloudSyncSettingsStore';
 import { HuaweiAccountService } from '../account/HuaweiAccountService';
 import { ThemeRuntime } from '../theme/ThemeRuntime';
 import { syncSystemBars } from '../utils/SystemBars';
@@ -56,10 +55,6 @@ struct AccountCenterPage {
   @StorageLink('accountPaidPoints') paidPoints: number = 0;
   @StorageLink('accountPromoPoints') promoPoints: number = 0;
   @StorageLink('accountEntitlementsRevision') entitlementsRevision: number = 0;
-  @StorageLink('cloudSyncEnabled') cloudSyncEnabled: boolean = false;
-  @StorageLink('cloudSyncLastSuccessAt') cloudSyncLastSuccessAt: number = 0;
-  @StorageLink('cloudSyncPendingCount') cloudSyncPendingCount: number = 0;
-  @StorageLink('cloudSyncStatus') cloudSyncStatus: string = CloudSyncSettingsStore.STATUS_DISABLED;
   @StorageProp('navBarHeight') navBarHeight: number = 0;
   @State loading: boolean = false;
   @State purchasingProductId: string = '';
@@ -161,6 +156,9 @@ struct AccountCenterPage {
             .fontColor(this.subTextColor())
             .width('100%')
             .padding({ left: AppSpacing.XS, right: AppSpacing.XS })
+        }
+        if (this.accountLoggedIn) {
+          this.cloudSpaceCard()
         }
         if (this.accountLoggedIn && this.membership.active) {
           if (this.giftIncluded() || this.membership.claim) {
@@ -809,6 +807,22 @@ struct AccountCenterPage {
     return this.priceOf(product) < product.points;
   }
 
+  /** 方案卡预告开售时可享的活动价；实际购买仍使用服务端报价。 */
+  planPriceOf(product: MembershipProduct): number {
+    const promotion = product.promotion;
+    const opening = product.salesStartsAt;
+    if (this.opensLater(product) && promotion && opening !== null &&
+      promotion.startsAt <= opening && promotion.endsAt > opening &&
+      promotion.pricePoints > 0 && promotion.pricePoints < product.points) {
+      return promotion.pricePoints;
+    }
+    return this.priceOf(product);
+  }
+
+  planDiscounted(product: MembershipProduct): boolean {
+    return this.planPriceOf(product) < product.points;
+  }
+
   opensLater(product: MembershipProduct): boolean {
     return !product.salesEnabled && product.salesStartsAt !== null && product.salesStartsAt > Date.now();
   }
@@ -925,8 +939,9 @@ struct AccountCenterPage {
   }
 
   openCloudFiles(): void {
-    if (!this.isSuperMember()) {
-      HdsFeedback.showToast('云空间为永久超级会员专享');
+    if (AccountSessionStore.activeMembershipSku() !== 'SUPER_LIFETIME') {
+      this.selectedSku = 'SUPER_LIFETIME';
+      HdsFeedback.showToast('请开通或升级为永久超级会员后使用我的云空间');
       return;
     }
     router.pushUrl({ url: 'pages/CloudFiles' });
@@ -936,7 +951,7 @@ struct AccountCenterPage {
     if (!this.accountLoggedIn) return '登录后查看会员、点数与主题权益';
     if (this.membership.restricted) return '权益暂停中';
     const state = this.membership.state;
-    if (!this.membershipSku || !state) return '开通会员，主题库免费用，朗读礼包每月领';
+    if (!this.membershipSku || !state) return '开通会员畅享主题库，年度及永久会员每月领朗读礼包';
     if (state.expiresAt === null) return '永久有效';
     return `有效期至 ${this.formatDate(state.expiresAt)} · 不自动续费`;
   }
@@ -975,7 +990,12 @@ struct AccountCenterPage {
 
   /** 月度会员不含每月朗读礼包；年度、永久与永久超级会员可领。 */
   giftIncluded(): boolean {
-    return this.giftChars('STANDARD') > 0;
+    if (!this.membership.active || this.membership.restricted) return false;
+    // 历史领取记录仅用于展示已领字数，不能作为当前档位的礼包资格。
+    const benefits = this.membership.benefits;
+    if (benefits) return benefits.standardGiftChars > 0 || benefits.premiumGiftChars > 0;
+    return this.membershipSku === 'ANNUAL' || this.membershipSku === 'LIFETIME' ||
+      this.membershipSku === 'SUPER_LIFETIME';
   }
 
   @Builder
@@ -1185,7 +1205,7 @@ struct AccountCenterPage {
           ForEach(this.memberProducts, (product: MembershipProduct) => {
             this.planCard(product)
           }, (product: MembershipProduct) =>
-            `${product.sku}_${product.salesEnabled}_${this.priceOf(product)}_${product.promotion?.startsAt ?? 0}`)
+            `${product.sku}_${product.salesEnabled}_${this.planPriceOf(product)}_${product.promotion?.startsAt ?? 0}`)
         }
         .padding({ left: AppSpacing.XS, right: AppSpacing.XS, top: AppSpacing.SM, bottom: AppSpacing.SM })
       }
@@ -1219,24 +1239,29 @@ struct AccountCenterPage {
           .fontColor(this.primaryTextColor())
           .maxLines(1)
         Row({ space: AppSpacing.XXS }) {
-          Text(`${this.priceOf(product)}`)
+          Text(`${this.planPriceOf(product)}`)
             .fontSize(AppFontSize.DISPLAY)
             .fontWeight(FontWeight.Bold)
-            .fontColor(this.discounted(product) ? MembershipIcons.accent(product.sku, this.appDarkMode) :
+            .fontColor(this.planDiscounted(product) ? MembershipIcons.accent(product.sku, this.appDarkMode) :
               this.primaryTextColor())
           Text('点')
             .fontSize(AppFontSize.CAPTION)
             .fontColor(this.subTextColor())
             .margin({ bottom: 5 })
-          if (this.discounted(product)) {
-            Text(`${product.points}`)
+        }
+        .alignItems(VerticalAlign.Bottom)
+        Row({ space: AppSpacing.XS }) {
+          if (this.planDiscounted(product)) {
+            Text(this.opensLater(product) ? '首发预告价' : '活动价')
+              .fontSize(AppFontSize.MICRO)
+              .fontColor(MembershipIcons.accent(product.sku, this.appDarkMode))
+            Text(`${product.points} 点`)
               .fontSize(AppFontSize.CAPTION)
               .fontColor(this.subTextColor())
               .decoration({ type: TextDecorationType.LineThrough, color: this.subTextColor() })
-              .margin({ bottom: 5, left: AppSpacing.XS })
           }
         }
-        .alignItems(VerticalAlign.Bottom)
+        .height(18)
         Text(this.planSubtitle(product))
           .fontSize(AppFontSize.CAPTION)
           .fontColor(this.subTextColor())
@@ -1266,7 +1291,9 @@ struct AccountCenterPage {
         this.dividerColor()
     })
     .opacity(product.salesEnabled && this.purchaseBlockReason(product) === '' ? 1 : 0.55)
-    .accessibilityText(`${product.name}，${this.priceOf(product)} 点，${this.planSubtitle(product)}`)
+    .accessibilityText(`${product.name}，${this.planDiscounted(product) ?
+      (this.opensLater(product) ? '首发预告价' : '活动价') : ''}${this.planPriceOf(product)} 点，` +
+      `${this.planDiscounted(product) ? '原价' + product.points + '点，' : ''}${this.planSubtitle(product)}`)
     .onClick(() => {
       if (!this.memberBusy) this.selectedSku = product.sku;
     })
@@ -1414,7 +1441,7 @@ struct AccountCenterPage {
     if (decision.index === 1) await this.claimGift(tier);
   }
 
-  // 对比表的四列：免费、月度/年度、永久、永久超级。单元格 '✓' 表示包含，'—' 表示没有。
+  // 对比表的五列：免费、月度、年度、永久、永久超级。单元格 '✓' 表示包含，'—' 表示没有。
   compareRows(): BenefitCompareRow[] {
     const limits = this.sourceUsage.membershipLimitsEnabled;
     const rows: BenefitCompareRow[] = [
@@ -1693,17 +1720,21 @@ struct AccountCenterPage {
   }
 
   @Builder
-  serviceList() {
+  cloudSpaceCard() {
     Column() {
-      this.serviceRow($r('sys.symbol.arrow_clockwise'), '数据同步',
-        CloudSyncSettingsStore.statusSummary(this.accountLoggedIn, this.cloudSyncEnabled,
-          this.cloudSyncStatus, this.cloudSyncPendingCount, this.cloudSyncLastSuccessAt) +
-          (this.sourceUsage.sourceCount > 0 ? ` · 书源 ${this.sourceUsage.sourceCount} 个` : ''), true, () => {
-          router.pushUrl({ url: 'pages/DataSync' });
-        })
-      this.serviceRow($r('sys.symbol.folder'), '我的云空间', this.cloudSpaceText(), true, () => {
+      this.serviceRow($r('sys.symbol.folder'), '我的云空间', this.cloudSpaceText(), false, () => {
         this.openCloudFiles();
       })
+    }
+    .width('100%')
+    .borderRadius(ThemeRuntime.cardRadius())
+    .clip(true)
+    .backgroundColor(this.cardColor())
+  }
+
+  @Builder
+  serviceList() {
+    Column() {
       this.serviceRow($r('sys.symbol.doc_text'), '会员订单', this.ordersExpanded ? '收起' : '最近 50 笔会员订单', false,
         () => {
           this.toggleOrders();
