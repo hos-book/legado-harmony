@@ -360,11 +360,12 @@ export default class EntryAbility extends UIAbility {
     this.accountBootstrapPromise
       .then(() => HuaweiAccountService.renewSession(this.context))
       .then(() => MembershipThemeGuard.refresh(this.context))
-      .then(() => CloudAutoSync.schedule(this.context, 5000))
       .catch((e: Error) => {
         hilog.warn(0x0000, 'testTag', 'Renew account session failed: %{public}s', JSON.stringify(e));
       })
       .finally(() => {
+        // A failed renewal must not skip the file sync; it checks login and membership itself.
+        CloudAutoSync.schedule(this.context, 5000);
         setTimeout(() => {
           CloudSyncCoordinator.syncAutomatically(
             this.context, CloudSyncCoordinator.TRIGGER_FOREGROUND).catch((e: Error) => {

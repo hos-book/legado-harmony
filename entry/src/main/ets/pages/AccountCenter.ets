@@ -21,6 +21,7 @@ import { MembershipGiftRules } from '../account/MembershipGiftRules';
 import { MembershipOrder, MembershipProduct, MembershipPromotion, MembershipSnapshot } from '../account/MembershipModels';
 import { CloudSyncSummary } from '../account/CloudSyncModels';
 import { HuaweiAccountService } from '../account/HuaweiAccountService';
+import { CloudAutoSync } from '../account/CloudAutoSync';
 import { ThemeRuntime } from '../theme/ThemeRuntime';
 import { ThemeIds } from '../theme/ThemeModels';
 import { syncSystemBars } from '../utils/SystemBars';
@@ -245,6 +246,8 @@ struct AccountCenterPage {
     this.loading = true;
     try {
       await HuaweiAccountService.login(this.context);
+      // 换设备登录后立即拉取云空间的书籍与字体，不必等回到前台或打开云空间页。
+      CloudAutoSync.schedule(this.context, 0);
       HdsFeedback.showToast('登录成功，点数、会员和主题权益已同步');
       await this.refreshMembership(false);
       await this.loadIapProducts();
@@ -267,6 +270,7 @@ struct AccountCenterPage {
     this.loading = true;
     try {
       await this.refreshMembership(true);
+      CloudAutoSync.schedule(this.context, 0);
       if (!this.memberError) HdsFeedback.showToast('账号数据已同步');
     } finally {
       this.loading = false;
@@ -335,6 +339,8 @@ struct AccountCenterPage {
       return;
     }
     await HuaweiAccountService.logout(this.context);
+    // 退出后字体下拉框不再显示云端未下载的字体。
+    CloudAutoSync.schedule(this.context, 0);
     this.editingProfile = false;
     this.membership = new MembershipSnapshot();
     this.orders = [];
@@ -930,6 +936,8 @@ struct AccountCenterPage {
       if (decision.index !== 1) return;
       await MembershipCommerceService.purchase(this.context, quote.quoteId, purchaseUserId);
       this.membership = AccountSessionStore.account().membership || new MembershipSnapshot();
+      // 升级为永久超级会员后立即开始云端书籍与字体同步。
+      CloudAutoSync.schedule(this.context, 0);
       this.agreed = false;
       this.orders = [];
       this.ordersExpanded = false;
