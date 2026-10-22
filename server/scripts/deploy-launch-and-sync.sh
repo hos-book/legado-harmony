@@ -4,8 +4,15 @@
 #      super at half price through 2026-12-25. Production already has the 019/020 tables and columns
 #      (from 000_schema_prerequisites.sql), so 019 only fills in data here; this script stops otherwise.
 #   2. cloudFileRoutes.js: the removal-marker endpoint and delete reason used by font/book auto-sync.
-# Upload qingye-launch-and-sync.zip and this script to /root, then: bash /root/deploy-launch-and-sync.sh
+# Upload qingye-launch-and-sync.zip and this script to /root, then choose explicitly:
+#   bash /root/deploy-launch-and-sync.sh close   # close the manual opening; everyone can buy from 2026-11-01 00:00
+#   bash /root/deploy-launch-and-sync.sh keep    # keep products that are already open by hand open now
 set -euo pipefail
+mode=${1:-}
+if [ "$mode" != close ] && [ "$mode" != keep ]; then
+  echo 'Usage: bash deploy-launch-and-sync.sh close|keep' >&2
+  exit 2
+fi
 test "$(id -u)" -eq 0
 live=/www/wwwroot/qingye.icynol.com
 node=/www/server/nodejs/v22.23.1/bin/node
@@ -68,16 +75,22 @@ finish() {
     echo "Deploy failed; restoring cloudFileRoutes.js from $backup" >&2
     cp -p "$backup/cloudFileRoutes.js" "$live/cloudFileRoutes.js"
     systemctl restart "$service" && health || echo "Rollback needs attention: $backup" >&2
-    echo 'Launch data, if written, is undone with:' >&2
+    echo 'Launch data and the previous manual opening (see membership_products.before) are restored with:' >&2
     echo "  UPDATE membership_products SET sales_starts_at=NULL; DELETE FROM membership_promotions WHERE id LIKE 'launch-2026-%';" >&2
+    if [ "$mode" = close ]; then echo "  UPDATE membership_products SET sales_enabled=true;" >&2; fi
   fi
   exit "$result"
 }
 trap finish EXIT
 changed=1
 
-# 1. Launch data (idempotent).
-"${psql[@]}" -f "$stage/019_membership_launch_schedule.sql" >/dev/null
+# 1. Launch data (idempotent). Fed on stdin: the postgres user cannot read root's private temp directory.
+"${psql[@]}" < "$stage/019_membership_launch_schedule.sql" >/dev/null
+if [ "$mode" = close ]; then
+  # Products opened by hand earlier would otherwise stay on sale before the launch time.
+  "${psql[@]}" -c "UPDATE membership_products SET sales_enabled = false" >/dev/null
+  echo 'Manual opening closed; sales open by schedule at 2026-11-01 00:00 (UTC+8).'
+fi
 test "$("${psql[@]}" -c "SELECT bool_and(sales_starts_at = TIMESTAMPTZ '2026-11-01 00:00:00+08') FROM membership_products")" = t
 test "$("${psql[@]}" -c "SELECT string_agg(sku || ':' || price_points, ',' ORDER BY sku) FROM membership_promotions
   WHERE id IN ('launch-2026-lifetime','launch-2026-super')")" = 'LIFETIME:645,SUPER_LIFETIME:1245'
@@ -87,7 +100,7 @@ install -o "$(stat -c %U "$backup/cloudFileRoutes.js")" -g "$(stat -c %G "$backu
   -m "$(stat -c %a "$backup/cloudFileRoutes.js")" "$stage/cloudFileRoutes.js" "$live/cloudFileRoutes.js"
 systemctl restart "$service"
 health
-"$node" --input-type=module <<'NODE'
+LAUNCH_MODE="$mode" "$node" --input-type=module <<'NODE'
 const catalog = await (await fetch('http://127.0.0.1:8080/v1/membership/catalog')).json();
 const opening = Date.parse('2026-11-01T00:00:00+08:00');
 for (const product of catalog.products) {
@@ -98,9 +111,10 @@ if (promo.LIFETIME !== 645 || promo.SUPER_LIFETIME !== 1245 || promo.MONTHLY !==
   throw new Error('Promotion check failed: ' + JSON.stringify(promo));
 }
 const early = Date.now() < opening;
-if (early && catalog.products.some(p => p.salesEnabled)) throw new Error('Sales must stay closed before the opening');
+const anyOpen = catalog.products.some(p => p.salesEnabled);
+if (early && process.env.LAUNCH_MODE === 'close' && anyOpen) throw new Error('Sales must stay closed before the opening');
 console.log('PASS catalog: opens 2026-11-01 00:00 (UTC+8); half price for permanent tiers;',
-  early ? 'still closed now' : 'now open');
+  anyOpen ? 'on sale now' : 'closed until the opening');
 const markers = await fetch('http://127.0.0.1:8080/v1/cloud-files/tombstones');
 if (markers.status !== 401) throw new Error('Removal-marker endpoint should require login, got ' + markers.status);
 console.log('PASS removal-marker endpoint present (requires login)');
