@@ -5151,9 +5151,9 @@ struct ReadBookPage {
   }
 
   /** 读到本章末尾附近接上下一章，开头附近接上上一章；列表里最多保留当前章前后各一章。 */
-  ensureReaderContinuousNeighbors(listStart: number, listEnd: number): void {
+  ensureReaderContinuousNeighbors(listStart: number, listEnd: number, eager: boolean = false): void {
     if (this.readerContinuousCommitChapter >= 0) return;
-    this.neighborLoader().ensureScrollNeighbors(listStart, listEnd, this.contentPages.length);
+    this.neighborLoader().ensureScrollNeighbors(listStart, listEnd, this.contentPages.length, eager);
   }
 
   neighborLoader(): ReaderNeighborChapterLoader {
@@ -5168,7 +5168,9 @@ struct ReadBookPage {
         isScrollList: (): boolean => this.isReaderContinuousScrollSurfaceActive(),
         isPagedComic: (): boolean => this.isReaderComicPagedMode(),
         scrollWindow: (): ReaderContinuousDataSource => this.readerComicPageDataSource,
-        prepare: (chapterIndex: number): Promise<ReaderScrollSegment | null> =>
+        mayPrefetch: (chapterIndex: number): boolean => chapterIndex >= 0 && chapterIndex < this.chapters.length &&
+          (this.readerPreloadEnabled || this.readerEngine().hasCachedContent(chapterIndex)),
+        prepare:(chapterIndex: number): Promise<ReaderScrollSegment | null> =>
           this.prepareReaderNeighborSegment(chapterIndex),
         publishPagedNeighbor: (chapterIndex: number, pages: string[]): void => {
           if (chapterIndex > this.currentChapterIndex) {
@@ -5323,6 +5325,8 @@ struct ReadBookPage {
       this.onReaderComicScrollIndexChanged(this.readerContinuousLastListStart, this.readerContinuousLastListEnd);
     } else {
       this.readerComicPageDataSource.trim(chapterIndex - 1, chapterIndex + 1);
+      // 继续往同一方向读时下一个相邻章节马上就要用到，趁读者还在这一章就接上。
+      this.ensureReaderContinuousNeighbors(this.readerContinuousLastListStart, this.readerContinuousLastListEnd, true);
     }
     if (resumeTtsAfterSwitch) {
       await this.startTtsReadingFromCurrentPosition(false);
@@ -5450,6 +5454,11 @@ struct ReadBookPage {
         if (visiblePageIndex !== pageIndex && !lastPagePinnedToBottom) {
           console.warn(`[ReaderProgress] continuous restore settled without index callback: ` +
             `chapter=${chapterIndex},target=${pageIndex},visible=${visiblePageIndex}`);
+        }
+        // 停在章首时列表已到顶，往上拉不会再回报可见区；就位后立即接上前后章节，向上跨章才与向下一样无缝。
+        if (this.pendingRestorePageIndex < 0) {
+          this.ensureReaderContinuousNeighbors(this.readerContinuousLastListStart,
+            this.readerContinuousLastListEnd, true);
         }
       }, attempt === 0 ? 96 : 128);
     };
