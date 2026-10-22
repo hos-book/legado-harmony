@@ -18,7 +18,7 @@ test('pilot configuration requires explicit IDs, products and timezone expiry', 
 test('HTTP catalog uses authenticated identity and rejects request-supplied pilot privileges', async t => {
   const app = Fastify();
   t.after(() => app.close());
-  const db = { query: async () => ({ rows: MEMBERSHIP_PRODUCTS.map(p => ({ sku: p.sku, sales_enabled: false })) }) } as unknown as PoolClient;
+  const db = { query: async () => ({ rows: MEMBERSHIP_PRODUCTS.map(p => ({ sku: p.sku, sales_enabled: false, sales_starts_at: null })) }) } as unknown as PoolClient;
   registerMembershipRoutes(app, {
     enabled: true, superEnabled: false,
     salesPilot: parseMembershipSalesPilot(id, 'MONTHLY,SUPER_LIFETIME', new Date(Date.now() + 60000).toISOString()),

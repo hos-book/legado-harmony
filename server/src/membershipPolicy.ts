@@ -1,5 +1,6 @@
 /** Versioned business rules. No client-supplied membership or price is authoritative. */
-export const MEMBERSHIP_POLICY_VERSION = 1;
+// v2: quotes carry the charged price and promotion; v1 quotes are refused after deploy.
+export const MEMBERSHIP_POLICY_VERSION = 2;
 export type MembershipSku = 'MONTHLY' | 'ANNUAL' | 'LIFETIME' | 'SUPER_LIFETIME';
 export type MembershipTier = 'STANDARD' | 'SUPER';
 export type VoiceTier = 'STANDARD' | 'PREMIUM';
@@ -111,9 +112,22 @@ export function membershipGiftChars(sku: MembershipSku, tier: VoiceTier): number
   return tier === 'STANDARD' ? 12000 : 6000;
 }
 
+/** The price charged right now: the product's base price, or an active promotion's lower price. */
+export interface MembershipPrice {
+  pricePoints: number;
+  promotionId: string | null;
+  promotionLabel: string | null;
+  promotionEndsAt: number | null;
+}
+
+export function basePrice(sku: MembershipSku): MembershipPrice {
+  return { pricePoints: membershipProduct(sku).points, promotionId: null, promotionLabel: null, promotionEndsAt: null };
+}
+
 export interface MembershipPurchasePlan {
   sku: MembershipSku;
   listPoints: number;
+  promotionId: string | null;
   creditPoints: number;
   payablePoints: number;
   expectedRevision: number;
@@ -127,9 +141,14 @@ export function planMembershipPurchase(
   terms: readonly MembershipTerm[],
   sku: MembershipSku,
   now: number,
-  newPeriodId: string
+  newPeriodId: string,
+  price: MembershipPrice = basePrice(sku)
 ): MembershipPurchasePlan {
   const product = membershipProduct(sku);
+  const pricePoints = price.pricePoints;
+  if (!Number.isSafeInteger(pricePoints) || pricePoints <= 0 || pricePoints > product.points) {
+    throw new Error('Invalid membership price');
+  }
   const active = membershipActive(current, now) ? current : null;
   if (active?.expiresAt === null &&
       (active.sku === 'SUPER_LIFETIME' || sku !== 'SUPER_LIFETIME')) {
@@ -145,16 +164,17 @@ export function planMembershipPurchase(
         return sum + term.points * ratio;
       }, 0));
     // Upgrade credits are not cash and cannot make an order negative.
-    creditPoints = Math.min(product.points, Math.max(0, creditPoints));
+    creditPoints = Math.min(pricePoints, Math.max(0, creditPoints));
   }
   const anchorAt = active?.anchorAt ?? now;
   const paidMonths = product.months === null ? 0 : (active?.paidMonths ?? 0) + product.months;
   const expiresAt = product.months === null ? null : membershipAnniversary(anchorAt, paidMonths);
   return {
     sku,
-    listPoints: product.points,
+    listPoints: pricePoints,
+    promotionId: price.promotionId,
     creditPoints,
-    payablePoints: product.points - creditPoints,
+    payablePoints: pricePoints - creditPoints,
     expectedRevision: current?.revision ?? 0,
     newPeriod: active === null,
     next: {
@@ -163,13 +183,14 @@ export function planMembershipPurchase(
       anchorAt,
       paidMonths,
       expiresAt,
-      permanentCreditPoints: product.months === null ? product.points : 0,
+      // A later upgrade credits what this permanent product actually cost, promotion included.
+      permanentCreditPoints: product.months === null ? pricePoints : 0,
       revision: (current?.revision ?? 0) + 1
     },
     term: expiresAt === null ? null : {
       startsAt: active?.expiresAt ?? now,
       endsAt: expiresAt,
-      points: product.points
+      points: pricePoints
     }
   };
 }

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { MembershipSalesPilot, pilotAllows } from './membershipSales.js';
 import {
-  MEMBERSHIP_POLICY_VERSION, MEMBERSHIP_PRODUCTS, MembershipError, MembershipState,
+  MEMBERSHIP_POLICY_VERSION, MEMBERSHIP_PRODUCTS, MembershipError, MembershipPrice, MembershipState, basePrice,
   MembershipPurchasePlan, MembershipSku, VoiceTier, membershipActive, membershipBenefits,
   membershipCycle, membershipGiftCycle, membershipGiftChars, membershipProduct, planMembershipPurchase
 } from './membershipPolicy.js';
@@ -55,23 +55,78 @@ async function assertNoDebt(db: MembershipDb, userId: string): Promise<void> {
   }
 }
 
+interface ProductRow { sku: MembershipSku; sales_enabled: boolean; sales_starts_at: Date | null; }
+
+/** On sale when opened by hand, when the scheduled start has passed, or for a pilot account. */
+function productOnSale(row: ProductRow | undefined, userId: string | undefined, now: number,
+  pilot?: MembershipSalesPilot): boolean {
+  if (!row) return false;
+  return row.sales_enabled || (row.sales_starts_at != null && row.sales_starts_at.getTime() <= now) ||
+    pilotAllows(pilot, userId, row.sku, now);
+}
+
 async function assertOnSale(db: MembershipDb, sku: MembershipSku, userId: string,
   now: number, pilot?: MembershipSalesPilot): Promise<void> {
-  const result = await db.query<{ sales_enabled: boolean }>(
-    'SELECT sales_enabled FROM membership_products WHERE sku = $1 FOR SHARE', [sku]);
-  if (!result.rows[0] || (!result.rows[0].sales_enabled && !pilotAllows(pilot, userId, sku, now))) {
+  const result = await db.query<ProductRow>(
+    'SELECT sku, sales_enabled, sales_starts_at FROM membership_products WHERE sku = $1 FOR SHARE', [sku]);
+  if (!productOnSale(result.rows[0], userId, now, pilot)) {
     throw new MembershipError(409, 'MEMBERSHIP_NOT_ON_SALE', '该会员尚未开放购买');
   }
 }
 
+/** Active promotion prices; the lowest valid one per SKU wins. Never above the base price. */
+async function activePrices(db: MembershipDb, now: number): Promise<Map<MembershipSku, MembershipPrice>> {
+  const result = await db.query<{ id: string; sku: MembershipSku; price_points: string; label: string; ends_at: Date }>(
+    `SELECT id, sku, price_points, label, ends_at FROM membership_promotions
+     WHERE starts_at <= $1 AND ends_at > $1 ORDER BY price_points, id`, [new Date(now)]);
+  const prices = new Map<MembershipSku, MembershipPrice>();
+  for (const row of result.rows) {
+    const product = MEMBERSHIP_PRODUCTS.find(item => item.sku === row.sku);
+    const points = Number(row.price_points);
+    if (!product || prices.has(row.sku) || !Number.isSafeInteger(points) || points <= 0 || points >= product.points) continue;
+    prices.set(row.sku, { pricePoints: points, promotionId: row.id, promotionLabel: row.label,
+      promotionEndsAt: row.ends_at.getTime() });
+  }
+  return prices;
+}
+
+export async function membershipPrice(db: MembershipDb, sku: MembershipSku, now = Date.now()): Promise<MembershipPrice> {
+  membershipProduct(sku);
+  return (await activePrices(db, now)).get(sku) ?? basePrice(sku);
+}
+
+/** The running or next promotion per SKU, so the store can announce a launch price before it starts. */
+async function nextPromotions(db: MembershipDb, now: number) {
+  const result = await db.query<{ sku: MembershipSku; price_points: string; label: string; starts_at: Date; ends_at: Date }>(
+    `SELECT sku, price_points, label, starts_at, ends_at FROM membership_promotions
+     WHERE ends_at > $1 ORDER BY starts_at, price_points, id`, [new Date(now)]);
+  const promotions = new Map<MembershipSku, { pricePoints: number; label: string; startsAt: number; endsAt: number }>();
+  for (const row of result.rows) {
+    const product = MEMBERSHIP_PRODUCTS.find(item => item.sku === row.sku);
+    const points = Number(row.price_points);
+    if (!product || promotions.has(row.sku) || !Number.isSafeInteger(points) || points <= 0 || points >= product.points) continue;
+    promotions.set(row.sku, { pricePoints: points, label: row.label, startsAt: row.starts_at.getTime(), endsAt: row.ends_at.getTime() });
+  }
+  return promotions;
+}
+
 export async function membershipCatalog(db: MembershipDb, userId?: string,
   now = Date.now(), pilot?: MembershipSalesPilot) {
-  const result = await db.query<{ sku: string; sales_enabled: boolean }>(
-    'SELECT sku, sales_enabled FROM membership_products');
-  return MEMBERSHIP_PRODUCTS.map((product) => ({
-    ...product, salesEnabled: result.rows.some(row => row.sku === product.sku &&
-      (row.sales_enabled || pilotAllows(pilot, userId, product.sku, now)))
-  }));
+  const result = await db.query<ProductRow>('SELECT sku, sales_enabled, sales_starts_at FROM membership_products');
+  const prices = await activePrices(db, now);
+  const promotions = await nextPromotions(db, now);
+  return MEMBERSHIP_PRODUCTS.map((product) => {
+    const row = result.rows.find(item => item.sku === product.sku);
+    const price = prices.get(product.sku) ?? basePrice(product.sku);
+    return {
+      ...product,
+      salesEnabled: productOnSale(row, userId, now, pilot),
+      salesStartsAt: row?.sales_starts_at?.getTime() ?? null,
+      // The price a quote would charge now; `points` stays the regular price.
+      pricePoints: price.pricePoints,
+      promotion: promotions.get(product.sku) ?? null
+    };
+  });
 }
 
 /** The account can claim once per calendar month, even after an upgrade or a new paid period. */
@@ -109,16 +164,18 @@ export async function quoteMembership(db: MembershipDb, userId: string, sku: Mem
   await assertNoDebt(db, userId);
   await assertOnSale(db, sku, userId, now, pilot);
   const state = await readMembership(db, userId);
+  const price = await membershipPrice(db, sku, now);
   const terms = state ? await db.query<{ term_starts_at: Date; term_ends_at: Date; points_spent: string }>(
     `SELECT term_starts_at, term_ends_at, points_spent FROM membership_orders
      WHERE period_id = $1 AND term_ends_at > $2`, [state.periodId, new Date(now)]) : null;
   const plan = planMembershipPurchase(state, (terms?.rows ?? []).map(row => ({
     startsAt: row.term_starts_at.getTime(), endsAt: row.term_ends_at.getTime(), points: Number(row.points_spent)
-  })), sku, now, randomUUID());
+  })), sku, now, randomUUID(), price);
   const quoteId = randomUUID();
-  // Do not let a renewal quote cross the old membership's expiry.
+  // Do not let a renewal quote cross the old membership's expiry, nor a promotion price outlive it.
   const expiresAt = Math.min(now + 15 * 60 * 1000,
-    membershipActive(state, now) ? state!.expiresAt ?? Infinity : Infinity);
+    membershipActive(state, now) ? state!.expiresAt ?? Infinity : Infinity,
+    price.promotionEndsAt ?? Infinity);
   await db.query(`INSERT INTO membership_quotes(id, user_id, policy_version, plan, expires_at)
     VALUES ($1,$2,$3,$4::jsonb,$5)`, [quoteId, userId, MEMBERSHIP_POLICY_VERSION, JSON.stringify(plan), new Date(expiresAt)]);
   return { quoteId, expiresAt, ...plan };
@@ -175,7 +232,9 @@ export async function purchaseMembership(
     [userId, -plan.payablePoints, balanceAfter, plan.sku, `membership:${userId}:${requestId}`]);
   // A new period starts at payment, rather than the potentially earlier quote time.
   const next = plan.newPeriod
-    ? planMembershipPurchase(state, [], plan.sku, now, plan.next.periodId).next : plan.next;
+    ? planMembershipPurchase(state, [], plan.sku, now, plan.next.periodId, {
+      pricePoints: plan.listPoints, promotionId: plan.promotionId ?? null, promotionLabel: null, promotionEndsAt: null
+    }).next : plan.next;
   await db.query(`INSERT INTO membership_periods
     (id,user_id,sku,anchor_at,paid_months,expires_at,permanent_credit_points)
     VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (id) DO UPDATE SET
@@ -195,11 +254,11 @@ export async function purchaseMembership(
     next.expiresAt === null ? 'infinity' : new Date(next.expiresAt).toISOString()]);
   const order = await db.query<{ id: string }>(`INSERT INTO membership_orders
     (user_id,period_id,sku,request_id,quote_id,list_points,credit_points,points_spent,
-     term_starts_at,term_ends_at,point_ledger_id)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+     term_starts_at,term_ends_at,point_ledger_id,promotion_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
     [userId,next.periodId,plan.sku,requestId,quoteId,plan.listPoints,plan.creditPoints,plan.payablePoints,
       plan.term ? new Date(plan.newPeriod ? now : plan.term.startsAt) : null,
-      plan.term ? new Date(next.expiresAt!) : null,ledger.rows[0]!.id]);
+      plan.term ? new Date(next.expiresAt!) : null,ledger.rows[0]!.id,plan.promotionId ?? null]);
   return { orderId: order.rows[0]!.id, duplicate: false };
 }
 

@@ -21,6 +21,8 @@ test('membership SQL transactions and quota lifecycle (embedded PostgreSQL)', as
   }
   // Rerunning the new migration cannot accidentally enable sales or reset data.
   await db.exec(await readFile(new URL('016_memberships.sql', migrations), 'utf8'));
+  // These tests run in 2028, after the scheduled 2026 launch; exercise manual opening unless a test sets a start.
+  await db.exec('UPDATE membership_products SET sales_starts_at=NULL');
   const adapter = (connection: Pick<PGlite, 'query'>): MembershipDb => ({
     query: connection.query.bind(connection) as unknown as MembershipDb['query']
   });
@@ -79,6 +81,45 @@ test('membership SQL transactions and quota lifecycle (embedded PostgreSQL)', as
       assert.equal(Number(balance.rows[0]!.paid_balance), 9940);
       assert.ok((await membershipCatalog(query, id, now + 60000, pilot)).every(p => !p.salesEnabled));
     } finally { await db.exec('UPDATE membership_products SET sales_enabled=TRUE'); }
+  });
+  await t.test('scheduled start opens sales; a promotion prices quotes, orders and later upgrade credit', async () => {
+    await db.exec('UPDATE membership_products SET sales_enabled=FALSE');
+    try {
+      await db.query('UPDATE membership_products SET sales_starts_at=$1', [new Date(now + 3600000)]);
+      await db.query(`INSERT INTO membership_promotions(id,sku,price_points,label,starts_at,ends_at)
+        VALUES ('test-half','LIFETIME',645,'首发半价',$1,$2)`, [new Date(now), new Date(now + 7200000)]);
+      const id = await user();
+      await assert.rejects(tx(c => quoteMembership(c, id, 'LIFETIME', now)), rejectedCode('MEMBERSHIP_NOT_ON_SALE'));
+      const opening = now + 3600000;
+      const catalog = await membershipCatalog(query, id, opening);
+      const lifetime = catalog.find(p => p.sku === 'LIFETIME')!;
+      assert.ok(catalog.every(p => p.salesEnabled));
+      assert.equal(lifetime.pricePoints, 645);
+      assert.equal(lifetime.points, 1290);
+      assert.equal(lifetime.promotion!.endsAt, now + 7200000);
+      const announced = (await membershipCatalog(query, id, now - 1000)).find(p => p.sku === 'LIFETIME')!;
+      assert.equal(announced.pricePoints, 1290); // Not yet started: still the regular price,
+      assert.equal(announced.promotion!.pricePoints, 645); // but the coming launch price is announced.
+      assert.equal(catalog.find(p => p.sku === 'ANNUAL')!.pricePoints, 480);
+      // A quote issued just before the promotion ends cannot be paid at the promotion price afterwards.
+      const late = await tx(c => quoteMembership(c, id, 'LIFETIME', now + 7200000 - 1000));
+      assert.equal(late.expiresAt, now + 7200000);
+      await assert.rejects(tx(c => purchaseMembership(c, id, late.quoteId, 'late', now + 7200000)),
+        rejectedCode('MEMBERSHIP_QUOTE_EXPIRED'));
+      const { quote } = await buy(id, 'LIFETIME', opening);
+      assert.equal(quote.listPoints, 645);
+      assert.equal(quote.payablePoints, 645);
+      const order = await db.query<{ list_points: string; promotion_id: string }>(
+        'SELECT list_points,promotion_id FROM membership_orders WHERE user_id=$1', [id]);
+      assert.equal(Number(order.rows[0]!.list_points), 645);
+      assert.equal(order.rows[0]!.promotion_id, 'test-half');
+      // After the promotion, upgrading credits what the permanent membership actually cost.
+      const upgrade = await tx(c => quoteMembership(c, id, 'SUPER_LIFETIME', now + 7200000));
+      assert.equal(upgrade.creditPoints, 645);
+      assert.equal(upgrade.payablePoints, 2490 - 645);
+    } finally {
+      await db.exec('UPDATE membership_products SET sales_enabled=TRUE, sales_starts_at=NULL');
+    }
   });
   await t.test('duplicate purchase and duplicate quote charge only once, even after quote expiry', async () => {
     const id = await user();

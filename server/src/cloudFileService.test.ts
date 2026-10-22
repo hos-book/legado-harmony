@@ -267,6 +267,31 @@ test('cloud files: isolation, reservations, integrity, retries and quota enforce
   await service.remove(stranger, large.id);
   assert.equal((await service.summary(stranger)).usedBytes, 0);
   assert.equal(objects.size, 0);
+  // Auto-synced books carry metadata; removal leaves a marker that re-adding the same content clears.
+  await assert.rejects(service.prepare(stranger, { requestId: randomUUID(), name: 'x.txt', kind: 'BOOK', bytes: 3,
+    meta: { title: 'ok', secret: 'no' } }), { code: 'CLOUD_INVALID_FILE' });
+  const bookMeta = { title: '三体', author: '刘慈欣', format: 'txt', contentHash: 'a'.repeat(64) };
+  const synced = await service.prepare(stranger, { requestId: randomUUID(), name: '三体.txt', kind: 'BOOK', bytes: 3, meta: bookMeta });
+  await putChunk(stranger, synced.id, 0, Buffer.from('xyz'));
+  const syncedHash = (await service.complete(stranger, synced.id)).manifestHash!;
+  assert.deepEqual((await service.list(stranger)).files.find(f => f.id === synced.id)!.meta, bookMeta);
+  assert.deepEqual((await service.manifest(stranger, synced.id)).meta, bookMeta);
+  await assert.rejects(service.remove(stranger, synced.id, 'GONE' as never), { code: 'CLOUD_INVALID_REASON' });
+  clock += 8 * 60 * 1000;
+  await service.remove(stranger, synced.id, 'REMOVED');
+  const marker = (await service.tombstones(stranger)).tombstones.find(t => t.id === synced.id)!;
+  assert.equal(marker.reason, 'REMOVED');
+  assert.equal(marker.manifestHash, syncedHash);
+  assert.deepEqual(marker.meta, bookMeta);
+  assert.equal((await service.tombstones(owner)).tombstones.some(t => t.id === synced.id), false); // Markers are per account.
+  const again = await service.prepare(stranger, { requestId: randomUUID(), name: '三体.txt', kind: 'BOOK', bytes: 3,
+    manifestHash: syncedHash, meta: bookMeta });
+  await putChunk(stranger, again.id, 0, Buffer.from('xyz'));
+  await service.complete(stranger, again.id);
+  assert.equal((await service.tombstones(stranger)).tombstones.some(t => t.manifestHash === syncedHash), false);
+  clock += 8 * 60 * 1000;
+  await service.remove(stranger, again.id); // The cloud files page only drops the cloud copy.
+  assert.equal((await service.tombstones(stranger)).tombstones.find(t => t.id === again.id)!.reason, 'DETACHED');
   assert.equal((await new CloudFileService(tx, null).summary(owner)).configured, false);
   await assert.rejects(new CloudFileService(tx, null).prepare(owner, input), { code: 'CLOUD_NOT_CONFIGURED' });
 });

@@ -99,6 +99,8 @@ try {
     const c = await pool.connect();
     try { await c.query(sql); } finally { c.release(); }
   }
+  // Migration 019 schedules the 2026-11-01 launch; these checks exercise manual opening at any date.
+  await pool.query('UPDATE membership_products SET sales_starts_at=NULL');
 
   step = 'sales default closed';
   const closedUser = await user();

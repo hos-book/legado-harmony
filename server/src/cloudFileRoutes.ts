@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { CloudFileService, CloudPrepare, CloudUploadChunk } from './cloudFileService.js';
+import { CloudFileService, CloudPrepare, CloudRemoveReason, CloudUploadChunk } from './cloudFileService.js';
 
 export function registerCloudFileRoutes(app: FastifyInstance, service: CloudFileService, deps: {
   authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
@@ -29,6 +29,8 @@ export function registerCloudFileRoutes(app: FastifyInstance, service: CloudFile
       service.downloadTicket(deps.userId(request), request.params.id, Number(request.params.index), request.body?.requestId));
   app.post<{ Params: { id: string } }>('/v1/cloud-files/:id/complete', { preHandler: guard }, request =>
     service.complete(deps.userId(request), request.params.id));
-  app.post<{ Params: { id: string } }>('/v1/cloud-files/:id/delete', { preHandler: guard }, request =>
-    service.remove(deps.userId(request), request.params.id));
+  app.post<{ Params: { id: string }; Body: { reason?: CloudRemoveReason } }>('/v1/cloud-files/:id/delete',
+    { preHandler: guard, bodyLimit: 4096 }, request =>
+      service.remove(deps.userId(request), request.params.id, request.body?.reason ?? 'DETACHED'));
+  app.get('/v1/cloud-files/tombstones', { preHandler: guard }, request => service.tombstones(deps.userId(request)));
 }

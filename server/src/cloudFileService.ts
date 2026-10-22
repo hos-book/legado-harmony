@@ -6,9 +6,27 @@ import { CloudObjectStore } from './cloudObjectStore.js';
 export const CLOUD_CHUNK_BYTES = 1024 ** 2;
 export const CLOUD_QUOTA_BYTES = 1024 ** 3;
 type Transaction = <T>(fn: (db: MembershipDb) => Promise<T>) => Promise<T>;
-interface FileRow { id: string; user_id: string; kind: string; name: string; bytes: string; state: string; manifest_hash: string | null; expected_manifest_hash: string | null; }
+interface FileRow { id: string; user_id: string; kind: string; name: string; bytes: string; state: string; manifest_hash: string | null; expected_manifest_hash: string | null; meta: CloudFileMeta | null; }
 interface ChunkRow { chunk_index: number; bytes: number; sha256: string; object_key: string; ready: boolean; upload_md5: string | null; upload_expires_at: Date | null; }
-export interface CloudPrepare { requestId: string; kind: string; name: string; bytes: number; manifestHash?: string; }
+export interface CloudPrepare { requestId: string; kind: string; name: string; bytes: number; manifestHash?: string; meta?: unknown; }
+export type CloudFileMeta = Record<string, string>;
+export type CloudRemoveReason = 'REMOVED' | 'DETACHED';
+const META_KEYS = new Set(['title', 'author', 'format', 'contentHash', 'fontName']);
+const TOMBSTONE_DAYS = 180;
+
+/** Only short display strings and a fingerprint; anything else is rejected rather than stored. */
+function normalizeMeta(value: unknown): CloudFileMeta | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) fail(400, 'CLOUD_INVALID_FILE', '文件附加信息无效');
+  const meta: CloudFileMeta = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (!META_KEYS.has(key) || typeof item !== 'string' || item.length > 200 || /[\x00-\x1f]/.test(item)) {
+      fail(400, 'CLOUD_INVALID_FILE', '文件附加信息无效');
+    }
+    if (item) meta[key] = item as string;
+  }
+  return Object.keys(meta).length ? meta : null;
+}
 const fail = (status: number, code: string, message: string): never => { throw new MembershipError(status, code, message); };
 const digest = (body: Buffer) => createHash('sha256').update(body).digest('hex');
 export interface CloudUploadChunk { index: number; bytes: number; sha256: string; md5: string; }
@@ -76,7 +94,7 @@ export class CloudFileService {
         AND ($2='' OR id::text>$2) ORDER BY id LIMIT 101`, [userId, after])).rows;
       const page = rows.slice(0, 100);
       return { files: page.map(row => ({ id: row.id, kind: row.kind, name: row.name,
-        bytes: Number(row.bytes), state: row.state, manifestHash: row.manifest_hash })),
+        bytes: Number(row.bytes), state: row.state, manifestHash: row.manifest_hash, meta: row.meta ?? null })),
         nextCursor: rows.length > 100 ? page[99]!.id : '' };
     });
   }
@@ -89,6 +107,7 @@ export class CloudFileService {
       fail(400, 'CLOUD_INVALID_FILE', '文件名称、大小或上传标识无效');
     }
     if (input.manifestHash !== undefined && !/^[0-9a-f]{64}$/.test(input.manifestHash)) fail(400, 'CLOUD_INVALID_FILE', '文件校验标识无效');
+    const meta = normalizeMeta(input.meta);
     return this.tx(async db => {
       await this.lock(db, userId); await this.member(db, userId);
       const old = (await db.query<FileRow>('SELECT * FROM cloud_files WHERE user_id=$1 AND request_id=$2', [userId, input.requestId])).rows[0];
@@ -102,14 +121,18 @@ export class CloudFileService {
       if (input.manifestHash) {
         const duplicate = (await db.query<FileRow>(`SELECT * FROM cloud_files WHERE user_id=$1 AND kind=$2
           AND state='READY' AND manifest_hash=$3 AND bytes=$4 LIMIT 1`, [userId, input.kind, input.manifestHash, input.bytes])).rows[0];
-        if (duplicate) return { id: duplicate.id, chunkBytes: CLOUD_CHUNK_BYTES, state: duplicate.state };
+        if (duplicate) {
+          // Same content uploaded again from another device: keep one copy, fill in missing metadata.
+          if (meta && !duplicate.meta) await db.query('UPDATE cloud_files SET meta=$2 WHERE id=$1', [duplicate.id, JSON.stringify(meta)]);
+          return { id: duplicate.id, chunkBytes: CLOUD_CHUNK_BYTES, state: duplicate.state };
+        }
       }
       const pending = await db.query("SELECT count(*) FROM cloud_files WHERE user_id=$1 AND state='UPLOADING'", [userId]);
       if (Number(pending.rows[0].count) >= 10) fail(409, 'CLOUD_PENDING_LIMIT', '请先完成或取消已有上传任务');
       if (await this.used(db, userId) + input.bytes > CLOUD_QUOTA_BYTES) fail(409, 'CLOUD_STORAGE_LIMIT', '云空间不足，请先删除不需要的文件');
       const id = randomUUID();
-      await db.query('INSERT INTO cloud_files(id,user_id,request_id,kind,name,bytes,expected_manifest_hash) VALUES($1,$2,$3,$4,$5,$6,$7)',
-        [id, userId, input.requestId, input.kind, input.name, input.bytes, input.manifestHash ?? null]);
+      await db.query('INSERT INTO cloud_files(id,user_id,request_id,kind,name,bytes,expected_manifest_hash,meta) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
+        [id, userId, input.requestId, input.kind, input.name, input.bytes, input.manifestHash ?? null, meta ? JSON.stringify(meta) : null]);
       return { id, chunkBytes: CLOUD_CHUNK_BYTES, state: 'UPLOADING' };
     });
   }
@@ -120,7 +143,7 @@ export class CloudFileService {
       const file = await this.file(db, userId, id);
       const chunks = (await db.query<ChunkRow>('SELECT * FROM cloud_chunks WHERE file_id=$1 ORDER BY chunk_index', [id])).rows;
       return { id, name: file.name, kind: file.kind, state: file.state, bytes: Number(file.bytes),
-        manifestHash: file.manifest_hash, chunkBytes: CLOUD_CHUNK_BYTES,
+        manifestHash: file.manifest_hash, meta: file.meta ?? null, chunkBytes: CLOUD_CHUNK_BYTES,
         chunks: chunks.filter(c => c.ready).map(c => ({ index: c.chunk_index, bytes: c.bytes, sha256: c.sha256 })) };
     });
   }
@@ -194,6 +217,8 @@ export class CloudFileService {
       const hash = digest(Buffer.from(chunks.map(c => `${c.chunk_index}:${c.bytes}:${c.sha256}`).join('\n')));
       if (file.expected_manifest_hash && file.expected_manifest_hash !== hash) fail(409, 'CLOUD_CONTENT_CHANGED', '文件完整性校验失败，请重新上传');
       await db.query("UPDATE cloud_files SET state='READY',manifest_hash=$2,updated_at=now() WHERE id=$1", [id, hash]);
+      // Re-adding content that was removed earlier revives it everywhere.
+      await db.query('DELETE FROM cloud_file_tombstones WHERE user_id=$1 AND kind=$2 AND manifest_hash=$3', [userId, file.kind, hash]);
       return { id, manifestHash: hash };
     });
   }
@@ -241,12 +266,24 @@ export class CloudFileService {
     });
   }
 
-  async remove(userId: string, id: string) {
+  /**
+   * REMOVED: the user removed the book/font itself, so other devices remove their copies too.
+   * DETACHED: only the cloud copy is dropped (e.g. from the cloud files page); local copies stay.
+   */
+  async remove(userId: string, id: string, reason: CloudRemoveReason = 'DETACHED') {
     this.configured();
     if (!validId(id)) fail(404, 'CLOUD_FILE_NOT_FOUND', '云文件不存在');
+    if (reason !== 'REMOVED' && reason !== 'DETACHED') fail(400, 'CLOUD_INVALID_REASON', '删除原因无效');
     await this.tx(async db => {
       await this.lock(db, userId);
-      await db.query("UPDATE cloud_files SET state='DELETING',updated_at=now() WHERE id=$1 AND user_id=$2", [id, userId]);
+      const marked = await db.query<FileRow>(`UPDATE cloud_files SET state='DELETING',updated_at=now()
+        WHERE id=$1 AND user_id=$2 AND state<>'DELETING' RETURNING *`, [id, userId]);
+      const file = marked.rows[0];
+      if (file && file.state !== 'UPLOADING' && file.manifest_hash) {
+        await db.query(`INSERT INTO cloud_file_tombstones(id,user_id,kind,manifest_hash,meta,reason)
+          VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO NOTHING`,
+          [id, userId, file.kind, file.manifest_hash, file.meta ? JSON.stringify(file.meta) : null, reason]);
+      }
     });
     await this.cleanFile(userId, id);
     return { accepted: true };
@@ -275,6 +312,19 @@ export class CloudFileService {
       return chunks.length === 0 || (removed.rowCount ?? 0) > 0;
     });
   }
+  /** Recent removal markers; devices compare them with their local copies. */
+  async tombstones(userId: string) {
+    this.configured();
+    return this.tx(async db => {
+      const rows = (await db.query<{ id: string; kind: string; manifest_hash: string | null; meta: CloudFileMeta | null;
+        reason: string; removed_at: Date }>(`SELECT id,kind,manifest_hash,meta,reason,removed_at FROM cloud_file_tombstones
+        WHERE user_id=$1 AND removed_at > now() - make_interval(days => $2) ORDER BY removed_at DESC LIMIT 2000`,
+        [userId, TOMBSTONE_DAYS])).rows;
+      return { tombstones: rows.map(row => ({ id: row.id, kind: row.kind, manifestHash: row.manifest_hash,
+        meta: row.meta ?? null, reason: row.reason, removedAt: row.removed_at.getTime() })) };
+    });
+  }
+
   async maintenance() {
     if (!this.store || this.cleaning) return;
     this.cleaning = true;
@@ -300,6 +350,8 @@ export class CloudFileService {
       await db.query(`DELETE FROM cloud_download_tickets WHERE (user_id,request_id) IN
         (SELECT user_id,request_id FROM cloud_download_tickets WHERE expires_at<now()-interval '1 day' LIMIT 1000)`);
       await db.query("UPDATE cloud_files SET state='DELETING' WHERE state='UPLOADING' AND updated_at<now()-interval '24 hours'");
+      await db.query(`DELETE FROM cloud_file_tombstones WHERE id IN (SELECT id FROM cloud_file_tombstones
+        WHERE removed_at < now() - make_interval(days => $1) LIMIT 1000)`, [TOMBSTONE_DAYS]);
       return (await db.query<FileRow>("SELECT * FROM cloud_files WHERE state='DELETING' ORDER BY updated_at LIMIT 20")).rows;
     });
     for (const file of files) {
