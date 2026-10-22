@@ -30,6 +30,9 @@ export struct ReaderTtsPlayerPanel {
   @Prop viewportHeight: number = 720;
   onClose: () => void = () => {};
   onOpenCatalog: () => void = () => {};
+  // 书架上的面板脱离了阅读页，朗读模式下给一个回到正文的入口；阅读页自己的面板不显示。
+  @Prop showOpenReader: boolean = false;
+  onOpenReader: () => void = () => {};
   onOpenVoice: () => void = () => ReaderTtsFloatingSession.openVoice();
   onTogglePlayback: () => void = () => {
     ReaderTtsFloatingSession.toggle();
@@ -295,6 +298,10 @@ export struct ReaderTtsPlayerPanel {
         }
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
+
+        if (this.showOpenReader) {
+          this.openReaderButton()
+        }
       }
       .width('100%')
       .alignItems(VerticalAlign.Center)
@@ -344,6 +351,31 @@ export struct ReaderTtsPlayerPanel {
     .borderRadius(ThemeRuntime.largeRadius())
     .backgroundColor(this.darkMode ? '#991C1C1E' : '#B3FFFFFF')
     .border({ width: 0.5, color: this.darkMode ? '#26FFFFFF' : '#E6FFFFFF' })
+  }
+
+  @Builder
+  openReaderButton() {
+    Row({ space: AppSpacing.XXS }) {
+      SymbolGlyph($r('sys.symbol.book'))
+        .fontSize(15)
+        .fontColor([this.accentColor])
+      Text('回到正文')
+        .fontSize(AppFontSize.CAPTION)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.accentColor)
+        .maxLines(1)
+    }
+    .height(32)
+    .padding({ left: AppSpacing.MD, right: AppSpacing.MD })
+    .borderRadius(16)
+    .backgroundColor(ThemeRuntime.accentSurfaceColor(this.darkMode))
+    .alignItems(VerticalAlign.Center)
+    .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.92 })
+    .accessibilityText('回到正文')
+    .onClick(() => {
+      this.optionsPanel = 0;
+      this.onOpenReader();
+    })
   }
 
   @Builder

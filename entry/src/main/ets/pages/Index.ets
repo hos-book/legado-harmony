@@ -1,4 +1,4 @@
-import { window } from '@kit.ArkUI';
+import { router, window } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { webview } from '@kit.ArkWeb';
 import { WebRuntimeAvailability } from '../utils/WebRuntimeAvailability';
@@ -10,6 +10,7 @@ import { syncSystemSafeAreas } from '../utils/SystemBars';
 import { ImmersiveMaterialRuntime } from '../utils/ImmersiveMaterialRuntime';
 import { HdsFeedback } from '../utils/HdsFeedback';
 import { RecentReadShortcut } from '../utils/RecentReadShortcut';
+import { ReaderOpenTrace } from '../utils/ReaderOpenTrace';
 import { ThemeAssetRegistry } from '../theme/ThemeAssetRegistry';
 import { ThemeRuntime } from '../theme/ThemeRuntime';
 import { CloudSyncCoordinator } from '../account/CloudSyncCoordinator';
@@ -310,6 +311,34 @@ struct Index {
     });
   }
 
+  /**
+   * 后台朗读的阅读页已离开路由栈，这里按书架直接打开的方式重新进入正文；
+   * 新阅读页会作为镜像接上正在进行的朗读。
+   */
+  openGlobalTtsReader(): void {
+    const bookUrl = AppStorage.get<string>('globalTtsBookUrl') || '';
+    if (!bookUrl) {
+      HdsFeedback.showToast('暂未获取到朗读中的书籍');
+      return;
+    }
+    this.closeGlobalTtsPanel();
+    ReaderOpenTrace.begin(bookUrl);
+    AppStorage.setOrCreate<boolean>('shelfReaderDirectTransition', true);
+    ReaderOpenTrace.mark(bookUrl, 'direct-open');
+    ReaderOpenTrace.mark(bookUrl, 'route-requested');
+    router.pushUrl({
+      url: 'pages/ReadBook',
+      params: {
+        bookUrl: bookUrl,
+        shelfBookOpening: 'false'
+      }
+    }).catch((error: Error) => {
+      AppStorage.setOrCreate<boolean>('shelfReaderDirectTransition', false);
+      console.error('从朗读面板回到正文失败:', error);
+      ReaderOpenTrace.cancel(bookUrl, 'route-failed');
+    });
+  }
+
   openGlobalTtsCatalog(): void {
     const titles = ReaderTtsFloatingSession.catalogTitles();
     if (titles.length === 0) {
@@ -477,7 +506,9 @@ struct Index {
           bottomInset: this.navBarHeight,
           viewportHeight: this.globalTtsViewportHeight,
           onClose: () => this.closeGlobalTtsPanel(),
-          onOpenCatalog: () => this.openGlobalTtsCatalog()
+          onOpenCatalog: () => this.openGlobalTtsCatalog(),
+          showOpenReader: this.globalTtsMode !== 'audio',
+          onOpenReader: () => this.openGlobalTtsReader()
         })
       }
       if (this.globalTtsActive && this.showGlobalTtsPanel && this.showGlobalTtsCatalog) {
