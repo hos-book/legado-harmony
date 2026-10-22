@@ -61,7 +61,7 @@ struct AccountCenterPage {
   @State products: RechargeProduct[] = AccountCommerceConfig.rechargeProducts();
   @State memberProducts: MembershipProduct[] = [];
   @State membership: MembershipSnapshot = new MembershipSnapshot();
-  @State selectedSku: string = 'ANNUAL';
+  @State @Watch('revealSelectedCompareColumn') selectedSku: string = 'ANNUAL';
   @State memberBusy: boolean = false;
   @State agreed: boolean = false;
   @State memberError: string = '';
@@ -94,6 +94,14 @@ struct AccountCenterPage {
   private cropPanOriginY: number = 0;
   private readonly cropBoxSize: number = 280;
   private readonly purchaseBarHeight: number = 116;
+  // 权益对比表：左侧权益名固定，五个档位列横向滑动；行高固定，两边才能对齐。
+  private readonly compareTitleWidth: number = 112;
+  // 列宽按可视宽度决定一屏显示几列，见 Scroll 的 onAreaChange。
+  @State compareColumnWidth: number = 88;
+  private readonly compareHeaderHeight: number = 84;
+  private readonly compareRowHeight: number = 54;
+  private compareScroller: Scroller = new Scroller();
+  private compareViewportWidth: number = 0;
   private pointsUsageDialogBuilder: CustomBuilder | undefined = undefined;
   private pointsUsageDialogId: number = -1;
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
@@ -1314,10 +1322,10 @@ struct AccountCenterPage {
   }
 
   memberCardBenefits(): string {
-    if (!this.membershipSku) return '专属主题 · 朗读礼包 · 朗读优先 · 书源同步';
+    if (!this.membershipSku) return '专属主题 · 朗读礼包 · 在线朗读优先 · 书源同步';
     const items: string[] = ['专属主题'];
     if (this.giftIncluded()) items.push('每月朗读礼包');
-    items.push('朗读优先', '书源同步');
+    items.push('在线朗读优先', '书源同步');
     if (this.isSuperMember()) items.push('1GB 云空间');
     return items.join(' · ');
   }
@@ -1447,7 +1455,7 @@ struct AccountCenterPage {
     const rows: BenefitCompareRow[] = [
       new BenefitCompareRow('会员主题库', '现有及新增会员主题', ['—', '✓', '✓', '✓', '✓']),
       new BenefitCompareRow('每月朗读礼包', '标准 / 精品（字）', ['—', '—', '5000\n2500', '8000\n4000', '12000\n6000']),
-      new BenefitCompareRow('朗读优先排队', '高峰期优先', ['—', '✓', '✓', '✓', '✓']),
+      new BenefitCompareRow('在线朗读优先排队', '高峰期优先', ['—', '✓', '✓', '✓', '✓']),
       new BenefitCompareRow('有效期', '不自动续费', ['—', '1 个月', '12 个月', '永久', '永久'])
     ];
     if (limits) {
@@ -1499,6 +1507,24 @@ struct AccountCenterPage {
     return result;
   }
 
+  /** 选中档位的列滑出可视区时，把它滑回来并多露出半列，看得出两边还有内容。 */
+  revealSelectedCompareColumn(): void {
+    if (this.compareViewportWidth <= 0) return;
+    const width = this.compareColumnWidth;
+    const left = this.compareColumnForSku(this.selectedSku) * width;
+    const offset = this.compareScroller.currentOffset().xOffset;
+    let target = offset;
+    if (left < offset) {
+      target = left - width / 2;
+    } else if (left + width > offset + this.compareViewportWidth) {
+      target = left + width * 1.5 - this.compareViewportWidth;
+    }
+    target = Math.max(0, Math.min(target, width * 5 - this.compareViewportWidth));
+    if (target !== offset) {
+      this.compareScroller.scrollTo({ xOffset: target, yOffset: 0, animation: { duration: 260, curve: Curve.EaseOut } });
+    }
+  }
+
   compareColumnTint(column: number): string {
     if (column !== this.compareColumnForSku(this.selectedSku)) return '#00000000';
     const accent = MembershipIcons.accent(this.compareColumnSku(column), this.appDarkMode);
@@ -1514,7 +1540,7 @@ struct AccountCenterPage {
           .fontWeight(FontWeight.Bold)
           .fontColor(this.primaryTextColor())
           .layoutWeight(1)
-        Text('点按列切换方案')
+        Text('左右滑动 · 点按列切换方案')
           .fontSize(AppFontSize.CAPTION)
           .fontColor(this.subTextColor())
       }
@@ -1522,43 +1548,68 @@ struct AccountCenterPage {
 
       this.compareHighlightPanel()
 
-      Column() {
-        // Flex 拉伸让同一行单元格等高，选中列的底色才能连成一整列。
-        Flex({ alignItems: ItemAlign.Stretch }) {
+      Row() {
+        Column() {
           Column()
-            .width('25%')
-          ForEach([0, 1, 2, 3, 4], (column: number) => {
-            this.compareHeaderCell(column)
-          }, (column: number) => `head_${column}`)
-        }
-        .width('100%')
-        ForEach(this.compareRows(), (row: BenefitCompareRow, index: number) => {
-          Flex({ alignItems: ItemAlign.Stretch }) {
-            Column({ space: 1 }) {
+            .height(this.compareHeaderHeight)
+          ForEach(this.compareRows(), (row: BenefitCompareRow) => {
+            Column({ space: 2 }) {
               Text(row.title)
                 .fontSize(AppFontSize.CAPTION)
                 .fontWeight(FontWeight.Medium)
                 .fontColor(this.primaryTextColor())
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
               if (row.note) {
                 Text(row.note)
                   .fontSize(AppFontSize.MICRO)
                   .fontColor(this.subTextColor())
                   .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
               }
             }
-            .width('25%')
+            .width('100%')
+            .height(this.compareRowHeight)
+            .padding({ right: AppSpacing.SM })
             .alignItems(HorizontalAlign.Start)
             .justifyContent(FlexAlign.Center)
-            .padding({ top: AppSpacing.MD, bottom: AppSpacing.MD })
-            ForEach([0, 1, 2, 3, 4], (column: number) => {
-              this.compareValueCell(row, column, index === this.compareRows().length - 1)
-            }, (column: number) => `${row.title}_${column}`)
+            .border({ width: { top: 0.5 }, color: this.dividerColor() })
+          }, (row: BenefitCompareRow) => row.title)
+        }
+        .width(this.compareTitleWidth)
+
+        Scroll(this.compareScroller) {
+          Column() {
+            Row() {
+              ForEach([0, 1, 2, 3, 4], (column: number) => {
+                this.compareHeaderCell(column)
+              }, (column: number) => `head_${column}`)
+            }
+            ForEach(this.compareRows(), (row: BenefitCompareRow, index: number) => {
+              Row() {
+                ForEach([0, 1, 2, 3, 4], (column: number) => {
+                  this.compareValueCell(row, column, index === this.compareRows().length - 1)
+                }, (column: number) => `${row.title}_${column}`)
+              }
+              .border({ width: { top: 0.5 }, color: this.dividerColor() })
+            }, (row: BenefitCompareRow) => row.title + row.values.join('|'))
           }
-          .width('100%')
-          .border({ width: { top: 0.5 }, color: this.dividerColor() })
-        }, (row: BenefitCompareRow) => row.title + row.values.join('|'))
+        }
+        .scrollable(ScrollDirection.Horizontal)
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
+        .layoutWeight(1)
+        .align(Alignment.TopStart)
+        .onAreaChange((_old: Area, area: Area) => {
+          this.compareViewportWidth = Number(area.width);
+          // 每列约 96vp：放得下五列就平分不滑动；放不下就显示能放下的整列再多露半列，提示可以滑动。
+          const fit = Math.floor(this.compareViewportWidth / 96);
+          this.compareColumnWidth = fit >= 5 ? this.compareViewportWidth / 5 :
+            this.compareViewportWidth / (Math.max(2, fit) + 0.5);
+        })
       }
       .width('100%')
+      .alignItems(VerticalAlign.Top)
 
       Text('超级会员的书源与云文件共用 1GB；单个书源 960KB 为技术上限。单独售卖的主题不在会员主题库内。')
         .fontSize(AppFontSize.MICRO)
@@ -1618,17 +1669,17 @@ struct AccountCenterPage {
     Column({ space: AppSpacing.XXS }) {
       if (column === 0) {
         SymbolGlyph($r('sys.symbol.person'))
-          .fontSize(20)
+          .fontSize(24)
           .fontColor([this.subTextColor()])
-          .height(30)
+          .height(36)
       } else {
         Image(MembershipIcons.forSku(this.compareColumnSku(column)))
-          .width(30)
-          .height(30)
+          .width(36)
+          .height(36)
           .objectFit(ImageFit.Contain)
       }
       Text(this.compareColumnTitle(column))
-        .fontSize(AppFontSize.MICRO)
+        .fontSize(AppFontSize.CAPTION)
         .fontWeight(FontWeight.Bold)
         .fontColor(column === 0 ? this.subTextColor() :
           MembershipIcons.nameColor(this.compareColumnSku(column), this.appDarkMode))
@@ -1638,7 +1689,9 @@ struct AccountCenterPage {
         .fontSize(AppFontSize.MICRO)
         .fontColor(this.subTextColor())
     }
-    .width('15%')
+    .width(this.compareColumnWidth)
+    .height(this.compareHeaderHeight)
+    .justifyContent(FlexAlign.End)
     .padding({ top: AppSpacing.MD, bottom: AppSpacing.XS })
     .backgroundColor(this.compareColumnTint(column))
     .borderRadius({ topLeft: ThemeRuntime.mediumRadius(), topRight: ThemeRuntime.mediumRadius() })
@@ -1652,11 +1705,11 @@ struct AccountCenterPage {
     Column() {
       if (row.values[column] === '✓') {
         SymbolGlyph($r('sys.symbol.checkmark'))
-          .fontSize(16)
+          .fontSize(18)
           .fontColor([MembershipIcons.nameColor(this.compareColumnSku(column), this.appDarkMode)])
       } else {
         Text(row.values[column])
-          .fontSize(AppFontSize.MICRO)
+          .fontSize(AppFontSize.CAPTION)
           .fontWeight(row.values[column] !== '—' && column === this.compareColumnForSku(this.selectedSku) ?
             FontWeight.Bold : FontWeight.Normal)
           .fontColor(row.values[column] === '—' ? this.subTextColor() :
@@ -1667,9 +1720,9 @@ struct AccountCenterPage {
           .maxLines(2)
       }
     }
-    .width('15%')
-    .constraintSize({ minHeight: 44 })
-    .padding({ left: 2, right: 2 })
+    .width(this.compareColumnWidth)
+    .height(this.compareRowHeight)
+    .padding({ left: AppSpacing.XS, right: AppSpacing.XS })
     .justifyContent(FlexAlign.Center)
     .backgroundColor(this.compareColumnTint(column))
     .borderRadius(last ? { bottomLeft: ThemeRuntime.mediumRadius(), bottomRight: ThemeRuntime.mediumRadius() } : 0)
