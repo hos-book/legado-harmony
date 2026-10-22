@@ -84,7 +84,9 @@ export function membershipCycle(state: MembershipState, now: number): {
   };
 }
 
+/** Monthly terms carry no monthly reading gift; annual and permanent tiers do. */
 export function membershipGiftChars(sku: MembershipSku, tier: VoiceTier): number {
+  if (sku === 'MONTHLY') return 0;
   return sku === 'SUPER_LIFETIME'
     ? (tier === 'STANDARD' ? 3000 : 1500)
     : (tier === 'STANDARD' ? 2000 : 1000);
@@ -153,8 +155,10 @@ export function planMembershipPurchase(
   };
 }
 
-export function membershipBenefits(state: MembershipState | null, now: number) {
+/** tierSku is the product covering `now` (see membershipTierSku); it defaults to the period's last SKU. */
+export function membershipBenefits(state: MembershipState | null, now: number, tierSku?: MembershipSku) {
   const active = membershipActive(state, now);
+  const giftSku = tierSku ?? state?.sku;
   const superMember = active && state?.sku === 'SUPER_LIFETIME';
   return {
     memberThemes: active,
@@ -163,7 +167,7 @@ export function membershipBenefits(state: MembershipState | null, now: number) {
     sourceBytes: superMember ? null : (active ? 512 : 50) * 1024,
     cloudStorageBytes: superMember ? 1024 ** 3 : 0,
     monthlyDownloadBytes: superMember ? 1024 ** 3 : 0,
-    standardGiftChars: active ? membershipGiftChars(state!.sku, 'STANDARD') : 0,
-    premiumGiftChars: active ? membershipGiftChars(state!.sku, 'PREMIUM') : 0
+    standardGiftChars: active && giftSku ? membershipGiftChars(giftSku, 'STANDARD') : 0,
+    premiumGiftChars: active && giftSku ? membershipGiftChars(giftSku, 'PREMIUM') : 0
   };
 }

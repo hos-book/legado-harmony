@@ -217,6 +217,17 @@ test('cloud files: isolation, reservations, integrity, retries and quota enforce
   await service.maintenance();
   assert.equal((await service.summary(stranger)).usedBytes, 0);
   assert.equal(objects.size, 0);
+  const manyChunks = 20; // More than one cleanup batch: one delete request must still free all of it.
+  const large = await service.prepare(stranger, { requestId: randomUUID(), name: '多块.txt', kind: 'BOOK',
+    bytes: (manyChunks - 1) * CLOUD_CHUNK_BYTES + 1 });
+  for (let index = 0; index < manyChunks; index++) {
+    await putChunk(stranger, large.id, index, index < manyChunks - 1 ? block : Buffer.from('z'));
+  }
+  await service.complete(stranger, large.id);
+  clock += 8 * 60 * 1000;
+  await service.remove(stranger, large.id);
+  assert.equal((await service.summary(stranger)).usedBytes, 0);
+  assert.equal(objects.size, 0);
   assert.equal((await new CloudFileService(tx, null).summary(owner)).configured, false);
   await assert.rejects(new CloudFileService(tx, null).prepare(owner, input), { code: 'CLOUD_NOT_CONFIGURED' });
 });

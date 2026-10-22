@@ -126,6 +126,18 @@ export async function checkSourceQuota({ db, tx, race, exchangeSync, config, clo
   assert.equal(accepted(await sync(free, [operation('legacy_0', null, 2)])).accepted, true);
   assert.equal(await sourceCount(free), 50);
   report(step, true);
+
+  step = 'only active super members sync single sources above 512 KiB, within the technical ceiling'; report(step);
+  config.membershipSourceLimitsEnabled = false;
+  const large = { rules: 'x'.repeat(700 * 1024) };
+  const annual = await user('ANNUAL');
+  await assert.rejects(sync(annual, [operation('large', large)]), { code: 'SYNC_PAYLOAD_TOO_LARGE' });
+  const superAccount = await user('SUPER_LIFETIME');
+  assert.equal(accepted(await sync(superAccount, [operation('large', large)])).accepted, true);
+  await assert.rejects(sync(superAccount, [operation('huge', { rules: 'x'.repeat(1000 * 1024) })]),
+    { code: 'SYNC_PAYLOAD_TOO_LARGE' });
+  assert.equal(await sourceCount(superAccount), 1);
+  report(step, true);
 }
 
 async function main() {

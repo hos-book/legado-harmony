@@ -73,7 +73,9 @@ test('historical discounted permanent memberships credit only their recorded val
 });
 
 test('gift amounts follow the four product tiers; permanent periods never expire by age', () => {
-  assert.equal(membershipGiftChars('MONTHLY', 'STANDARD'), 2000);
+  assert.equal(membershipGiftChars('MONTHLY', 'STANDARD'), 0);
+  assert.equal(membershipGiftChars('MONTHLY', 'PREMIUM'), 0);
+  assert.equal(membershipGiftChars('ANNUAL', 'STANDARD'), 2000);
   assert.equal(membershipGiftChars('ANNUAL', 'PREMIUM'), 1000);
   assert.equal(membershipGiftChars('LIFETIME', 'STANDARD'), 2000);
   assert.equal(membershipGiftChars('SUPER_LIFETIME', 'STANDARD'), 3000);
@@ -83,4 +85,6 @@ test('gift amounts follow the four product tiers; permanent periods never expire
   assert.equal(membershipBenefits(life, jan31).cloudStorageBytes, 1024 ** 3);
   assert.equal(membershipBenefits(life, jan31).sourceCount, null);
   assert.equal(membershipBenefits(initial.next, initial.next.expiresAt!).sourceBytes, 50 * 1024);
+  assert.equal(membershipBenefits(initial.next, jan31).standardGiftChars, 0);
+  assert.equal(membershipBenefits(initial.next, jan31, 'ANNUAL').premiumGiftChars, 1000);
 });

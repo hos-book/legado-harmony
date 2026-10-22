@@ -32,5 +32,5 @@ test('shared cloud/source cap and tier limits through the real sync transaction 
     race: jobs => Promise.allSettled(jobs.map(job => job())),
     report(label, done) { if (done) { passed++; t.diagnostic(`PASS fixture: ${label}`); } }
   });
-  assert.equal(passed, 6);
+  assert.equal(passed, 7);
 });

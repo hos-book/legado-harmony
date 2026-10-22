@@ -57,7 +57,8 @@ import {
 } from './ttsTransport.js';
 import {
   cleanupExpiredSyncReceipts,
-  cleanupExpiredTtsUsage
+  cleanupExpiredTtsUsage,
+  cleanupRevokedSyncDevices
 } from './maintenance.js';
 import { InvalidAvatarError, sanitizeAvatarBase64 } from './imageSecurity.js';
 import { reconcileIapOrders } from './iapReconciliation.js';
@@ -78,8 +79,8 @@ import {
   signSessionToken
 } from './sessionTokens.js';
 import { AuthBody, RedeemBody, TtsRedeemBody, TtsSynthesizeBody, IapBody, ProfileBody } from './apiModels.js';
-import { MembershipError, membershipActive } from './membershipPolicy.js';
-import { membershipSnapshot, readMembership } from './membershipService.js';
+import { MembershipError } from './membershipPolicy.js';
+import { membershipPriority, membershipSnapshot } from './membershipService.js';
 import { registerMembershipRoutes } from './membershipRoutes.js';
 import { CloudFileService } from './cloudFileService.js';
 import { registerCloudFileRoutes } from './cloudFileRoutes.js';
@@ -808,8 +809,8 @@ app.post<{ Body: TtsSynthesizeBody }>(
 
     let releaseTtsSlot: (() => void) | null = null;
     try {
-      const member = config.membershipEnabled ? await readMembership(pool, userId) : null;
-      releaseTtsSlot = await ttsConcurrency.acquire(userId, membershipActive(member, Date.now()));
+      const priority = config.membershipEnabled ? await membershipPriority(pool, userId) : false;
+      releaseTtsSlot = await ttsConcurrency.acquire(userId, priority);
     } catch (error) {
       if (!reservation.duplicate) {
         await refundTtsUsage(reservation.usage.id, 'TTS_SERVER_BUSY');
@@ -1342,13 +1343,14 @@ const ttsReservationTimer = setInterval(() => {
 ttsReservationTimer.unref();
 const runSyncMaintenance = async () => {
   try {
-    const [deletedReceipts, deletedTtsUsage] = await Promise.all([
+    const [deletedReceipts, deletedTtsUsage, deletedDevices] = await Promise.all([
       cleanupExpiredSyncReceipts(config.sync.receiptRetentionDays),
-      cleanupExpiredTtsUsage(config.sis.usageRetentionDays)
+      cleanupExpiredTtsUsage(config.sis.usageRetentionDays),
+      cleanupRevokedSyncDevices()
     ]);
-    if (deletedReceipts > 0 || deletedTtsUsage > 0) {
+    if (deletedReceipts > 0 || deletedTtsUsage > 0 || deletedDevices > 0) {
       app.log.info(
-        { deletedReceipts, deletedTtsUsage },
+        { deletedReceipts, deletedTtsUsage, deletedDevices },
         'deleted expired non-essential history'
       );
     }

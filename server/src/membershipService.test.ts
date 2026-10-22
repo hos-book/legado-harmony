@@ -102,23 +102,45 @@ test('membership SQL transactions and quota lifecycle (embedded PostgreSQL)', as
   });
   await t.test('gifts are exclusive, idempotent, extend on renewal and remain in their own period', async () => {
     const id = await user();
-    await buy(id, 'MONTHLY');
+    await buy(id, 'ANNUAL');
     const first = await tx(client => claimMembershipGift(client, id, 'STANDARD', now));
     const duplicate = await tx(client => claimMembershipGift(client, id, 'STANDARD', now));
     assert.equal(first.chars, 2000);
     assert.equal(duplicate.duplicate, true);
     await assert.rejects(tx(client => claimMembershipGift(client, id, 'PREMIUM', now)), rejectedCode('MEMBERSHIP_GIFT_ALREADY_CLAIMED'));
-    await buy(id, 'MONTHLY', now + 1000);
+    await buy(id, 'ANNUAL', now + 1000);
     let grants = await db.query<{ expires_at: Date; remaining_chars: number }>(
       "SELECT expires_at,remaining_chars FROM tts_quota_grants WHERE user_id=$1 AND source='MEMBERSHIP'", [id]);
-    assert.equal(grants.rows[0]!.expires_at.getTime(), membershipAnniversary(now, 2));
+    assert.equal(grants.rows[0]!.expires_at.getTime(), membershipAnniversary(now, 24));
     await tx(client => claimMembershipGift(client, id, 'PREMIUM', membershipAnniversary(now, 1)));
-    const oldExpiry = membershipAnniversary(now, 2);
+    const oldExpiry = membershipAnniversary(now, 24);
     await buy(id, 'MONTHLY', oldExpiry);
     grants = await db.query<{ expires_at: Date; remaining_chars: number }>(
       "SELECT expires_at,remaining_chars FROM tts_quota_grants WHERE user_id=$1 AND source='MEMBERSHIP'", [id]);
     assert.ok(grants.rows.every(grant => grant.expires_at.getTime() === oldExpiry));
     assert.equal((await membershipSnapshot(query, id, oldExpiry)).claim, null);
+  });
+  await t.test('monthly terms carry no gift, even when they extend an annual period', async () => {
+    const monthly = await user();
+    await buy(monthly, 'MONTHLY');
+    const snapshot = await membershipSnapshot(query, monthly, now);
+    assert.equal(snapshot.tierSku, 'MONTHLY');
+    assert.equal(snapshot.benefits.standardGiftChars, 0);
+    await assert.rejects(tx(c => claimMembershipGift(c, monthly, 'STANDARD', now)), rejectedCode('MEMBERSHIP_GIFT_NOT_INCLUDED'));
+
+    const annual = await user();
+    await buy(annual, 'ANNUAL');
+    await buy(annual, 'MONTHLY', now + 1000); // The period's latest SKU becomes MONTHLY.
+    assert.equal((await readMembership(query, annual))!.sku, 'MONTHLY');
+    const inAnnual = await membershipSnapshot(query, annual, membershipAnniversary(now, 11));
+    assert.equal(inAnnual.tierSku, 'ANNUAL');
+    assert.equal(inAnnual.benefits.standardGiftChars, 2000);
+    await tx(c => claimMembershipGift(c, annual, 'STANDARD', membershipAnniversary(now, 11)));
+    const inMonthly = await membershipSnapshot(query, annual, membershipAnniversary(now, 12));
+    assert.equal(inMonthly.tierSku, 'MONTHLY');
+    assert.equal(inMonthly.benefits.premiumGiftChars, 0);
+    await assert.rejects(tx(c => claimMembershipGift(c, annual, 'PREMIUM', membershipAnniversary(now, 12))),
+      rejectedCode('MEMBERSHIP_GIFT_NOT_INCLUDED'));
   });
   await t.test('lifetime upgrade makes existing gifts permanent without granting twice', async () => {
     const id = await user();

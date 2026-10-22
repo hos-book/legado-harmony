@@ -243,20 +243,27 @@ export class CloudFileService {
     return { accepted: true };
   }
   private async cleanFile(userId: string, id: string) {
-    await this.tx(async db => {
+    // Bounded transactions keep each batch short; continuing until the file is gone (or the time
+    // budget ends) releases deleted space promptly instead of a few chunks per maintenance minute.
+    const deadline = this.now() + 20_000;
+    while (!(await this.cleanFileBatch(userId, id)) && this.now() < deadline) { /* next batch */ }
+  }
+  /** Returns true when nothing more can be removed now (file gone, or only in-flight staging remains). */
+  private async cleanFileBatch(userId: string, id: string): Promise<boolean> {
+    return this.tx(async db => {
       await this.lock(db, userId);
       const file = (await db.query<FileRow>("SELECT * FROM cloud_files WHERE user_id=$1 AND id=$2 AND state='DELETING'", [userId, id])).rows[0];
-      if (!file) return;
-      // Bounded batches avoid a transaction timeout for large files; reserved bytes are freed only on completion.
+      if (!file) return true;
       const chunks = (await db.query<ChunkRow>(`SELECT * FROM cloud_chunks WHERE file_id=$1
-        AND (upload_expires_at IS NULL OR upload_expires_at<$2) LIMIT 8`, [id, new Date(this.now() - CLEANUP_GRACE_MS)])).rows;
+        AND (upload_expires_at IS NULL OR upload_expires_at<$2) LIMIT 16`, [id, new Date(this.now() - CLEANUP_GRACE_MS)])).rows;
       await Promise.all(chunks.filter(chunk => chunk.upload_md5).map(chunk => this.configured().delete(stagingKey(chunk.object_key))));
       await db.query('SELECT 1');
       await Promise.all(chunks.map(chunk => this.configured().delete(chunk.object_key)));
       for (const chunk of chunks) {
         await db.query('DELETE FROM cloud_chunks WHERE file_id=$1 AND chunk_index=$2', [id, chunk.chunk_index]);
       }
-      await db.query('DELETE FROM cloud_files WHERE id=$1 AND NOT EXISTS(SELECT 1 FROM cloud_chunks WHERE file_id=$1)', [id]);
+      const removed = await db.query('DELETE FROM cloud_files WHERE id=$1 AND NOT EXISTS(SELECT 1 FROM cloud_chunks WHERE file_id=$1)', [id]);
+      return chunks.length === 0 || (removed.rowCount ?? 0) > 0;
     });
   }
   async maintenance() {

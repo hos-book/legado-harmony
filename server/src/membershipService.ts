@@ -23,6 +23,26 @@ export async function readMembership(db: MembershipDb, userId: string): Promise<
   } : null;
 }
 
+/** Lightweight queue-priority check; refund debt suspends every paid benefit. */
+export async function membershipPriority(db: MembershipDb, userId: string, now = Date.now()): Promise<boolean> {
+  if (!membershipActive(await readMembership(db, userId), now)) return false;
+  const debt = await db.query<{ iap_debt_points: string }>(
+    'SELECT iap_debt_points FROM account_debts WHERE user_id = $1', [userId]);
+  return Number(debt.rows[0]?.iap_debt_points ?? 0) <= 0;
+}
+
+/**
+ * The product that pays for `now`. A periodic period keeps the SKU of its latest purchase, so an annual
+ * member who adds a month would otherwise look monthly; the covering order decides benefits instead.
+ */
+export async function membershipTierSku(db: MembershipDb, state: MembershipState, now = Date.now()): Promise<MembershipSku> {
+  if (state.expiresAt === null) return state.sku;
+  const covering = await db.query<{ sku: MembershipSku }>(`SELECT sku FROM membership_orders
+    WHERE period_id = $1 AND term_starts_at <= $2 AND term_ends_at > $2
+    ORDER BY term_starts_at DESC LIMIT 1`, [state.periodId, new Date(now)]);
+  return covering.rows[0]?.sku ?? state.sku;
+}
+
 async function lockAccount(db: MembershipDb, userId: string): Promise<void> {
   await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`membership:${userId}`]);
 }
@@ -61,12 +81,13 @@ export async function membershipSnapshot(db: MembershipDb, userId: string, now =
   const restricted = Number(debt.rows[0]?.iap_debt_points ?? 0) > 0;
   const active = !restricted && membershipActive(state, now);
   const cycle = active ? membershipCycle(state!, now) : null;
+  const tierSku = active ? await membershipTierSku(db, state!, now) : null;
   const claims = cycle ? await db.query<{ tier: VoiceTier; chars: number }>(
     'SELECT tier, chars FROM membership_gift_claims WHERE period_id = $1 AND cycle_index = $2',
     [state!.periodId, cycle.index]) : null;
   return {
-    state, active, restricted, cycle, claim: claims?.rows[0] ?? null,
-    benefits: membershipBenefits(active ? state : null, now),
+    state, active, restricted, cycle, tierSku, claim: claims?.rows[0] ?? null,
+    benefits: membershipBenefits(active ? state : null, now, tierSku ?? undefined),
     serverNow: now
   };
 }
@@ -193,8 +214,11 @@ export async function claimMembershipGift(db: MembershipDb, userId: string, tier
     if (prior.rows[0].tier !== tier) throw new MembershipError(409, 'MEMBERSHIP_GIFT_ALREADY_CLAIMED', '本期已领取另一档额度');
     return { ...prior.rows[0], duplicate: true };
   }
+  const chars = membershipGiftChars(await membershipTierSku(db, state, now), tier);
+  if (chars <= 0) {
+    throw new MembershipError(403, 'MEMBERSHIP_GIFT_NOT_INCLUDED', '月度会员不含每月朗读礼包，年度及永久会员可领取');
+  }
   await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`tts-quota:${userId}:${tier}`]);
-  const chars = membershipGiftChars(state.sku, tier);
   const key = `membership-gift:${state.periodId}:${cycle.index}`;
   const balance = await db.query<{ balance: string }>(`SELECT COALESCE(SUM(remaining_chars),0)::bigint AS balance
     FROM tts_quota_grants WHERE user_id=$1 AND tier=$2 AND remaining_chars>0 AND expires_at>$3`,

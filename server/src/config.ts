@@ -131,7 +131,8 @@ export const config = {
       'SYNC_RESPONSE_COMPRESSION_THRESHOLD_BYTES',
       1024
     ),
-    receiptRetentionDays: positiveInt('SYNC_RECEIPT_RETENTION_DAYS', 7),
+    // Receipts only make retried uploads idempotent; three days covers offline retries.
+    receiptRetentionDays: positiveInt('SYNC_RECEIPT_RETENTION_DAYS', 3),
     maintenanceIntervalMs: positiveInt('SYNC_MAINTENANCE_INTERVAL_MS', 6 * 60 * 60 * 1000)
   }
 };
