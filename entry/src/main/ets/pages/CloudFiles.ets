@@ -318,14 +318,16 @@ struct CloudFilesPage {
   @Builder
   fileRow(file: CloudFileItem) {
     Row({ space: AppSpacing.LG }) {
-      SymbolGlyph(file.kind === 'BOOK' ? $r('sys.symbol.book') :
-        (file.kind === 'FONT' ? $r('sys.symbol.textformat') : $r('sys.symbol.externaldrive')))
-        .fontSize(22)
-        .fontColor([ThemeRuntime.accentColor(this.dark)])
-        .width(40)
-        .height(40)
-        .borderRadius(20)
-        .backgroundColor(ThemeRuntime.inputColor(this.dark))
+      Stack({ alignContent: Alignment.Center }) {
+        SymbolGlyph(file.kind === 'BOOK' ? $r('sys.symbol.book') :
+          (file.kind === 'FONT' ? $r('sys.symbol.textformat') : $r('sys.symbol.externaldrive')))
+          .fontSize(22)
+          .fontColor([ThemeRuntime.accentColor(this.dark)])
+      }
+      .width(40)
+      .height(40)
+      .borderRadius(20)
+      .backgroundColor(ThemeRuntime.inputColor(this.dark))
       Column({ space: AppSpacing.XXS }) {
         Text(file.name)
           .fontSize(AppFontSize.BODY_LARGE)
