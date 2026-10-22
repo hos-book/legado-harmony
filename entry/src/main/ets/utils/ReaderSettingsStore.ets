@@ -177,6 +177,7 @@ export class ReaderSettingsStore {
     const profile = await ReaderSettingsStore.loadThemeProfile(store, activeThemeId);
     if (profile) {
       await ReaderSettingsStore.readGlobalFontSettings(store, profile);
+      await ReaderSettingsStore.applyThemePageTurnDefault(store, activeThemeId, profile);
       ReaderSettingsStore.cachedSettings = ReaderSettingsStore.clone(profile);
       ReaderSettingsStore.cachedThemeId = activeThemeId;
       return ReaderSettingsStore.clone(profile);
@@ -430,6 +431,7 @@ export class ReaderSettingsStore {
     settings.regexShadowColor = await ReaderSettingsStore.getString(store, ReaderSettingsStore.KEY_REGEX_SHADOW_COLOR, '');
     settings.regexFontRulesRaw = await ReaderSettingsStore.getString(store, ReaderSettingsStore.KEY_REGEX_FONT_RULES_RAW, '');
     ReaderSettingsStore.mergeStorageFontSettings(settings);
+    await ReaderSettingsStore.applyThemePageTurnDefault(store, activeThemeId, settings);
     ReaderSettingsStore.cachedSettings = ReaderSettingsStore.clone(settings);
     ReaderSettingsStore.cachedThemeId = activeThemeId;
     await ReaderSettingsStore.persistThemeProfile(store, activeThemeId, settings);
@@ -468,6 +470,7 @@ export class ReaderSettingsStore {
       next.themeIndex = ReaderThemeHelper.APP_THEME_INDEX;
     }
     ReaderSettingsStore.copyGlobalFontSettings(current, next);
+    await ReaderSettingsStore.applyThemePageTurnDefault(store, nextId, next);
     await ReaderSettingsStore.persistThemeProfile(store, nextId, next);
     ReaderSettingsStore.cachedSettings = ReaderSettingsStore.clone(next);
     ReaderSettingsStore.cachedThemeId = nextId;
@@ -1156,6 +1159,20 @@ export class ReaderSettingsStore {
 
   private static themeProfileKey(themeId: string): string {
     return `${ReaderSettingsStore.THEME_PROFILE_PREFIX}${ReaderSettingsStore.normalizeThemeProfileId(themeId)}`;
+  }
+
+  // Upgrade this theme once, including existing profiles. Later manual animation choices remain intact.
+  private static async applyThemePageTurnDefault(store: preferences.Preferences, themeId: string,
+    settings: ReaderSettings): Promise<void> {
+    if (ReaderSettingsStore.normalizeThemeProfileId(themeId) !== 'obsidian-archive') return;
+    const key = 'readerObsidian3DDefaultV1';
+    if (await store.get(key, false) === true) return;
+    // Vertical paging cannot render a horizontal page curl; use the normal horizontal mode for this preset.
+    if (settings.pageTurnMode === 0) settings.pageTurnMode = 2;
+    settings.pageTurnAnimationType = ReaderSettingsStore.PAGE_TURN_ANIMATION_3D;
+    await store.put(ReaderSettingsStore.themeProfileKey(themeId), JSON.stringify(ReaderSettingsStore.clone(settings)));
+    await store.put(key, true);
+    await store.flush();
   }
 
   private static async loadThemeProfile(store: preferences.Preferences,

@@ -57,10 +57,14 @@ node scripts/membership-theme-check.mjs
 node scripts/app-icon-check.mjs
 node scripts/theme-framework-check.mjs
 node scripts/obsidian-reader-bubbles-check.mjs
+node scripts/reader-emulation-fold-check.mjs
+node scripts/reader-settings-persistence-check.mjs
 ```
 
 2026-10-22 阅读气泡修正：`ThemeRuntime` 的气泡样式白名单补齐 `gilded-orbit`，修复应用主题时被替换为普通气泡的问题；同时将主题继承的强调文字颜色改为香槟色，避免覆盖墨底气泡预设。段评和「本章说」统一使用原生绘制的折角藏书签、细金边与小书签尾，浅色为墨底金字，深色为香槟底墨字。书源显式设置的段评颜色和圆角仍优先。
 
 新增验证从主题应用开始，经过实际阅读页上下文和原生文字样式转换，覆盖浅深色、书签资源、段评与本章说绘制、书源覆盖和授权回退。`scripts/preview-obsidian-bubbles.mjs` 使用同一运行时与实际绘制路径生成评审图；评审图的文字由 SVG 排版，不代替设备截图。
+
+2026-10-22 翻页调整：曜金主题首次创建或升级现有阅读配置时默认使用 3D 仿真；已有上下翻页模式同步改为横向。每台设备只迁移一次，此后手动选择的翻页方式会继续保留，其他主题配置不变。3D 页角正面曲线和背面折线使用同一组原始几何点，修复分别收缩离屏控制点造成的接缝错位；向前翻页的背面贴图补齐镜像补偿。回归检查覆盖页首/页脚、贴近页边拖动、不同宽高比及正反向贴图角点。
 
 服务端自动化覆盖普通会员拒绝、周年与闰日、过期续领、旧请求重放、欠款暂停、目录下架、点数不变、迁移重跑及 HTTP 认证绑定。客户端脚本覆盖授权、到期/退出后的整套与自定义部件撤回、图标权限和有效授权保留。鸿蒙 HAP 编译验证语法和资源；真机冷启动、折叠屏、字体与翻页效果仍需设备验收。

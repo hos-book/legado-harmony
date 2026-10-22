@@ -345,6 +345,32 @@ const tests = {
     assert.equal(loaded.keepParagraphIndent, true);
     assert.equal(loaded.readerHeaderEnabled, true);
   },
+  async 'obsidian uses 3D once and preserves subsequent manual choices'() {
+    const h = harness();
+    await h.settings.load({});
+    h.values.set('appThemeId', 'obsidian-archive');
+    let settings = await h.settings.switchThemeProfile({}, 'classic-blue', 'obsidian-archive');
+    assert.equal(settings.pageTurnAnimationType, 7);
+    assert.notEqual(settings.pageTurnMode, 0);
+    await h.settings.savePageTurnAnimationType({}, 1);
+    settings = await h.settings.reload({});
+    assert.equal(settings.pageTurnAnimationType, 1);
+    h.values.set('appThemeId', 'classic-blue');
+    settings = await h.settings.switchThemeProfile({}, 'obsidian-archive', 'classic-blue');
+    assert.equal(settings.pageTurnAnimationType, 1);
+  },
+  async 'existing obsidian profile upgrades without altering typography'() {
+    const h = harness();
+    h.disk.set('readerThemeProfileV1_obsidian-archive', JSON.stringify({
+      pageTurnMode: 0, pageTurnAnimationType: 4, fontSize: 27
+    }));
+    h.values.set('appThemeId', 'obsidian-archive');
+    const settings = await h.settings.reload({});
+    assert.equal(settings.pageTurnMode, 2);
+    assert.equal(settings.pageTurnAnimationType, 7);
+    assert.equal(settings.fontSize, 27);
+    assert.equal((await h.settings.reload({})).pageTurnAnimationType, 7);
+  },
   async 'theme profiles remain independent after queued saves'() {
     const h = harness();
     await h.settings.saveLayoutSettings({}, 27, 16, 4);

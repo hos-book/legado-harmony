@@ -232,7 +232,7 @@ export class ReaderEmulationFlipPainter {
       context.scale(-1, 1);
     }
     this.drawPathBShadow(context, geometry, width, height);
-    this.drawPathC(context, page, geometry, width, height);
+    this.drawPathC(context, page, geometry, width, height, mirrored);
     this.drawPathAContent(context, page, geometry, width, height, mirrored);
     context.restore();
   }
@@ -291,7 +291,7 @@ export class ReaderEmulationFlipPainter {
           context.drawImage(page, 0, 0, leafWidth, height);
         } else {
           this.drawPathBShadow(context, geometry, leafWidth, height);
-          this.drawPathC(context, page, geometry, leafWidth, height);
+          this.drawPathC(context, page, geometry, leafWidth, height, mirrored);
           this.drawPathAContent(context, page, geometry, leafWidth, height, mirrored);
         }
       }
@@ -443,8 +443,8 @@ export class ReaderEmulationFlipPainter {
     const k = this.intersectionPoint(a, h, c, j);
     const d: FoldPoint = { x: (c.x + 2 * e.x + b.x) / 4, y: (2 * e.y + c.y + b.y) / 4 };
     const i: FoldPoint = { x: (j.x + 2 * h.x + k.x) / 4, y: (2 * h.y + j.y + k.y) / 4 };
-    // 几何点保持原值，阴影角度和纸背镜像都依赖它们；纸张快翻出时 H/J/K 会远离窗口，
-    // 只在生成路径时再收回到窗口外的有限范围（见 pathPoint）。
+    // 正面曲线、纸背折线与阴影共用原始几何点。分别收缩离屏控制点会改变曲线，
+    // 让中点 D/I 脱离纸背边界，产生错位楔形；离屏部分交给画布统一裁剪。
     return {
       a: a,
       b: b,
@@ -508,38 +508,15 @@ export class ReaderEmulationFlipPainter {
     return !geometry.topCorner && intercept < 0;
   }
 
-  /**
-   * 路径用的顶点：远离窗口的点沿它与 anchor 的连线收回到窗口外的有限范围。
-   * 只钳制单个坐标会改变连线的斜率，纸张快翻出时会在窗口里留下一块错位的楔形。
-   */
-  private pathPoint(point: FoldPoint, anchor: FoldPoint, width: number, height: number): FoldPoint {
-    const minX = -2 * width;
-    const maxX = 3 * width;
-    const minY = -2 * height;
-    const maxY = 3 * height;
-    if (point.x >= minX && point.x <= maxX && point.y >= minY && point.y <= maxY) {
-      return point;
-    }
-    const dx = point.x - anchor.x;
-    const dy = point.y - anchor.y;
-    let scale = 1;
-    if (dx > 0.0001) scale = Math.min(scale, (maxX - anchor.x) / dx);
-    if (dx < -0.0001) scale = Math.min(scale, (minX - anchor.x) / dx);
-    if (dy > 0.0001) scale = Math.min(scale, (maxY - anchor.y) / dy);
-    if (dy < -0.0001) scale = Math.min(scale, (minY - anchor.y) / dy);
-    scale = Math.max(0, scale);
-    return { x: anchor.x + dx * scale, y: anchor.y + dy * scale };
-  }
-
   private pathA(geometry: FoldGeometry, width: number, height: number): Path2D {
     const path = new Path2D();
     const a = geometry.a;
     const b = geometry.b;
     const c = geometry.c;
     const e = geometry.e;
-    const k = this.pathPoint(geometry.k, a, width, height);
-    const h = this.pathPoint(geometry.h, k, width, height);
-    const j = this.pathPoint(geometry.j, k, width, height);
+    const k = geometry.k;
+    const h = geometry.h;
+    const j = geometry.j;
     if (geometry.topCorner) {
       // drawing.Path 在 reset() 后首个 lineTo 隐含从 (0,0) 起画，因此 pathA 是整页减去折角。
       path.moveTo(0, 0);
@@ -569,8 +546,8 @@ export class ReaderEmulationFlipPainter {
     const a = geometry.a;
     const b = geometry.b;
     const d = geometry.d;
-    const k = this.pathPoint(geometry.k, a, width, height);
-    const i = this.pathPoint(geometry.i, d, width, height);
+    const k = geometry.k;
+    const i = geometry.i;
     path.moveTo(i.x, i.y);
     path.lineTo(d.x, d.y);
     path.lineTo(b.x, b.y);
@@ -584,7 +561,7 @@ export class ReaderEmulationFlipPainter {
   private strokePaperEdge(context: CanvasRenderingContext2D, geometry: FoldGeometry, width: number,
     height: number): void {
     const a = geometry.a;
-    const k = this.pathPoint(geometry.k, a, width, height);
+    const k = geometry.k;
     context.save();
     context.beginPath();
     context.moveTo(geometry.b.x, geometry.b.y);
@@ -598,7 +575,7 @@ export class ReaderEmulationFlipPainter {
 
   // 对应 drawPathC：纸张背面区域 + 反射内容 + 背页阴影。
   private drawPathC(context: CanvasRenderingContext2D, page: image.PixelMap, geometry: FoldGeometry,
-    width: number, height: number): void {
+    width: number, height: number, mirrored: boolean): void {
     const path = this.pathC(geometry, width, height);
     context.save();
     context.fillStyle = this.activePaperColor;
@@ -616,6 +593,11 @@ export class ReaderEmulationFlipPainter {
       context.translate(e.x, e.y);
       context.transform(-(1 - 2 * sin * sin), 2 * sin * cos, 2 * sin * cos, 1 - 2 * sin * sin, 0, 0);
       context.translate(-e.x, -e.y);
+      // Reflect the same source sheet as the front when turning toward the previous page.
+      if (mirrored) {
+        context.translate(width, 0);
+        context.scale(-1, 1);
+      }
       context.drawImage(page, 0, 0, width, height);
       context.restore();
     }
