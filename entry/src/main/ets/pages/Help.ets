@@ -5,13 +5,16 @@ import { ThemeRuntime } from '../theme/ThemeRuntime';
 import { syncSystemBars } from '../utils/SystemBars';
 import { AppFontSize } from '../theme/AppFontSize';
 import { PageScaffold } from '../components/common/PageScaffold';
+import { CollapsingHeader } from '../utils/CollapsingHeader';
 
 @Entry
 @Component
 struct HelpPage {
   @StorageLink('appDarkMode') appDarkMode: boolean = false;
   @StorageLink('themeRevision') themeRevision: number = 0;
+  @State headerCollapse: number = 0;
   private webController: webview.WebviewController = new webview.WebviewController();
+  private lastWebScrollY: number = 0;
   /** 打开后要滚动到的小节 id，由调用方通过 anchor 参数传入。 */
   private anchor: string = '';
 
@@ -28,7 +31,7 @@ struct HelpPage {
 
   build() {
     Stack() {
-      PageScaffold({ title: '使用说明', scrollable: false, content: () => {
+      PageScaffold({ title: '使用说明', scrollable: false, externalCollapse: this.headerCollapse, content: () => {
         this.pageContent()
       } })
     }
@@ -48,6 +51,12 @@ struct HelpPage {
       .zoomAccess(false)
       .darkMode(this.appDarkMode ? WebDarkMode.On : WebDarkMode.Off)
       .forceDarkAccess(false)
+      .onScroll((event: OnScrollEvent) => {
+        // 网页滚动量是绝对值，换成增量后与原生列表同样跟手收起顶栏。
+        const delta = event.yOffset - this.lastWebScrollY;
+        this.lastWebScrollY = event.yOffset;
+        this.headerCollapse = CollapsingHeader.next(this.headerCollapse, delta, event.yOffset);
+      })
       .backgroundColor(this.pageColor())
       .onPageEnd(() => {
         if (!this.anchor) return;

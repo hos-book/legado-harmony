@@ -12,6 +12,7 @@ import { ThemeTrialManager } from '../utils/ThemeTrialManager';
 import { CustomThemeScheme, CustomThemeSchemeStore } from '../utils/CustomThemeSchemeStore';
 import { BuiltinThemeRegistry } from '../theme/BuiltinThemeRegistry';
 import { ImmersiveBackButton } from '../components/ImmersiveBackButton';
+import { CollapsingHeader } from '../utils/CollapsingHeader';
 import { ThemeStartupCover } from '../components/ThemeStartupCover';
 import { ReaderThemeBackground } from '../components/ReaderThemeBackground';
 import { TtsPanelThemeBackground } from '../components/TtsPanelThemeBackground';
@@ -154,6 +155,8 @@ struct ThemeSettingsPage {
   customThemeSchemesRevision: number = 0;
   @StorageLink('startupCoverTextsRevision') startupCoverTextsRevision: number = 0;
   @StorageProp('statusBarHeight') statusBarHeight: number = 0;
+  @State headerCollapse: number = 0;
+  private themeListScroller: Scroller = new Scroller();
   @StorageProp('navBarHeight') navBarHeight: number = 0;
   @State applyingThemeId: string = '';
   @State focusedThemeId: string = '';
@@ -228,7 +231,7 @@ struct ThemeSettingsPage {
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       // 列表铺满整页并从顶栏下方滚过去，上下留白由列表里的占位项提供。
-      PageScaffold({ title: '主题', scrollable: false, edgeToEdge: true, content: () => {
+      PageScaffold({ title: '主题', scrollable: false, edgeToEdge: true, externalCollapse: this.headerCollapse, content: () => {
         this.themeList()
       }, actions: () => {
         this.pointsBadge()
@@ -265,7 +268,7 @@ struct ThemeSettingsPage {
 
   @Builder
   themeList() {
-    List({ space: AppSpacing.LG }) {
+    List({ space: AppSpacing.LG, scroller: this.themeListScroller }) {
       // List padding is fixed to the viewport in ArkUI. Use real list items
       // for the safe-area gaps so they scroll away with the content.
       ListItem() {
@@ -331,6 +334,18 @@ struct ThemeSettingsPage {
     })
     .scrollBar(BarState.Off)
     .backgroundColor(this.pageColor())
+    .onDidScroll((yOffset: number) => {
+      this.headerCollapse = CollapsingHeader.next(this.headerCollapse, yOffset,
+        this.themeListScroller.currentOffset().yOffset);
+    })
+    .onScrollStop(() => {
+      const target = CollapsingHeader.settle(this.headerCollapse, this.themeListScroller.currentOffset().yOffset);
+      if (target !== this.headerCollapse) {
+        animateTo({ duration: 200, curve: Curve.FastOutSlowIn }, () => {
+          this.headerCollapse = target;
+        });
+      }
+    })
   }
 
   async initializeAccount(): Promise<void> {

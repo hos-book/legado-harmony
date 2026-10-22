@@ -7,10 +7,13 @@ import { HdsFeedback } from '../utils/HdsFeedback';
 import { AppFontSize } from '../theme/AppFontSize';
 import { AppSpacing } from '../theme/AppSpacing';
 import { PageScaffold } from '../components/common/PageScaffold';
+import { CollapsingHeader } from '../utils/CollapsingHeader';
 
 @Entry
 @Component
 struct ExploreSourceSortPage {
+  @State headerCollapse: number = 0;
+  private headerScroller: Scroller = new Scroller();
   @StorageLink('searchExploreSourceSort') searchExploreSourceSort: string = '';
   @StorageLink('appDarkMode') appDarkMode: boolean = false;
   @StorageLink('themeRevision') themeRevision: number = 0;
@@ -77,7 +80,7 @@ struct ExploreSourceSortPage {
 
   build() {
     Stack() {
-      PageScaffold({ title: '书源排序', scrollable: false, content: () => {
+      PageScaffold({ title: '书源排序', scrollable: false, externalCollapse: this.headerCollapse, content: () => {
         this.pageContent()
       } })
     }
@@ -116,7 +119,7 @@ struct ExploreSourceSortPage {
       .layoutWeight(1)
       .justifyContent(FlexAlign.Center)
     } else {
-      List({ space: AppSpacing.MD }) {
+      List({ scroller: this.headerScroller, space: AppSpacing.MD }) {
         ForEach(this.sources, (source: BookSource, index: number) => {
           ListItem() {
             Row() {
@@ -204,6 +207,18 @@ struct ExploreSourceSortPage {
           this.moveSourceTo(itemIndex, insertIndex);
         }
         this.draggingIndex = -1;
+      })
+      .onDidScroll((yOffset: number) => {
+        this.headerCollapse = CollapsingHeader.next(this.headerCollapse, yOffset,
+          this.headerScroller.currentOffset().yOffset);
+      })
+      .onScrollStop(() => {
+        const target = CollapsingHeader.settle(this.headerCollapse, this.headerScroller.currentOffset().yOffset);
+        if (target !== this.headerCollapse) {
+          animateTo({ duration: 200, curve: Curve.FastOutSlowIn }, () => {
+            this.headerCollapse = target;
+          });
+        }
       })
     }
   }

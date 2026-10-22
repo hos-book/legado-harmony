@@ -16,6 +16,7 @@ import { HdsFeedback } from '../utils/HdsFeedback';
 import { SystemDialogSession } from '../utils/SystemDialogSession';
 import { AppFontSize } from '../theme/AppFontSize';
 import { AppSpacing } from '../theme/AppSpacing';
+import { CollapsingHeader } from '../utils/CollapsingHeader';
 
 const REPLACE_RULE_IMPORT_FILE_LIMIT_BYTES: number = 5 * 1024 * 1024;
 const REPLACE_RULE_IMPORT_TIMEOUT_MS: number = 20000;
@@ -31,6 +32,7 @@ class ReplaceRuleFormDraft {
 @Entry
 @Component
 struct ReaderReplaceRulesPage {
+  @State headerCollapse: number = 0;
   @StorageLink('appDarkMode') appDarkMode: boolean = false;
   @StorageLink('themeRevision') themeRevision: number = 0;
   @StorageProp('statusBarHeight') statusBarHeight: number = 0;
@@ -287,7 +289,15 @@ struct ReaderReplaceRulesPage {
   build() {
     Stack({ alignContent: Alignment.BottomEnd }) {
       Column() {
-        this.titleBar()
+        // 顶栏随列表上滑跟手收起、下滑展开，与其他二级页面一致。
+        Column() {
+          this.titleBar()
+        }
+        .width('100%')
+        .height(56 + this.statusBarHeight - (this.editing ? 0 : this.headerCollapse))
+        .clip(true)
+        .opacity(CollapsingHeader.contentOpacity((this.editing ? 0 : this.headerCollapse)))
+        .hitTestBehavior(CollapsingHeader.acceptsTouch((this.editing ? 0 : this.headerCollapse)) ? HitTestMode.Default : HitTestMode.None)
         if (this.editing) {
           this.editorView()
         } else {
@@ -632,6 +642,18 @@ struct ReaderReplaceRulesPage {
         .onAreaChange((_oldValue: Area, area: Area) => {
           this.ruleSelectionViewportTop = Number(area.globalPosition.y);
           this.ruleSelectionViewportBottom = this.ruleSelectionViewportTop + Number(area.height);
+        })
+        .onDidScroll((yOffset: number) => {
+          this.headerCollapse = CollapsingHeader.next(this.headerCollapse, yOffset,
+            this.ruleListScroller.currentOffset().yOffset);
+        })
+        .onScrollStop(() => {
+          const target = CollapsingHeader.settle(this.headerCollapse, this.ruleListScroller.currentOffset().yOffset);
+          if (target !== this.headerCollapse) {
+            animateTo({ duration: 200, curve: Curve.FastOutSlowIn }, () => {
+              this.headerCollapse = target;
+            });
+          }
         })
       }
 
