@@ -2,6 +2,7 @@ import { router } from '@kit.ArkUI';
 import { ThemeRuntime } from '../../theme/ThemeRuntime';
 import { AppFontSize } from '../../theme/AppFontSize';
 import { ImmersiveBackButton } from '../ImmersiveBackButton';
+import { CollapsingHeader } from '../../utils/CollapsingHeader';
 
 /**
  * 二级页面的统一骨架：页面底色、沉浸式顶栏（返回、标题、右侧操作）和状态栏/导航条的留白。
@@ -12,6 +13,8 @@ import { ImmersiveBackButton } from '../ImmersiveBackButton';
  * scrollable 为 true 时内容放进带回弹的滚动容器；页面自己用 List 等滚动时传 false，
  * 此时骨架只负责顶部留白，底部留白由页面处理。
  * 列表要从顶栏下方滚过去时再加 edgeToEdge: true，内容铺满整页，上下留白都由页面自己放进列表里。
+ * 顶栏默认随内容上滑跟手收起、下滑展开，与首页大标题一致；scrollable 为 false 的页面自己跟踪滚动，
+ * 用 CollapsingHeader 算出收起量传给 externalCollapse。不需要收起的页面传 collapsible: false。
  */
 @Component
 export struct PageScaffold {
@@ -24,6 +27,10 @@ export struct PageScaffold {
   @Prop edgeToEdge: boolean = false;
   /** 滚动内容底部在导航条之上额外留出的高度。 */
   @Prop bottomInset: number = 32;
+  @Prop collapsible: boolean = true;
+  @Prop externalCollapse: number = 0;
+  @State headerCollapse: number = 0;
+  private scroller: Scroller = new Scroller();
   @StorageProp('appDarkMode') appDarkMode: boolean = false;
   @StorageProp('themeRevision') themeRevision: number = 0;
   @StorageProp('statusBarHeight') statusBarHeight: number = 0;
@@ -41,7 +48,7 @@ export struct PageScaffold {
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       if (this.scrollable) {
-        Scroll() {
+        Scroll(this.scroller) {
           Column() {
             this.content()
           }
@@ -55,22 +62,54 @@ export struct PageScaffold {
         .width('100%')
         .height('100%')
         .align(Alignment.TopStart)
+        .onDidScroll((_xOffset: number, yOffset: number) => {
+          if (!this.collapsible) return;
+          this.headerCollapse = CollapsingHeader.next(this.headerCollapse, yOffset,
+            this.scroller.currentOffset().yOffset);
+        })
+        .onScrollStop(() => {
+          if (!this.collapsible) return;
+          const target = CollapsingHeader.settle(this.headerCollapse, this.scroller.currentOffset().yOffset);
+          if (target !== this.headerCollapse) {
+            animateTo({ duration: 200, curve: Curve.FastOutSlowIn }, () => {
+              this.headerCollapse = target;
+            });
+          }
+        })
       } else {
         Column() {
           this.content()
         }
         .width('100%')
         .height('100%')
-        .padding({ top: this.edgeToEdge ? 0 : PageScaffold.BAR_HEIGHT + this.statusBarHeight })
+        .padding({ top: this.edgeToEdge ? 0 : PageScaffold.BAR_HEIGHT + this.statusBarHeight - this.collapseAmount() })
         .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
       }
 
-      this.titleBar()
+      if (this.collapsible) {
+        Column() {
+          this.titleBar()
+        }
+        .width('100%')
+        .height(PageScaffold.BAR_HEIGHT + this.statusBarHeight - this.collapseAmount())
+        // 保持顶栏透明，让返回按钮的沉浸光感材质采样下方滚动内容。
+        .backgroundColor(Color.Transparent)
+        .clip(true)
+        .opacity(CollapsingHeader.contentOpacity(this.collapseAmount()))
+        .hitTestBehavior(CollapsingHeader.acceptsTouch(this.collapseAmount()) ? HitTestMode.Default : HitTestMode.None)
+      } else {
+        this.titleBar()
+      }
     }
     .width('100%')
     .height('100%')
     .backgroundColor(ThemeRuntime.pageColor(this.appDarkMode))
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+  }
+
+  collapseAmount(): number {
+    if (!this.collapsible) return 0;
+    return this.scrollable ? this.headerCollapse : Math.max(0, Math.min(CollapsingHeader.DISTANCE, this.externalCollapse));
   }
 
   @Builder

@@ -15,10 +15,13 @@ import { AdaptiveSwitch } from '../components/AdaptiveSwitch';
 import { AppFontSize } from '../theme/AppFontSize';
 import { AppSpacing } from '../theme/AppSpacing';
 import { PageScaffold } from '../components/common/PageScaffold';
+import { CollapsingHeader } from '../utils/CollapsingHeader';
 
 @Entry
 @Component
 struct OpdsServersPage {
+  @State headerCollapse: number = 0;
+  private headerScroller: Scroller = new Scroller();
   @StorageLink('appDarkMode') appDarkMode: boolean = false;
   @StorageLink('themeRevision') themeRevision: number = 0;
   @StorageLink('appLightAccentColor') appLightAccentColor: string = '#007DFF';
@@ -65,7 +68,7 @@ struct OpdsServersPage {
 
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
-      PageScaffold({ title: 'OPDS 书库', scrollable: false, content: () => {
+      PageScaffold({ title: 'OPDS 书库', scrollable: false, externalCollapse: this.headerCollapse, content: () => {
         this.pageContent()
       } })
 
@@ -137,7 +140,7 @@ struct OpdsServersPage {
       if (this.servers.length === 0) {
         this.emptyGuide()
       } else {
-        List({ space: AppSpacing.MD }) {
+        List({ scroller: this.headerScroller, space: AppSpacing.MD }) {
           ListItem() {
             Row()
               .height(this.listTopInset())
@@ -187,8 +190,21 @@ struct OpdsServersPage {
         .width('100%')
         .layoutWeight(1)
         .padding({ left: AppSpacing.LG, right: AppSpacing.LG })
-        .margin({ top: -this.listTopInset() })
+        // 顶栏收起时外层留白同步减少，列表顶边保持贴住页面顶部。
+        .margin({ top: -(this.listTopInset() - this.headerCollapse) })
         .zIndex(0)
+        .onDidScroll((yOffset: number) => {
+          this.headerCollapse = CollapsingHeader.next(this.headerCollapse, yOffset,
+            this.headerScroller.currentOffset().yOffset);
+        })
+        .onScrollStop(() => {
+          const target = CollapsingHeader.settle(this.headerCollapse, this.headerScroller.currentOffset().yOffset);
+          if (target !== this.headerCollapse) {
+            animateTo({ duration: 200, curve: Curve.FastOutSlowIn }, () => {
+              this.headerCollapse = target;
+            });
+          }
+        })
       }
     }
     .width('100%')
