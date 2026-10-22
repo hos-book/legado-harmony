@@ -8,7 +8,8 @@ import cryptoFramework from '@ohos.security.cryptoFramework';
 import { AccountCommerceApi } from './AccountCommerceApi';
 import { AccountApiError } from './AccountCommerceModels';
 import { AccountSessionStore } from './AccountSessionStore';
-import { CloudTransferTicket, CloudFileItem, CloudFileList, CloudFileSummary, CloudManifest, CloudUploadTask } from './CloudFileModels';
+import { CloudTransferTicket, CloudFileItem, CloudFileList, CloudFileMeta, CloudFileSummary, CloudManifest,
+  CloudTombstoneList, CloudUploadTask } from './CloudFileModels';
 
 export class CloudFileClient {
   private static paused: boolean = false;
@@ -20,20 +21,53 @@ export class CloudFileClient {
   static async list(after: string = ''): Promise<CloudFileList> {
     return JSON.parse(await AccountCommerceApi.cloudRequest(`?after=${encodeURIComponent(after)}`, 'GET', '', AccountSessionStore.token())) as CloudFileList;
   }
-  static async remove(id: string): Promise<void> {
-    await AccountCommerceApi.cloudRequest(`/${id}/delete`, 'POST', '{}', AccountSessionStore.token());
+  static isTransferring(): boolean { return CloudFileClient.transferring; }
+  /** 全部云端文件（逐页读取）。 */
+  static async listAll(): Promise<CloudFileItem[]> {
+    const result: CloudFileItem[] = [];
+    let after = '';
+    for (let page = 0; page < 50; page++) {
+      const list = await CloudFileClient.list(after);
+      for (const item of list.files || []) result.push(item);
+      if (!list.nextCursor) break;
+      after = list.nextCursor;
+    }
+    return result;
+  }
+  static async tombstones(): Promise<CloudTombstoneList> {
+    return JSON.parse(await AccountCommerceApi.cloudRequest('/tombstones', 'GET', '', AccountSessionStore.token())) as CloudTombstoneList;
+  }
+  /** reason：REMOVED 让其他设备一并移除；DETACHED 只删云端副本，各设备保留本地文件。 */
+  static async remove(id: string, reason: string = 'DETACHED'): Promise<void> {
+    await AccountCommerceApi.cloudRequest(`/${id}/delete`, 'POST', JSON.stringify({ reason: reason }), AccountSessionStore.token());
+  }
+  /** 与服务端一致的文件指纹：每 1MB 分块 sha256 拼接后再取 sha256。 */
+  static async manifestHashOfFile(path: string): Promise<string> {
+    const size = (await fs.stat(path)).size;
+    const hashes: string[] = [];
+    const source = await fs.open(path, fs.OpenMode.READ_ONLY);
+    try {
+      for (let offset = 0, index = 0; offset < size; index++) {
+        const length = Math.min(1048576, size - offset);
+        hashes.push(`${index}:${length}:${CloudFileClient.sha256(await CloudFileClient.read(source.fd, offset, length))}`);
+        offset += length;
+      }
+    } finally { await fs.close(source); }
+    return CloudFileClient.sha256(new util.TextEncoder().encodeInto(hashes.join('\n')));
   }
   static async pending(context: Context): Promise<CloudUploadTask | null> {
     const store = await preferences.getPreferences(context, 'cloud_file_transfers');
     const raw = await store.get(`upload_${AccountSessionStore.account().userId}`, '') as string;
     return raw ? JSON.parse(raw) as CloudUploadTask : null;
   }
-  static async stage(context: Context, uri: string, name: string, kind: string): Promise<void> {
+  static async stage(context: Context, uri: string, name: string, kind: string,
+    meta: CloudFileMeta | null = null, auto: boolean = false, manifestHash: string = ''): Promise<void> {
     if (await CloudFileClient.pending(context)) throw new Error('请先继续或取消上次上传');
     const userId = AccountSessionStore.account().userId;
     if (!userId) throw new Error('请先登录');
     const task = new CloudUploadTask();
     task.requestId = util.generateRandomUUID(); task.name = name; task.kind = kind;
+    task.meta = meta; task.auto = auto; task.manifestHash = manifestHash;
     const dir = `${context.filesDir}/cloud_transfers`;
     if (!fs.accessSync(dir)) await fs.mkdir(dir);
     task.path = `${dir}/${task.requestId}.upload`;
@@ -79,7 +113,8 @@ export class CloudFileClient {
         await store.put(`upload_${userId}`, JSON.stringify(task)); await store.flush();
       }
       const prepared = JSON.parse(await AccountCommerceApi.cloudRequest('/prepare', 'POST', JSON.stringify({
-        requestId: task.requestId, name: task.name, kind: task.kind, bytes: task.bytes, manifestHash: task.manifestHash
+        requestId: task.requestId, name: task.name, kind: task.kind, bytes: task.bytes, manifestHash: task.manifestHash,
+        meta: task.meta ?? undefined
       }), token)) as CloudFileItem;
       task.fileId = prepared.id;
       task.reused = prepared.state === 'READY';

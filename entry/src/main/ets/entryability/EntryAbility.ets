@@ -36,6 +36,7 @@ import { FullTextCacheCancelCoordinator } from '../utils/FullTextCacheCancelCoor
 import { lanReaderServer } from '../core/lan/LanReaderServer';
 import { LanReaderPasswordStore } from '../core/lan/LanReaderPasswordStore';
 import { readStatsTracker } from '../core/stats/ReadStatsTracker';
+import { CloudAutoSync } from '../account/CloudAutoSync';
 
 export default class EntryAbility extends UIAbility {
   private appliedColorMode: number = -1;
@@ -239,6 +240,9 @@ export default class EntryAbility extends UIAbility {
         MembershipThemeGuard.refresh(this.context).catch((error: Error) => console.warn('主题权益检查失败', error.message));
       }, 60000);
       return MembershipThemeGuard.refresh(this.context);
+    }).then(() => {
+      // Font and local-book cloud sync waits for the account and stays out of the first frames.
+      CloudAutoSync.schedule(this.context, 8000);
     }).catch((error: Error) => console.warn('主题权益初始化检查失败', error.message));
     // Reader preferences and custom font registration are not needed to paint Index/Startup, so the first
     // content does not wait for them. They do wait for the theme: reader settings are kept per theme, and
@@ -355,6 +359,7 @@ export default class EntryAbility extends UIAbility {
     this.accountBootstrapPromise
       .then(() => HuaweiAccountService.renewSession(this.context))
       .then(() => MembershipThemeGuard.refresh(this.context))
+      .then(() => CloudAutoSync.schedule(this.context, 5000))
       .catch((e: Error) => {
         hilog.warn(0x0000, 'testTag', 'Renew account session failed: %{public}s', JSON.stringify(e));
       })

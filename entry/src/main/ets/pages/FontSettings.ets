@@ -10,6 +10,8 @@ import { HdsFeedback } from '../utils/HdsFeedback';
 import { AppFontSize } from '../theme/AppFontSize';
 import { AppSpacing } from '../theme/AppSpacing';
 import { PageScaffold } from '../components/common/PageScaffold';
+import { CloudAutoSync, CloudRemoteFont } from '../account/CloudAutoSync';
+import { CloudFontMenuModifier } from '../account/CloudFontMenu';
 
 class ReaderCustomFontItem {
   familyName: string = '';
@@ -32,6 +34,8 @@ struct FontSettingsPage {
   @StorageLink('readerFontMode') readerFontMode: string = 'system';
   @StorageLink('readerSystemFontFamily') readerSystemFontFamily: string = '';
   @StorageLink('readerCustomFontsRaw') readerCustomFontsRaw: string = '';
+  @StorageLink('cloudRemoteFontsRaw') cloudRemoteFontsRaw: string = '';
+  private downloadingRemoteFont: boolean = false;
   @StorageLink('readerActiveFontFamily') readerActiveFontFamily: string = '';
   @StorageLink('readerFontRegistered') readerFontRegistered: boolean = false;
   @StorageLink('appLightAccentColor') appLightAccentColor: string = '#007DFF';
@@ -293,8 +297,43 @@ struct FontSettingsPage {
     for (const item of this.customFonts) {
       options.push({ value: item.sourceName || item.familyName });
     }
+    for (const font of this.remoteFonts()) {
+      options.push({ value: CloudFontMenuModifier.label(font) });
+    }
     return options;
   }
+
+  /** 云端有、本机未下载的字体（永久超级会员字体云同步），排在本机字体之后。 */
+  remoteFonts(): CloudRemoteFont[] {
+    return CloudAutoSync.parseRemoteFonts(this.cloudRemoteFontsRaw);
+  }
+
+  remoteFontStart(): number {
+    return 1 + this.customFonts.length;
+  }
+
+  fontMenuModifier(): CloudFontMenuModifier {
+    return new CloudFontMenuModifier(this.remoteFontStart(), this.primaryTextColor(), this.subTextColor(),
+      this.accentColor(), ThemeRuntime.accentSurfaceColor(this.appDarkMode));
+  }
+
+  /** 选中云端字体：静默下载导入，完成后按本机字体应用。 */
+  async selectRemoteFont(remoteIndex: number, apply: (customIndex: number) => void): Promise<void> {
+    const font = this.remoteFonts()[remoteIndex];
+    if (!font || this.downloadingRemoteFont) return;
+    this.downloadingRemoteFont = true;
+    try {
+      const filePath = await CloudAutoSync.ensureFontDownloaded(getContext(this), font);
+      this.loadCustomFonts();
+      const index = this.customFonts.findIndex((item: ReaderCustomFontItem) => item.filePath === filePath);
+      if (index >= 0) apply(index);
+    } catch (e) {
+      HdsFeedback.showToast(e instanceof Error && e.message ? e.message : '云端字体下载失败，请稍后重试');
+    } finally {
+      this.downloadingRemoteFont = false;
+    }
+  }
+
 
   readerFontSelectedIndex(): number {
     if (this.readerFontFilePath) {
@@ -495,7 +534,14 @@ struct FontSettingsPage {
         .menuBackgroundColor(ThemeRuntime.dropdownPanelColor(this.appDarkMode))
         .menuBackgroundBlurStyle(BlurStyle.NONE)
         .attributeModifier(ImmersiveMaterialRuntime.selectMenuModifier())
+        .menuItemContentModifier(this.fontMenuModifier())
         .onSelect((index: number) => {
+          if (index >= this.remoteFontStart()) {
+            this.selectRemoteFont(index - this.remoteFontStart(), (customIndex: number) => {
+              this.selectReaderFontByIndex(customIndex + 1);
+            });
+            return;
+          }
           this.selectReaderFontByIndex(index);
         })
     }

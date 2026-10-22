@@ -514,7 +514,8 @@ struct CloudFilesPage {
     finally { this.busy = false; await this.refresh(); }
   }
   async remove(file: CloudFileItem): Promise<void> {
-    const answer = await promptAction.showDialog({ title: '删除云文件', message: `删除“${file.name}”的云端副本？已下载到本机的文件会保留。`,
+    const answer = await promptAction.showDialog({ title: '删除云文件', message: file.kind === 'SOURCE' ? `删除“${file.name}”的云端副本？已下载到本机的文件会保留。` :
+        `只删除“${file.name}”的云端副本，各设备已下载的文件保留，之后不再自动同步它。想在所有设备移除，请在书架或字体管理里删除。`,
       buttons: [{ text: '取消', color: ThemeRuntime.subTextColor(this.dark) }, { text: '删除', color: ThemeRuntime.accentColor(this.dark) }] });
     if (answer.index !== 1) return;
     try { await CloudFileClient.remove(file.id); await this.refresh(); }

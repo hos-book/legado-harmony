@@ -8,6 +8,7 @@ import { AppFontSize } from '../theme/AppFontSize';
 import { AppSpacing } from '../theme/AppSpacing';
 import { PageScaffold } from '../components/common/PageScaffold';
 import { CollapsingHeader } from '../utils/CollapsingHeader';
+import { CloudAutoSync } from '../account/CloudAutoSync';
 
 @Entry
 @Component
@@ -171,6 +172,7 @@ struct LocalBookSettingsPage {
       this.statusText = `正在导入${selected.length}本书...`;
       const result = await LocalBookService.importSelectedFiles(getContext(this), selected);
       this.finishImport(result);
+      CloudAutoSync.schedule(getContext(this));
       await this.loadBooks();
     } catch (e) {
       console.error('添加本地书籍失败:', e);

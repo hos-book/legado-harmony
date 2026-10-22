@@ -8,6 +8,14 @@ export class CloudFileSummary {
   chunkBytes: number = 1048576;
   cycleEndsAt: number | null = null;
 }
+/** 自动同步时随文件保存的少量信息：书名、作者、格式、内容指纹或字体名。 */
+export class CloudFileMeta {
+  title?: string;
+  author?: string;
+  format?: string;
+  contentHash?: string;
+  fontName?: string;
+}
 export class CloudFileItem {
   id: string = '';
   name: string = '';
@@ -15,6 +23,19 @@ export class CloudFileItem {
   bytes: number = 0;
   state: string = '';
   manifestHash: string = '';
+  meta: CloudFileMeta | null = null;
+}
+/** 删除标记：REMOVED 表示用户移除了书或字体，DETACHED 表示只删了云端副本。 */
+export class CloudTombstone {
+  id: string = '';
+  kind: string = '';
+  manifestHash: string = '';
+  meta: CloudFileMeta | null = null;
+  reason: string = '';
+  removedAt: number = 0;
+}
+export class CloudTombstoneList {
+  tombstones: CloudTombstone[] = [];
 }
 export class CloudFileList {
   files: CloudFileItem[] = [];
@@ -37,6 +58,9 @@ export class CloudTransferTicket extends CloudChunk {
 }
 export class CloudUploadTask {
   manifestHash: string = '';
+  meta: CloudFileMeta | null = null;
+  /** 由自动同步发起；手动上传页面不会替它继续或取消。 */
+  auto: boolean = false;
   reused: boolean = false;
   requestId: string = '';
   fileId: string = '';

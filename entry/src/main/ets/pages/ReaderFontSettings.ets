@@ -15,12 +15,15 @@ import {
   ReaderResolvedRegexEmphasis
 } from '../model/reader/ReaderRegexFontRule';
 import { ThemeRuntime } from '../theme/ThemeRuntime';
+import { HdsFeedback } from '../utils/HdsFeedback';
 import { ThemeAssetRegistry } from '../theme/ThemeAssetRegistry';
 import { ThemeAccessPolicy } from '../account/ThemeAccessPolicy';
 import { ImmersiveMaterialRuntime } from '../utils/ImmersiveMaterialRuntime';
 import { AppFontSize } from '../theme/AppFontSize';
 import { AppSpacing } from '../theme/AppSpacing';
 import { PageScaffold } from '../components/common/PageScaffold';
+import { CloudAutoSync, CloudRemoteFont } from '../account/CloudAutoSync';
+import { CloudFontMenuModifier } from '../account/CloudFontMenu';
 
 class ReaderCustomFontItem {
   familyName: string = '';
@@ -73,6 +76,8 @@ struct ReaderFontSettingsPage {
   @StorageLink('readerFontFamily') readerFontFamily: string = '';
   @StorageLink('readerSystemFontFamily') readerSystemFontFamily: string = '';
   @StorageLink('readerCustomFontsRaw') readerCustomFontsRaw: string = '';
+  @StorageLink('cloudRemoteFontsRaw') cloudRemoteFontsRaw: string = '';
+  private downloadingRemoteFont: boolean = false;
   @State regexRules: ReaderRegexFontRule[] = [];
   @State regexHighlightRefreshKey: number = 0;
   @State activeRegexInputKey: string = '';
@@ -389,8 +394,42 @@ struct ReaderFontSettingsPage {
     for (const item of this.customFonts()) {
       options.push({ value: item.sourceName || item.familyName || '自定义字体' });
     }
+    for (const font of this.remoteFonts()) {
+      options.push({ value: CloudFontMenuModifier.label(font) });
+    }
     return options;
   }
+
+  /** 云端有、本机未下载的字体（永久超级会员字体云同步），排在本机字体之后。 */
+  remoteFonts(): CloudRemoteFont[] {
+    return CloudAutoSync.parseRemoteFonts(this.cloudRemoteFontsRaw);
+  }
+
+  remoteFontStart(): number {
+    return 2 + this.customFonts().length;
+  }
+
+  fontMenuModifier(): CloudFontMenuModifier {
+    return new CloudFontMenuModifier(this.remoteFontStart(), this.primaryTextColor(), this.subTextColor(),
+      this.accentColor(), ThemeRuntime.accentSurfaceColor(this.appDarkMode));
+  }
+
+  /** 选中云端字体：静默下载导入，完成后按本机字体应用。 */
+  async selectRemoteFont(remoteIndex: number, apply: (customIndex: number) => void): Promise<void> {
+    const font = this.remoteFonts()[remoteIndex];
+    if (!font || this.downloadingRemoteFont) return;
+    this.downloadingRemoteFont = true;
+    try {
+      const filePath = await CloudAutoSync.ensureFontDownloaded(getContext(this), font);
+      const index = this.customFonts().findIndex((item: ReaderCustomFontItem) => item.filePath === filePath);
+      if (index >= 0) apply(index);
+    } catch (e) {
+      HdsFeedback.showToast(e instanceof Error && e.message ? e.message : '云端字体下载失败，请稍后重试');
+    } finally {
+      this.downloadingRemoteFont = false;
+    }
+  }
+
 
   selectedFontIndex(mode: string, family: string): number {
     if (mode === 'system') {
@@ -555,7 +594,15 @@ struct ReaderFontSettingsPage {
         .menuBackgroundColor(ThemeRuntime.dropdownPanelColor(this.appDarkMode))
         .menuBackgroundBlurStyle(BlurStyle.NONE)
         .attributeModifier(ImmersiveMaterialRuntime.selectMenuModifier())
+        .menuItemContentModifier(this.fontMenuModifier())
         .onSelect((index: number) => {
+          if (index >= this.remoteFontStart()) {
+            this.selectRemoteFont(index - this.remoteFontStart(), (customIndex: number) => {
+              const downloaded = this.modeAndFamilyByIndex(customIndex + 2);
+              onChange(downloaded[0], downloaded[1]);
+            });
+            return;
+          }
           const result = this.modeAndFamilyByIndex(index);
           onChange(result[0], result[1]);
         })
@@ -1414,7 +1461,15 @@ struct ReaderFontSettingsPage {
         .menuBackgroundColor(ThemeRuntime.dropdownPanelColor(this.appDarkMode))
         .menuBackgroundBlurStyle(BlurStyle.NONE)
         .attributeModifier(ImmersiveMaterialRuntime.selectMenuModifier())
+        .menuItemContentModifier(this.fontMenuModifier())
         .onSelect((index: number) => {
+          if (index >= this.remoteFontStart()) {
+            this.selectRemoteFont(index - this.remoteFontStart(), (customIndex: number) => {
+              const downloaded = this.modeAndFamilyByIndex(customIndex + 2);
+              onChange(downloaded[0], downloaded[1]);
+            });
+            return;
+          }
           const result = this.modeAndFamilyByIndex(index);
           onChange(result[0], result[1]);
         })

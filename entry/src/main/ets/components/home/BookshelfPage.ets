@@ -36,6 +36,7 @@ import { PrivateShelfStore } from '../../utils/PrivateShelfStore';
 import { RecentReadCardUpdater } from '../../utils/RecentReadCardUpdater';
 import { AppFontSize } from '../../theme/AppFontSize';
 import { AppSpacing } from '../../theme/AppSpacing';
+import { CloudAutoSync } from '../../account/CloudAutoSync';
 
 const SHELF_FULL_TEXT_CACHE_NOTIFICATION_INTERVAL_MS: number = 5000;
 const SHELF_COVER_INITIAL_PREFETCH_COUNT: number = 16;
@@ -121,6 +122,7 @@ export struct BookshelfPage {
   @StorageLink('appThemeId') appThemeId: string = AppThemeSettingsStore.DEFAULT_THEME_ID;
   @StorageLink('appCustomBaseThemeId') appCustomBaseThemeId: string = AppThemeSettingsStore.DEFAULT_THEME_ID;
   @State books: Book[] = [];
+  @State downloadingCloudBookUrl: string = '';
   @State allBooks: Book[] = [];
   private shelfListBooksSource: ShelfBookDataSource = new ShelfBookDataSource();
   private shelfTileBooksSource: ShelfBookDataSource = new ShelfBookDataSource();
@@ -490,6 +492,7 @@ export struct BookshelfPage {
     try {
       const db = AppDatabase.getInstance();
       this.deleteBookCoverCache(book);
+      CloudAutoSync.onBookRemoved(getContext(this), book).catch(() => undefined);
       LocalBookService.deleteLocalBookFiles(getContext(this), book);
       await db.deleteBook(book.bookUrl, 'bookshelf_user_delete');
       HdsFeedback.showToast(`已删除《${book.name}》`);
@@ -2724,6 +2727,7 @@ export struct BookshelfPage {
     const db = AppDatabase.getInstance();
     for (const book of targets) {
       this.deleteBookCoverCache(book);
+      await CloudAutoSync.onBookRemoved(getContext(this), book).catch(() => undefined);
       LocalBookService.deleteLocalBookFiles(getContext(this), book);
       await db.deleteBook(book.bookUrl, 'bookshelf_batch_delete');
     }
@@ -3492,8 +3496,30 @@ export struct BookshelfPage {
     )
   }
 
+  /** 云端占位书：下载导入后照常打开，书架位置、分组与阅读进度都保留。 */
+  async openCloudPlaceholder(book: Book, touchX: number, touchY: number): Promise<void> {
+    if (this.downloadingCloudBookUrl) return;
+    this.downloadingCloudBookUrl = book.bookUrl;
+    try {
+      const ready = await CloudAutoSync.ensureBookDownloaded(getContext(this), book);
+      AppStorage.setOrCreate('shelfUpdateTime', Date.now());
+      await this.loadBooks();
+      this.downloadingCloudBookUrl = '';
+      this.openShelfBook(ready, touchX, touchY);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : '';
+      HdsFeedback.showToast(message || '云端书籍下载失败，请稍后重试');
+    } finally {
+      this.downloadingCloudBookUrl = '';
+    }
+  }
+
   openShelfBook(book: Book, touchX: number, touchY: number): void {
     if (this.openingBook) {
+      return;
+    }
+    if (CloudAutoSync.isPlaceholder(book)) {
+      this.openCloudPlaceholder(book, touchX, touchY);
       return;
     }
     this.acknowledgeShelfBookUpdate(book);
@@ -4063,6 +4089,26 @@ export struct BookshelfPage {
         .indicator(false)
         .loop(true)
       }
+      if (CloudAutoSync.isPlaceholder(book)) {
+        // 仅在云端、尚未下载：置灰并标出云端，点击即下载打开。
+        Stack({ alignContent: Alignment.Center }) {
+          if (this.downloadingCloudBookUrl === book.bookUrl) {
+            LoadingProgress()
+              .width(24)
+              .height(24)
+              .color('#FFFFFF')
+          } else {
+            SymbolGlyph($r('sys.symbol.download'))
+              .fontSize(16)
+              .fontColor(['#FFFFFF'])
+          }
+        }
+        .width(32)
+        .height(32)
+        .borderRadius(16)
+        .backgroundColor('#73000000')
+        .accessibilityText(`${book.name}在云端，点击下载`)
+      }
       if (this.hasShelfBookUpdate(book)) {
         Text('新')
           .fontSize(AppFontSize.MICRO)
@@ -4085,6 +4131,8 @@ export struct BookshelfPage {
     .borderRadius(8)
     .clip(true)
     .backgroundColor(this.inputColor())
+    .grayscale(CloudAutoSync.isPlaceholder(book) ? 1 : 0)
+    .opacity(CloudAutoSync.isPlaceholder(book) ? 0.6 : 1)
     .onAppear(() => this.ensureShelfBookCoverCache(book))
   }
 

@@ -270,6 +270,25 @@ export class LocalBookService {
     return await LocalBookService.importBook(context, sourceUri, format, sourceName);
   }
 
+  /**
+   * 把云端下载的本地书导入到既有书架行（云端占位书）：沿用其书架地址、分组和阅读进度，
+   * 并清掉占位标记。
+   */
+  static async importCloudBook(context: Context, sourcePath: string, format: string, sourceName: string,
+    bookUrl: string, clearVariables: string[] = []): Promise<Book> {
+    if (format !== 'txt' && format !== 'epub') throw new Error('仅支持 TXT 和 EPUB 文件');
+    await appDb.initWithContext(context);
+    const previous = await appDb.getBook(bookUrl);
+    const book = await LocalBookService.importBook(context, sourcePath, format, sourceName, bookUrl);
+    if (previous) {
+      book.group = previous.group;
+      if (!book.author && previous.author) book.author = previous.author;
+    }
+    for (const key of clearVariables) book.putVariable(key, '');
+    await appDb.updateBook(book, true, 'cloud_book_downloaded');
+    return book;
+  }
+
   static async importWebDavBook(context: Context, sourcePath: string, connectionId: string,
     remotePath: string, remoteName: string, format: string, etag: string,
     lastModified: number, remoteSize: number): Promise<Book> {
@@ -1371,7 +1390,7 @@ export class LocalBookService {
       .trim();
   }
 
-  private static extensionOf(path: string): string {
+  static extensionOf(path: string): string {
     const resourcePath = LocalBookService.withoutFragment(path).split('?')[0];
     let clean = resourcePath.toLowerCase();
     try {
@@ -1382,7 +1401,7 @@ export class LocalBookService {
     return index >= 0 ? clean.substring(index + 1) : '';
   }
 
-  private static fileStem(path: string): string {
+  static fileStem(path: string): string {
     const name = LocalBookService.displayName(path);
     const index = name.lastIndexOf('.');
     return index > 0 ? name.substring(0, index) : name;
@@ -1459,7 +1478,7 @@ export class LocalBookService {
     }
   }
 
-  private static exists(path: string): boolean {
+  static exists(path: string): boolean {
     try {
       return fs.accessSync(path);
     } catch (e) {

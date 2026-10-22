@@ -528,8 +528,9 @@ export class CloudSyncCoordinator {
     // Local files are deliberately never uploaded. Publish only a compact
     // progress snapshot keyed by a content fingerprint so another device that
     // has imported the same edition can apply it.
+    // Cloud placeholders (super-member book sync, not downloaded yet) carry no reading position of their own.
     const localBooks = allBooks.filter((book: Book) =>
-      book.origin === 'local' && !book.pendingAddToShelf);
+      book.origin === 'local' && !book.pendingAddToShelf && book.getVariable('cloudPlaceholder') !== '1');
     for (const book of localBooks) {
       const hadContentHash = book.getVariable(LocalBookService.LOCAL_CONTENT_HASH_KEY).trim().length > 0;
       const contentHash = await LocalBookService.ensureContentHash(book);

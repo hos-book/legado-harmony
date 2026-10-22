@@ -6,6 +6,7 @@ import { HdsFeedback } from '../utils/HdsFeedback';
 import { AppFontSize } from '../theme/AppFontSize';
 import { AppSpacing } from '../theme/AppSpacing';
 import { PageScaffold } from '../components/common/PageScaffold';
+import { CloudAutoSync } from '../account/CloudAutoSync';
 
 @Entry
 @Component
@@ -93,6 +94,7 @@ struct BookImportPage {
       this.statusText = `正在导入${selected.length}本书...`;
       const result = await LocalBookService.importSelectedFiles(getContext(this), selected);
       this.finishImport(result);
+      CloudAutoSync.schedule(getContext(this));
     } catch (e) {
       console.error('添加本地书籍失败:', e);
       this.statusText = '导入失败，请重新选择文件';

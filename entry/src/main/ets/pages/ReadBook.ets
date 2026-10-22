@@ -147,6 +147,7 @@ import { EpubHeading } from '../core/book/EpubHtmlConverter';
 import { AdaptiveSwitch } from '../components/AdaptiveSwitch';
 import { AppFontSize } from '../theme/AppFontSize';
 import { AppSpacing } from '../theme/AppSpacing';
+import { CloudAutoSync } from '../account/CloudAutoSync';
 
 const READER_CURRENT_PAGINATION_AHEAD_PAGE_COUNT = 4;
 const READER_ADJACENT_PAGINATION_PREVIEW_PAGE_COUNT = 2;
@@ -1207,6 +1208,11 @@ struct ReadBookPage {
           }
         });
         return;
+      }
+      if (CloudAutoSync.isPlaceholder(this.book)) {
+        // Opened from elsewhere than the shelf (e.g. a recent-read shortcut): fetch it first.
+        this.loadStatus = '正在从云端下载书籍...';
+        this.book = await CloudAutoSync.ensureBookDownloaded(getContext(this), this.book);
       }
       if (LocalBookService.isWebDavBook(this.book)) {
         this.loadStatus = '正在检查 WebDAV 书籍...';

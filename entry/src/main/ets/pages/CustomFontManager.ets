@@ -10,6 +10,7 @@ import { HdsFeedback } from '../utils/HdsFeedback';
 import { AppFontSize } from '../theme/AppFontSize';
 import { AppSpacing } from '../theme/AppSpacing';
 import { PageScaffold } from '../components/common/PageScaffold';
+import { CloudAutoSync } from '../account/CloudAutoSync';
 
 class ReaderCustomFontItem {
   familyName: string = '';
@@ -224,6 +225,7 @@ struct CustomFontManagerPage {
       const next = this.customFonts.slice();
       next.push(item);
       this.saveCustomFonts(next);
+      CloudAutoSync.schedule(getContext(this));
       if (this.registerCustomFont(item)) {
         HdsFeedback.showToast('已上传字体，可返回阅读设置选择');
       } else {
@@ -250,11 +252,16 @@ struct CustomFontManagerPage {
       this.applyApplicationFont(systemFontFamily);
     }
     this.saveFontSettings();
-    try {
-      fs.unlinkSync(item.filePath);
-    } catch (e) {
-      console.warn('删除字体文件失败:', e);
-    }
+    // The cloud copy is matched by the file's fingerprint, so record it before the file is gone.
+    CloudAutoSync.onFontDeleted(getContext(this), item.filePath).catch((error: Error) => {
+      console.warn('记录云端字体删除失败:', error.message);
+    }).finally(() => {
+      try {
+        fs.unlinkSync(item.filePath);
+      } catch (e) {
+        console.warn('删除字体文件失败:', e);
+      }
+    });
     HdsFeedback.showToast('已删除字体');
   }
 
