@@ -321,12 +321,15 @@ export class CloudSyncCoordinator {
     await CloudSyncSettingsStore.saveRuntimeState(context, userId, settings.status,
       settings.lastSuccessAt, settings.pendingCount, settings.errorMessage);
 
+    // Kept outside the try so a whole-request rejection can name the items it was about.
+    let localEntities: LocalSyncEntity[] = [];
+    let batch: CloudSyncOperation[] = [];
     try {
       const db = AppDatabase.getInstance();
       await db.initWithContext(context);
       const deviceId = await CloudSyncStateStore.deviceId(context);
       const state = await CloudSyncStateStore.load(context, userId);
-      const localEntities = (await CloudSyncCoordinator.buildLocalEntities(context, db, settings))
+      localEntities = (await CloudSyncCoordinator.buildLocalEntities(context, db, settings))
         .filter((entity: LocalSyncEntity) =>
           CloudSyncCoordinator.scopeAllows(settings, entity.entityType));
       const operations = CloudSyncCoordinator.buildOperations(localEntities, state, settings);
@@ -342,7 +345,7 @@ export class CloudSyncCoordinator {
         if (exchangePages > CloudSyncCoordinator.MAX_EXCHANGE_PAGES) {
           throw new Error('同步分页次数异常，请稍后重试');
         }
-        const batch = CloudSyncCoordinator.takeOperationBatch(remaining);
+        batch = CloudSyncCoordinator.takeOperationBatch(remaining);
         const cursorBeforeExchange = state.cursor;
         const request = await CloudSyncCoordinator.exchangeRequest(
           context, deviceId, state.cursor, batch, conflictPolicy);
@@ -411,6 +414,9 @@ export class CloudSyncCoordinator {
       // Items rejected on earlier pages are still worth reporting alongside the failure itself.
       const message = settings.errorMessage || '同步失败';
       issues.push(CloudSyncIssueStore.create(CloudSyncIssueStore.KIND_SYNC, `sync:${message}`, '同步失败', message));
+      if (error instanceof AccountApiError && error.errorCode === 'SYNC_PAYLOAD_TOO_LARGE') {
+        issues.push(...CloudSyncCoordinator.oversizedIssues(message, batch, localEntities));
+      }
       await CloudSyncCoordinator.recordIssues(context, userId, issues);
       throw new Error(message);
     } finally {
@@ -1407,6 +1413,56 @@ export class CloudSyncCoordinator {
     if (entity && entity.payloadJson) {
       issue.bytes = new util.TextEncoder().encodeInto(entity.payloadJson).byteLength;
     }
+    return issue;
+  }
+
+  /**
+   * The server rejects the whole request when one item exceeds its size limit, so no
+   * acknowledgement names it. Measure the batch locally against the limit quoted in the message.
+   */
+  private static oversizedIssues(message: string, batch: CloudSyncOperation[],
+    entities: LocalSyncEntity[]): CloudSyncIssue[] {
+    const match = /不能超过\s*(\d+)\s*KB/i.exec(message);
+    const limitBytes = match ? Number(match[1]) * 1024 : 0;
+    const encoder = new util.TextEncoder();
+    const sized: LocalSyncEntity[] = [];
+    const sizes: number[] = [];
+    for (const operation of batch) {
+      if (operation.operation !== 'upsert') continue;
+      const entity = entities.find((item: LocalSyncEntity) =>
+        item.entityType === operation.entityType && item.entityId === operation.entityId);
+      if (!entity || !entity.payloadJson) continue;
+      sized.push(entity);
+      sizes.push(encoder.encodeInto(entity.payloadJson).byteLength);
+    }
+    const result: CloudSyncIssue[] = [];
+    for (let i = 0; i < sized.length; i++) {
+      if (limitBytes > 0 && sizes[i] > limitBytes) {
+        result.push(CloudSyncCoordinator.oversizedIssue(sized[i], sizes[i], message, false));
+      }
+    }
+    if (result.length === 0 && sized.length > 0) {
+      // Limit unknown or every item measured under it: report the largest item as the likely cause.
+      let largest = 0;
+      for (let i = 1; i < sized.length; i++) {
+        if (sizes[i] > sizes[largest]) largest = i;
+      }
+      result.push(CloudSyncCoordinator.oversizedIssue(sized[largest], sizes[largest], message, true));
+    }
+    return result;
+  }
+
+  private static oversizedIssue(entity: LocalSyncEntity, bytes: number, message: string,
+    guessed: boolean): CloudSyncIssue {
+    const name = entity.label ? `“${entity.label.trim()}”` : '';
+    const issue = CloudSyncIssueStore.create(
+      entity.entityType === 'book_source' ? CloudSyncIssueStore.KIND_BOOK_SOURCE : CloudSyncIssueStore.KIND_REJECTED,
+      `oversize:${entity.entityType}:${entity.entityId}`,
+      `${CloudSyncCoordinator.entityTypeLabel(entity.entityType)}${name}过大，导致整次同步失败`,
+      guessed ? `${message}。这是本次同步中最大的一项，可能是它超出了限额。` :
+        `${message}。在它被删除或变小之前，每次同步都会失败。`);
+    issue.bytes = bytes;
+    if (entity.entityType === 'book_source') issue.sourceUrl = entity.localKey;
     return issue;
   }
 
