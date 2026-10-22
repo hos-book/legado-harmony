@@ -4163,8 +4163,9 @@ struct BookSourcePage {
     if (bottom) {
       next.push(moved);
     } else {
-      const pinnedCount = next.filter((item: BookSource) => item.isPinned).length;
-      next.splice(pinnedCount, 0, moved);
+      // 取消置底后停在普通书源末尾、其余置底书源之前，不跳到列表顶部。
+      const firstBottom = next.findIndex((item: BookSource) => this.isSourceAtBottom(item));
+      next.splice(firstBottom < 0 ? next.length : firstBottom, 0, moved);
     }
     await this.applyAndPersistSourceOrder(next, bottom ? '书源已置底' : '已取消置底', {
       bookSourceUrl: sourceUrl, isPinned: false, isBottom: bottom

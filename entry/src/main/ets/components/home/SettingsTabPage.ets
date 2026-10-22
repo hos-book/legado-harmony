@@ -8,6 +8,7 @@ import { AppFontSize } from '../../theme/AppFontSize';
 import { AppSpacing } from '../../theme/AppSpacing';
 import { CollapsingHeader } from '../../utils/CollapsingHeader';
 import { CommunityGroup } from '../../utils/CommunityGroup';
+import { MembershipIcons } from '../../account/MembershipIcons';
 
 /** 首页"我的"页签：设置入口列表。 */
 @Component
@@ -23,6 +24,8 @@ export struct SettingsPage {
   @StorageLink('accountDisplayName') accountDisplayName: string = '';
   @StorageLink('accountAvatarUrl') accountAvatarUrl: string = '';
   @StorageLink('accountPoints') accountPoints: number = 0;
+  @StorageLink('accountMembershipSku') membershipSku: string = '';
+  @StorageLink('accountMembershipExpiresAt') membershipExpiresAt: number = 0;
   @StorageLink('cloudSyncEnabled') cloudSyncEnabled: boolean = false;
   @StorageLink('cloudSyncLastSuccessAt') cloudSyncLastSuccessAt: number = 0;
   @StorageLink('cloudSyncPendingCount') cloudSyncPendingCount: number = 0;
@@ -161,36 +164,78 @@ export struct SettingsPage {
 
   @Builder
   accountSummaryCard() {
-    Row({ space: AppSpacing.LG }) {
-      if (this.accountLoggedIn && this.accountAvatarUrl) {
-        Image(this.accountAvatarUrl)
-          .width(56)
-          .height(56)
-          .borderRadius(28)
-          .objectFit(ImageFit.Cover)
-      } else {
-        Image($r('app.media.ic_default_reader_avatar'))
-          .width(56)
-          .height(56)
-          .borderRadius(28)
-          .objectFit(ImageFit.Cover)
-      }
+    Column() {
+      Row({ space: AppSpacing.LG }) {
+        if (this.accountLoggedIn && this.accountAvatarUrl) {
+          Image(this.accountAvatarUrl)
+            .width(56)
+            .height(56)
+            .borderRadius(28)
+            .objectFit(ImageFit.Cover)
+        } else {
+          Image($r('app.media.ic_default_reader_avatar'))
+            .width(56)
+            .height(56)
+            .borderRadius(28)
+            .objectFit(ImageFit.Cover)
+        }
 
-      Column({ space: AppSpacing.XS }) {
-        Text(this.accountLoggedIn ? this.accountDisplayName : '登录华为账号')
-          .fontSize(AppFontSize.SUBTITLE)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(this.primaryTextColor())
-        Text(this.accountLoggedIn ? `${this.accountPoints} 点` : '首次登录免费送 300 点')
-          .fontSize(AppFontSize.CAPTION)
+        Column({ space: AppSpacing.XS }) {
+          Row({ space: AppSpacing.SM }) {
+            Text(this.accountLoggedIn ? this.accountDisplayName : '登录华为账号')
+              .fontSize(AppFontSize.SUBTITLE)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(this.nameColor())
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .flexShrink(1)
+            if (this.membershipSku) {
+              Image(MembershipIcons.forSku(this.membershipSku))
+                .width(26)
+                .height(26)
+                .objectFit(ImageFit.Contain)
+                .flexShrink(0)
+                .accessibilityText(MembershipIcons.label(this.membershipSku))
+            }
+          }
+          .alignItems(VerticalAlign.Center)
+
+          Text(this.accountSubtitle())
+            .fontSize(AppFontSize.CAPTION)
+            .fontColor(this.subTextColor())
+            .maxLines(1)
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+
+        SymbolGlyph($r('sys.symbol.chevron_right'))
+          .fontSize(18)
+          .fontColor([this.subTextColor()])
+      }
+      .width('100%')
+
+      Divider()
+        .strokeWidth(0.5)
+        .color(this.dividerColor())
+        .margin({ top: AppSpacing.LG, bottom: AppSpacing.LG })
+
+      Row({ space: AppSpacing.MD }) {
+        Text(this.membershipSlogan())
+          .fontSize(AppFontSize.BODY)
           .fontColor(this.subTextColor())
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1)
+        Text(this.membershipSku ? '会员中心' : '开通会员')
+          .fontSize(AppFontSize.BODY)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(MembershipIcons.cardTextColor(this.appDarkMode))
+          .padding({ left: AppSpacing.XL, right: AppSpacing.XL, top: AppSpacing.MD, bottom: AppSpacing.MD })
+          .borderRadius(18)
+          .linearGradient({ angle: 135, colors: MembershipIcons.cardGradient(this.membershipSku, this.appDarkMode) })
       }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
-
-      SymbolGlyph($r('sys.symbol.chevron_right'))
-        .fontSize(18)
-        .fontColor([this.subTextColor()])
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
     }
     .width('100%')
     .padding(AppSpacing.XL)
@@ -199,6 +244,24 @@ export struct SettingsPage {
     .onClick(() => {
       router.pushUrl({ url: 'pages/AccountCenter' });
     })
+  }
+
+  nameColor(): string {
+    return this.accountLoggedIn && this.membershipSku ?
+      MembershipIcons.nameColor(this.membershipSku, this.appDarkMode) : this.primaryTextColor();
+  }
+
+  accountSubtitle(): string {
+    if (!this.accountLoggedIn) return '首次登录免费送 300 点';
+    return this.membershipSku ? `${MembershipIcons.label(this.membershipSku)} · ${this.accountPoints} 点` :
+      `${this.accountPoints} 点`;
+  }
+
+  membershipSlogan(): string {
+    if (!this.membershipSku) return '会员主题免费用，朗读礼包每月领';
+    if (!this.membershipExpiresAt) return '永久有效 · 随心阅读，自在听书';
+    const date = new Date(this.membershipExpiresAt);
+    return `有效至 ${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
   }
 
   @Builder

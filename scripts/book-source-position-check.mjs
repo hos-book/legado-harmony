@@ -136,8 +136,8 @@ await h.p.moveVisibleSourceTo(3, 2); // Reordering within the bottom group prese
 assert.deepEqual(h.urls(), ['Pinned', 'C', 'B', 'A']);
 assert.equal(h.rows().find(row => row.bookSourceUrl === 'A').isBottom, 1);
 assert.equal(h.rows().find(row => row.bookSourceUrl === 'B').isBottom, 1);
-await h.action('A'); // Cancel just A; other bottom-pinned sources retain their state.
-assert.deepEqual(h.urls(), ['Pinned', 'A', 'C', 'B']);
+await h.action('A'); // Cancel just A: it stays at the end of the normal group; B keeps its state.
+assert.deepEqual(h.urls(), ['Pinned', 'C', 'A', 'B']);
 assert.equal(h.rows().find(row => row.bookSourceUrl === 'A').isBottom, 0);
 await h.action('B', 'toggleActionSourcePinned');
 assert.equal(h.rows().find(row => row.bookSourceUrl === 'B').isBottom, 0);
@@ -147,7 +147,7 @@ assert.equal(h.rows().find(row => row.bookSourceUrl === 'B').isPinned, 0);
 assert.equal(h.rows().find(row => row.bookSourceUrl === 'B').isBottom, 1);
 await h.p.moveVisibleSourceTo(h.urls().indexOf('B'), 1);
 assert.equal(h.rows().find(row => row.bookSourceUrl === 'B').isBottom, 0);
-assert.deepEqual(h.urls(), ['Pinned', 'B', 'A', 'C']);
+assert.deepEqual(h.urls(), ['Pinned', 'B', 'C', 'A']);
 
 // Being last already still supports explicit bottom -> cancel; one-source lists also work.
 for (const initial of [[seed('Only', 0)], [seed('A', 0), seed('B', 1)]]) {

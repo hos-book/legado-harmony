@@ -1,4 +1,5 @@
 import { common } from '@kit.AbilityKit';
+import preferences from '@ohos.data.preferences';
 import { AccountSessionStore } from './AccountSessionStore';
 import { AccountCommerceApi } from './AccountCommerceApi';
 import { BuiltinThemeRegistry } from '../theme/BuiltinThemeRegistry';
@@ -8,6 +9,8 @@ import { ThemeTrialManager } from '../utils/ThemeTrialManager';
 import { ReaderFontBootstrap } from '../utils/ReaderFontBootstrap';
 
 export class MembershipThemeGuard {
+  private static readonly STORE_NAME: string = 'membership_theme_guard';
+  private static readonly KEY_GRANTED_THEME: string = 'memberGrantedThemeId';
   private static checking: boolean = false;
   private static lastRefreshAttempt: number = 0;
   static async refresh(context: common.UIAbilityContext): Promise<void> {
@@ -25,11 +28,31 @@ export class MembershipThemeGuard {
         } catch (_) { /* Keep the bounded offline grant when the network is unavailable. */ }
       }
       const settings = await AppThemeSettingsStore.load(context);
-      if (!settings.themeId || settings.themeId === ThemeIds.CUSTOM || BuiltinThemeRegistry.isFree(settings.themeId)
-        || AccountSessionStore.hasValidEntitlement(settings.themeId)) return;
+      // A trial can start while the account request or settings load is pending.
+      // Its own expiry manager restores the previous theme when the trial ends.
+      if (ThemeTrialManager.isActive()) return;
+      const themeId = settings.themeId;
+      const store = await preferences.getPreferences(context, MembershipThemeGuard.STORE_NAME);
+      const marked = await store.get(MembershipThemeGuard.KEY_GRANTED_THEME, '') as string;
+      if (!themeId || themeId === ThemeIds.CUSTOM || BuiltinThemeRegistry.isFree(themeId) ||
+        AccountSessionStore.hasOwnedEntitlement(themeId) || AccountSessionStore.hasMemberThemeAccess(themeId)) {
+        // Remember themes that are in use only through membership; everything else clears the mark.
+        const next = AccountSessionStore.hasMemberThemeAccess(themeId) &&
+          !AccountSessionStore.hasOwnedEntitlement(themeId) ? themeId : '';
+        if (next !== marked) {
+          await store.put(MembershipThemeGuard.KEY_GRANTED_THEME, next);
+          await store.flush();
+        }
+        return;
+      }
+      // Withdraw only a theme this guard saw granted by membership. Other active themes keep the
+      // long-standing ThemeAccessPolicy behavior (e.g. a separately bought theme after logout).
+      if (marked !== themeId) return;
       const fallback = AppThemeSettingsStore.activateTheme(AppThemeSettingsStore.DEFAULT_THEME_ID, settings);
       await AppThemeSettingsStore.save(context, fallback);
       AppThemeSettingsStore.applyToStorage(fallback);
+      await store.put(MembershipThemeGuard.KEY_GRANTED_THEME, '');
+      await store.flush();
       ReaderFontBootstrap.applyApplicationFont(context, 'membership-expired');
     } finally { MembershipThemeGuard.checking = false; }
   }

@@ -114,9 +114,28 @@ export class AccountSessionStore {
   }
 
   static hasValidEntitlement(themeId: string, now: number = Date.now()): boolean {
-    const entitlement = AccountSessionStore.entitlement(themeId);
-    return (entitlement !== null && entitlement.expiresAt > now) ||
+    return AccountSessionStore.hasOwnedEntitlement(themeId, now) ||
       AccountSessionStore.hasMemberThemeAccess(themeId, now);
+  }
+
+  /** 当前有效会员档位；未登录、欠款暂停或按服务端时间推算已到期时为空。 */
+  static activeMembershipSku(now: number = Date.now()): string {
+    const account = AccountSessionStore.snapshot;
+    const membership = account.membership;
+    if (!AccountSessionStore.isLoggedIn() || !membership?.active || membership.restricted ||
+      account.iapDebtPoints > 0 || !membership.state) {
+      return '';
+    }
+    const elapsed = Math.max(0, now - account.memberVerifiedAt);
+    const expiresAt = membership.state.expiresAt;
+    return expiresAt === null || expiresAt > membership.serverNow + elapsed ?
+      (membership.tierSku || membership.state.sku) : '';
+  }
+
+  /** A separately bought theme, independent of membership. */
+  static hasOwnedEntitlement(themeId: string, now: number = Date.now()): boolean {
+    const entitlement = AccountSessionStore.entitlement(themeId);
+    return entitlement !== null && entitlement.expiresAt > now;
   }
 
   static hasMemberThemeAccess(themeId: string, now: number = Date.now()): boolean {
@@ -142,8 +161,11 @@ export class AccountSessionStore {
   private static applyToStorage(): void {
     AccountSessionStore.initializeStorage();
     AppStorage.setOrCreate(AccountSessionStore.STORAGE_LOGGED_IN, AccountSessionStore.isLoggedIn());
-    AppStorage.setOrCreate('accountMembershipSku', AccountSessionStore.isLoggedIn() &&
-      AccountSessionStore.snapshot.membership?.active ? AccountSessionStore.snapshot.membership?.state?.sku || '' : '');
+    const membershipSku = AccountSessionStore.activeMembershipSku();
+    AppStorage.setOrCreate('accountMembershipSku', membershipSku);
+    // 0 表示永久；未开通时同样为 0，需结合档位判断。
+    AppStorage.setOrCreate('accountMembershipExpiresAt',
+      membershipSku ? AccountSessionStore.snapshot.membership?.state?.expiresAt ?? 0 : 0);
     AppStorage.setOrCreate(AccountSessionStore.STORAGE_DISPLAY_NAME,
       AccountSessionStore.isLoggedIn() ? AccountSessionStore.snapshot.displayName : '');
     AppStorage.setOrCreate(AccountSessionStore.STORAGE_AVATAR_URL,

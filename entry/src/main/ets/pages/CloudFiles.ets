@@ -14,6 +14,9 @@ import { syncSystemBars } from '../utils/SystemBars';
 import { AppDatabase } from '../model/data/AppDatabase';
 import { BookSourceExport } from '../utils/BookSourceExport';
 import { util } from '@kit.ArkTS';
+import { AppFontSize } from '../theme/AppFontSize';
+import { AppSpacing } from '../theme/AppSpacing';
+import { MembershipIcons } from '../account/MembershipIcons';
 
 class LocalCloudFile {
   name: string = '';
@@ -45,72 +48,324 @@ struct CloudFilesPage {
   aboutToDisappear(): void { CloudFileClient.pause(); }
   build() {
     Column() {
-      PageScaffold({ title: '我的云文件', content: () => { this.content() } })
+      PageScaffold({ title: '我的云空间', content: () => { this.content() } })
     }.width('100%').height('100%').backgroundColor(ThemeRuntime.pageColor(this.dark))
   }
+
   @Builder
   content() {
-    Column({ space: 16 }) {
-      Column({ space: 10 }) {
-        Text(this.summary.configured ? '永久超级会员云空间' : '云文件服务尚未启用').fontSize(20).fontWeight(FontWeight.Bold)
-        Text(`空间 ${this.formatBytes(this.summary.usedBytes)} / 1GB`).fontSize(14)
-        Text(`本月下载授权 ${this.formatBytes(this.summary.downloadBytes)} / 1GB`).fontSize(14)
-        if (this.summary.cycleEndsAt) {
-          Text(`流量重置：${new Date(this.summary.cycleEndsAt).toLocaleDateString()}`).fontSize(12)
-        }
-        Text('书籍、字体与书源共用空间。下载按签发授权的分块大小扣额度；短时重试复用授权，过期重领再次扣除，失败不自动退额。上传中与待清理文件仍占空间。')
-          .fontSize(12).lineHeight(20).fontColor(ThemeRuntime.subTextColor(this.dark))
-      }.padding(18).width('100%').alignItems(HorizontalAlign.Start)
-        .backgroundColor(ThemeRuntime.cardColor(this.dark)).borderRadius(20)
-      if (this.error) { Text(this.error).fontSize(13).fontColor(ThemeRuntime.subTextColor(this.dark)) }
-      if (this.progress) { Text(this.progress).fontSize(14) }
+    Column({ space: AppSpacing.LG }) {
+      this.usageCard()
+      if (this.error) {
+        Text(this.error)
+          .fontSize(AppFontSize.CAPTION)
+          .fontColor(ThemeRuntime.dangerColor(this.dark))
+          .width('100%')
+          .padding({ left: AppSpacing.XS, right: AppSpacing.XS })
+      }
       if (this.busy) {
-        Button('暂停传输').onClick(() => { CloudFileClient.pause(); })
+        this.transferCard()
       } else {
-        Row({ space: 8 }) {
-          Button('上传书籍').fontSize(13).layoutWeight(1).enabled(this.summary.eligible).onClick(() => { this.pick('BOOK') })
-          Button('上传字体').fontSize(13).layoutWeight(1).enabled(this.summary.eligible).onClick(() => { this.pick('FONT') })
-          Button('上传书源').fontSize(13).layoutWeight(1).enabled(this.summary.eligible).onClick(() => { this.pick('SOURCE') })
-        }.width('100%')
-        Button('从 App 本机内容选择').enabled(this.summary.eligible).onClick(() => { this.loadLocal() })
-        ForEach(this.localFiles.slice(0, this.localShown), (file: LocalCloudFile) => {
-          Row({ space: 8 }) {
-            Text(`${this.kind(file.kind)} · ${file.name}`).layoutWeight(1).fontSize(13).maxLines(1)
-            Button('上传').fontSize(12).onClick(() => { this.uploadLocal(file) })
-          }.width('100%')
-        }, (file: LocalCloudFile) => file.kind + (file.sourceUrl || file.path))
-        if (this.localShown < this.localFiles.length) {
-          Button('更多本机内容').onClick(() => { this.localShown += 30; })
-        }
+        this.uploadCard()
         if (this.pendingName) {
-          Text(`待上传：${this.pendingName}`).fontSize(13)
-          Row({ space: 12 }) {
-            Button('继续上传').enabled(this.summary.eligible).onClick(() => { this.resume() })
-            Button('取消任务').onClick(() => { this.cancelUpload() })
-          }
+          this.pendingCard()
         }
-        Button('刷新').onClick(() => { this.refresh() })
+      }
+      Row() {
+        Text('云端文件')
+          .fontSize(AppFontSize.SUBTITLE)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(ThemeRuntime.primaryTextColor(this.dark))
+          .layoutWeight(1)
+        Text('刷新')
+          .fontSize(AppFontSize.BODY)
+          .fontColor(ThemeRuntime.accentColor(this.dark))
+          .enabled(!this.busy)
+          .onClick(() => { this.refresh() })
+      }
+      .width('100%')
+      .padding({ left: AppSpacing.XS, right: AppSpacing.XS })
+      if (this.summary.configured && this.files.length === 0) {
+        Text('云端还没有文件')
+          .fontSize(AppFontSize.BODY)
+          .fontColor(ThemeRuntime.subTextColor(this.dark))
+          .width('100%')
+          .textAlign(TextAlign.Center)
+          .padding(AppSpacing.XXL)
       }
       ForEach(this.files, (file: CloudFileItem) => {
-        Column({ space: 9 }) {
-          Text(file.name).fontSize(16).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
-          Text(`${this.kind(file.kind)} · ${this.formatBytes(file.bytes)} · ${this.status(file.state)}`)
-            .fontSize(12).fontColor(ThemeRuntime.subTextColor(this.dark))
-          Row({ space: 10 }) {
-            Button('下载并导入').fontSize(13).enabled(!this.busy && this.summary.eligible && file.state === 'READY')
-              .onClick(() => { this.download(file) })
-            Button('删除云端').fontSize(13).enabled(!this.busy && file.state !== 'DELETING')
-              .onClick(() => { this.remove(file) })
-          }
-        }.padding(16).width('100%').alignItems(HorizontalAlign.Start)
-          .backgroundColor(ThemeRuntime.cardColor(this.dark)).borderRadius(18)
-      }, (file: CloudFileItem) => file.id)
-      if (this.nextCursor) { Button('加载更多').enabled(!this.busy).onClick(() => { this.more() }) }
-      if (this.summary.configured && this.files.length === 0) { Text('云端还没有文件').fontSize(14) }
-    }.padding(20).width('100%').alignItems(HorizontalAlign.Start)
-      .foregroundColor(ThemeRuntime.primaryTextColor(this.dark))
+        this.fileRow(file)
+      }, (file: CloudFileItem) => file.id + file.state)
+      if (this.nextCursor) {
+        Text('加载更多')
+          .fontSize(AppFontSize.BODY)
+          .fontColor(ThemeRuntime.accentColor(this.dark))
+          .enabled(!this.busy)
+          .padding(AppSpacing.LG)
+          .onClick(() => { this.more() })
+      }
+      Text('书籍、字体与书源共用 1GB。下载按签发授权的分块计量：短时重试复用授权，过期后重新下载会再次计量，失败不自动退还额度。上传中和待清理的文件仍占用空间。')
+        .fontSize(AppFontSize.CAPTION)
+        .lineHeight(18)
+        .fontColor(ThemeRuntime.subTextColor(this.dark))
+        .padding({ left: AppSpacing.XS, right: AppSpacing.XS })
+    }
+    .width('100%')
+    .padding({ left: AppSpacing.LG, right: AppSpacing.LG, top: 14 })
+    .alignItems(HorizontalAlign.Start)
   }
-  formatBytes(bytes: number): string { return bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1048576).toFixed(1)} MB`; }
+
+  @Builder
+  usageCard() {
+    Column({ space: AppSpacing.LG }) {
+      Row({ space: AppSpacing.LG }) {
+        Image(MembershipIcons.forSku('SUPER_LIFETIME'))
+          .width(44)
+          .height(44)
+          .objectFit(ImageFit.Contain)
+        Column({ space: AppSpacing.XXS }) {
+          Text(this.summary.configured ? '永久超级会员云空间' : '云空间服务尚未启用')
+            .fontSize(AppFontSize.BODY_LARGE)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(MembershipIcons.cardTextColor(this.dark))
+          Text(this.summary.eligible ? '书籍 · 字体 · 书源' : '需要有效的永久超级会员')
+            .fontSize(AppFontSize.CAPTION)
+            .fontColor(MembershipIcons.cardSubTextColor(this.dark))
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+      }
+      .width('100%')
+      this.meter('存储空间', this.summary.usedBytes, this.summary.quotaBytes, '')
+      this.meter('本月下载额度', this.summary.downloadBytes, this.summary.downloadQuotaBytes,
+        this.summary.cycleEndsAt ? `${this.formatDate(this.summary.cycleEndsAt)} 重置` : '')
+    }
+    .width('100%')
+    .padding(AppSpacing.XL)
+    .borderRadius(ThemeRuntime.cardRadius())
+    .linearGradient({ angle: 135, colors: MembershipIcons.cardGradient('SUPER_LIFETIME', this.dark) })
+  }
+
+  @Builder
+  meter(title: string, used: number, total: number, hint: string) {
+    Column({ space: AppSpacing.XS }) {
+      Row() {
+        Text(title)
+          .fontSize(AppFontSize.CAPTION)
+          .fontColor(MembershipIcons.cardSubTextColor(this.dark))
+          .layoutWeight(1)
+        Text(`${this.formatBytes(used)} / ${this.formatBytes(total)}` + (hint ? ` · ${hint}` : ''))
+          .fontSize(AppFontSize.CAPTION)
+          .fontColor(MembershipIcons.cardTextColor(this.dark))
+      }
+      .width('100%')
+      Progress({ value: Math.min(used, total), total: Math.max(1, total), type: ProgressType.Linear })
+        .width('100%')
+        .height(6)
+        .color(MembershipIcons.accent('SUPER_LIFETIME', this.dark))
+        .backgroundColor(this.dark ? '#33FFFFFF' : '#66FFFFFF')
+    }
+    .width('100%')
+  }
+
+  @Builder
+  uploadCard() {
+    Column({ space: AppSpacing.LG }) {
+      Text('上传到云空间')
+        .fontSize(AppFontSize.BODY_LARGE)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(ThemeRuntime.primaryTextColor(this.dark))
+        .width('100%')
+      Row({ space: AppSpacing.MD }) {
+        this.uploadTile($r('sys.symbol.book'), '书籍', 'BOOK')
+        this.uploadTile($r('sys.symbol.textformat'), '字体', 'FONT')
+        this.uploadTile($r('sys.symbol.externaldrive'), '书源', 'SOURCE')
+      }
+      .width('100%')
+      Row() {
+        Text('从本机书架、字体与书源中选择')
+          .fontSize(AppFontSize.BODY)
+          .fontColor(ThemeRuntime.primaryTextColor(this.dark))
+          .layoutWeight(1)
+        SymbolGlyph(this.localFiles.length > 0 ? $r('sys.symbol.chevron_up') : $r('sys.symbol.chevron_down'))
+          .fontSize(16)
+          .fontColor([ThemeRuntime.subTextColor(this.dark)])
+      }
+      .width('100%')
+      .opacity(this.summary.eligible ? 1 : 0.5)
+      .onClick(() => {
+        if (!this.summary.eligible) return;
+        if (this.localFiles.length > 0) {
+          this.localFiles = [];
+        } else {
+          this.loadLocal();
+        }
+      })
+      ForEach(this.localFiles.slice(0, this.localShown), (file: LocalCloudFile) => {
+        Row({ space: AppSpacing.MD }) {
+          Text(this.kind(file.kind))
+            .fontSize(AppFontSize.MICRO)
+            .fontColor(ThemeRuntime.accentColor(this.dark))
+            .padding({ left: AppSpacing.SM, right: AppSpacing.SM, top: 2, bottom: 2 })
+            .borderRadius(ThemeRuntime.smallRadius())
+            .backgroundColor(ThemeRuntime.inputColor(this.dark))
+          Text(file.name)
+            .fontSize(AppFontSize.BODY)
+            .fontColor(ThemeRuntime.primaryTextColor(this.dark))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .layoutWeight(1)
+          Text('上传')
+            .fontSize(AppFontSize.BODY)
+            .fontColor(ThemeRuntime.accentColor(this.dark))
+            .onClick(() => { this.uploadLocal(file) })
+        }
+        .width('100%')
+      }, (file: LocalCloudFile) => file.kind + (file.sourceUrl || file.path))
+      if (this.localShown < this.localFiles.length) {
+        Text('显示更多')
+          .fontSize(AppFontSize.BODY)
+          .fontColor(ThemeRuntime.accentColor(this.dark))
+          .onClick(() => { this.localShown += 30; })
+      }
+    }
+    .width('100%')
+    .padding(AppSpacing.XL)
+    .borderRadius(ThemeRuntime.cardRadius())
+    .backgroundColor(ThemeRuntime.cardColor(this.dark))
+  }
+
+  @Builder
+  uploadTile(icon: Resource, title: string, kind: string) {
+    Column({ space: AppSpacing.SM }) {
+      SymbolGlyph(icon)
+        .fontSize(24)
+        .fontColor([ThemeRuntime.accentColor(this.dark)])
+      Text(title)
+        .fontSize(AppFontSize.BODY)
+        .fontColor(ThemeRuntime.primaryTextColor(this.dark))
+    }
+    .layoutWeight(1)
+    .padding({ top: AppSpacing.LG, bottom: AppSpacing.LG })
+    .borderRadius(ThemeRuntime.largeRadius())
+    .backgroundColor(ThemeRuntime.inputColor(this.dark))
+    .opacity(this.summary.eligible ? 1 : 0.5)
+    .onClick(() => {
+      if (this.summary.eligible) this.pick(kind);
+    })
+  }
+
+  @Builder
+  transferCard() {
+    Row({ space: AppSpacing.LG }) {
+      LoadingProgress()
+        .width(24)
+        .height(24)
+        .color(ThemeRuntime.accentColor(this.dark))
+      Text(this.progress || '正在准备传输…')
+        .fontSize(AppFontSize.BODY)
+        .fontColor(ThemeRuntime.primaryTextColor(this.dark))
+        .layoutWeight(1)
+      Text('暂停')
+        .fontSize(AppFontSize.BODY)
+        .fontColor(ThemeRuntime.accentColor(this.dark))
+        .onClick(() => { CloudFileClient.pause(); })
+    }
+    .width('100%')
+    .padding(AppSpacing.XL)
+    .borderRadius(ThemeRuntime.cardRadius())
+    .backgroundColor(ThemeRuntime.cardColor(this.dark))
+  }
+
+  @Builder
+  pendingCard() {
+    Column({ space: AppSpacing.MD }) {
+      Text(`未完成的上传：${this.pendingName}`)
+        .fontSize(AppFontSize.BODY)
+        .fontColor(ThemeRuntime.primaryTextColor(this.dark))
+        .width('100%')
+        .maxLines(2)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+      Row({ space: AppSpacing.MD }) {
+        Button('继续上传')
+          .layoutWeight(1)
+          .height(38)
+          .fontSize(AppFontSize.BODY)
+          .fontColor(ThemeRuntime.onAccentColor())
+          .backgroundColor(ThemeRuntime.accentColor(this.dark))
+          .enabled(this.summary.eligible)
+          .onClick(() => { this.resume() })
+        Button('取消任务')
+          .layoutWeight(1)
+          .height(38)
+          .fontSize(AppFontSize.BODY)
+          .fontColor(ThemeRuntime.subTextColor(this.dark))
+          .backgroundColor(ThemeRuntime.inputColor(this.dark))
+          .onClick(() => { this.cancelUpload() })
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding(AppSpacing.XL)
+    .borderRadius(ThemeRuntime.cardRadius())
+    .backgroundColor(ThemeRuntime.cardColor(this.dark))
+  }
+
+  @Builder
+  fileRow(file: CloudFileItem) {
+    Row({ space: AppSpacing.LG }) {
+      SymbolGlyph(file.kind === 'BOOK' ? $r('sys.symbol.book') :
+        (file.kind === 'FONT' ? $r('sys.symbol.textformat') : $r('sys.symbol.externaldrive')))
+        .fontSize(22)
+        .fontColor([ThemeRuntime.accentColor(this.dark)])
+        .width(40)
+        .height(40)
+        .borderRadius(20)
+        .backgroundColor(ThemeRuntime.inputColor(this.dark))
+      Column({ space: AppSpacing.XXS }) {
+        Text(file.name)
+          .fontSize(AppFontSize.BODY_LARGE)
+          .fontColor(ThemeRuntime.primaryTextColor(this.dark))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Text(`${this.kind(file.kind)} · ${this.formatBytes(file.bytes)} · ${this.status(file.state)}`)
+          .fontSize(AppFontSize.CAPTION)
+          .fontColor(ThemeRuntime.subTextColor(this.dark))
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+      SymbolGlyph($r('sys.symbol.download'))
+        .fontSize(20)
+        .fontColor([ThemeRuntime.accentColor(this.dark)])
+        .opacity(!this.busy && this.summary.eligible && file.state === 'READY' ? 1 : 0.35)
+        .accessibilityText('下载并导入')
+        .onClick(() => {
+          if (!this.busy && this.summary.eligible && file.state === 'READY') this.download(file);
+        })
+      SymbolGlyph($r('sys.symbol.trash'))
+        .fontSize(20)
+        .fontColor([ThemeRuntime.subTextColor(this.dark)])
+        .opacity(!this.busy && file.state !== 'DELETING' ? 1 : 0.35)
+        .accessibilityText('删除云端副本')
+        .onClick(() => {
+          if (!this.busy && file.state !== 'DELETING') this.remove(file);
+        })
+    }
+    .width('100%')
+    .padding({ left: AppSpacing.LG, right: AppSpacing.XL, top: AppSpacing.LG, bottom: AppSpacing.LG })
+    .borderRadius(ThemeRuntime.largeRadius())
+    .backgroundColor(ThemeRuntime.cardColor(this.dark))
+  }
+
+  formatDate(value: number): string {
+    const date = new Date(value);
+    return `${date.getMonth() + 1}月${date.getDate()}日`;
+  }
+
+  formatBytes(bytes: number): string {
+    if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(bytes % 1073741824 === 0 ? 0 : 2)} GB`;
+    return bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1048576).toFixed(1)} MB`;
+  }
   kind(value: string): string { return value === 'BOOK' ? '书籍' : value === 'FONT' ? '字体' : '书源'; }
   status(value: string): string { return value === 'READY' ? '已同步' : value === 'DELETING' ? '清理中' : '上传中'; }
   async refresh(): Promise<void> {
@@ -234,13 +489,18 @@ struct CloudFilesPage {
           const saved = await new picker.DocumentViewPicker(this.context).save(options);
           if (saved.length) {
             await fs.copy(fileUri.getUriFromPath(path), saved[0]);
-            await fs.unlink(path);
             HdsFeedback.showToast('已保存书源文件；当前导入器仅支持 25MB 以内的 JSON');
           }
+          // Saved or canceled, the local transfer copy is no longer needed.
+          await fs.unlink(path);
           return;
         }
-        // Existing source importer provides validation and explicit conflict choices.
-        AppStorage.setOrCreate('pendingBookSourceImportUri', fileUri.getUriFromPath(path));
+        // Existing source importer provides validation and explicit conflict choices. Hand it a cache copy so
+        // the resumable transfer file is removed now; the system may reclaim cache files later.
+        const importPath = `${this.context.cacheDir}/cloud_import_${file.id}.json`;
+        if (fs.accessSync(importPath)) await fs.unlink(importPath);
+        await fs.moveFile(path, importPath);
+        AppStorage.setOrCreate('pendingBookSourceImportUri', fileUri.getUriFromPath(importPath));
         AppStorage.setOrCreate('pendingBookSourceImportNonce', Date.now());
         router.pushUrl({ url: 'pages/BookSource' });
       }

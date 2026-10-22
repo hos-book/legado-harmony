@@ -182,6 +182,7 @@ export class CloudFileClient {
     for (let attempt = 0; attempt < 2; attempt++) {
       CloudFileClient.check(userId);
       const request = http.createHttp();
+      let response: http.HttpResponse | null = null;
       try {
         // Separate HTTP client: account Bearer credentials must never be sent to OBS.
         const headers: Record<string, string> = { 'Cache-Control': 'no-store' };
@@ -189,23 +190,25 @@ export class CloudFileClient {
           headers['Content-Type'] = 'application/octet-stream';
           headers['Content-MD5'] = ticket.md5;
         }
-        const response = await request.request(ticket.url, {
+        response = await request.request(ticket.url, {
           method: body === null ? http.RequestMethod.GET : http.RequestMethod.PUT,
           header: headers, extraData: body === null ? undefined : body.buffer,
           connectTimeout: 10000, readTimeout: 20000, usingCache: false,
           maxLimit: 2097152, expectDataType: http.HttpDataType.ARRAY_BUFFER
         });
-        if (response.responseCode < 200 || response.responseCode >= 300) {
-          if (response.responseCode === 403) throw new Error('云文件授权已过期，请稍后继续传输');
-          throw new Error(`云文件传输失败（${response.responseCode}），可稍后继续`);
-        }
-        return body === null ? new Uint8Array(response.result as ArrayBuffer) : new Uint8Array(0);
-      } catch (error) {
-        // Reuse this short-lived capability on network failure; no extra API quota charge.
-        if (attempt === 1) throw new Error('云文件直连失败，请检查网络后继续传输');
+      } catch (_) {
+        // Network failure: reuse this short-lived capability once; no extra API quota charge.
+        continue;
       } finally { request.destroy(); }
+      if (!response) continue;
+      // An HTTP answer is final for this capability, so report it instead of a generic network error.
+      if (response.responseCode === 403) throw new Error('云文件授权已过期，请稍后继续传输');
+      if (response.responseCode < 200 || response.responseCode >= 300) {
+        throw new Error(`云文件传输失败（${response.responseCode}），可稍后继续`);
+      }
+      return body === null ? new Uint8Array(response.result as ArrayBuffer) : new Uint8Array(0);
     }
-    throw new Error('云文件直连失败');
+    throw new Error('云文件直连失败，请检查网络后继续传输');
   }
   private static check(userId: string): void {
     if (CloudFileClient.paused) throw new Error('传输已暂停，可稍后继续');

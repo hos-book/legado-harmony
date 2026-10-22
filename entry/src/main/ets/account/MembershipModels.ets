@@ -32,6 +32,8 @@ export class MembershipSnapshot {
   active: boolean = false;
   restricted: boolean = false;
   cycle: MembershipCycle | null = null;
+  /** 当前时刻由哪个商品覆盖；定期会员续费后 state.sku 只是最后一次购买的商品。 */
+  tierSku: string | null = null;
   claim: MembershipClaim | null = null;
   benefits: MembershipBenefits = new MembershipBenefits();
   serverNow: number = 0;
