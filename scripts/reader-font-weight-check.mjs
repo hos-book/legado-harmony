@@ -95,6 +95,11 @@ vm.runInContext(compile(`class Controls {
 }
 globalThis.controls = new Controls();`), context);
 const controls = context.controls;
+const options = controls.typographySettingOptions();
+for (const [field, label] of [[Field.MARGIN_LEFT, '左边距'], [Field.MARGIN_RIGHT, '右边距'],
+  [Field.MARGIN_TOP, '上边距'], [Field.MARGIN_BOTTOM, '下边距']]) {
+  assert.equal(options[field]?.value, label, `Settings dropdown must expose ${label}`);
+}
 controls.typographySettingIndex = Field.FONT_WEIGHT;
 controls.adjustCurrentTypographySetting(1);
 assert.equal(controls.readerFontWeight, 500);

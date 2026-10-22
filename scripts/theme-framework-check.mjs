@@ -425,10 +425,9 @@ for (const marginName of ['Left', 'Right', 'Top', 'Bottom']) {
     `Reader ${marginName.toLowerCase()} margin is not persisted or applied`);
 }
 assert(readerSettingsPage.includes('this.typographyStepper()') &&
-  readerSettingsPage.includes("{ value: '左边距' }") &&
-  readerSettingsPage.includes("{ value: '右边距' }") &&
-  readerSettingsPage.includes("{ value: '上边距' }") &&
-  readerSettingsPage.includes("{ value: '下边距' }") &&
+  readerSettingsPage.includes('Select(this.typographySettingOptions())') &&
+  readerSettingsPage.includes('return ReaderTypographyField.LABELS.map((label: string): SelectOption => ({ value: label }))') &&
+  readerLayoutSettings.includes("'左边距', '右边距', '上边距', '下边距'") &&
   readerSettingsPage.includes('adjustCurrentTypographySetting'),
   'Reader typography dropdown/stepper does not expose all four margins');
 assert(reader.includes('input.marginLeftPx = this.toMeasurePx(this.getEffectiveReaderMarginLeft())') &&
