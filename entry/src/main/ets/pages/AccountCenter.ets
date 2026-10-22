@@ -1103,12 +1103,12 @@ struct AccountCenterPage {
 
       if (this.accountLoggedIn) {
         Row() {
-          this.pointCell('充值点', this.paidPoints, '可开通会员')
+          this.pointCell(true)
           Divider()
             .vertical(true)
             .height(32)
             .color(this.appDarkMode ? '#33FFFFFF' : '#33000000')
-          this.pointCell('赠送点', this.promoPoints, '可兑换主题')
+          this.pointCell(false)
           Blank()
           Text('充值')
             .fontSize(AppFontSize.CAPTION)
@@ -1152,25 +1152,26 @@ struct AccountCenterPage {
     .shadow({ radius: 12, color: this.appDarkMode ? '#33000000' : '#1A6E5F48', offsetY: 4 })
   }
 
+  // 点数要在 builder 里直接读状态：按值传进 @Builder 的数字不会随充值到账刷新。
   @Builder
-  pointCell(title: string, value: number, hint: string) {
+  pointCell(paid: boolean) {
     Column({ space: AppSpacing.XXS }) {
       Row({ space: AppSpacing.XS }) {
-        Text(`${value}`)
+        Text(`${paid ? this.paidPoints : this.promoPoints}`)
           .fontSize(AppFontSize.SUBTITLE)
           .fontWeight(FontWeight.Bold)
           .fontColor(MembershipIcons.cardTextColor(this.appDarkMode))
-        Text(title)
+        Text(paid ? '充值点' : '赠送点')
           .fontSize(AppFontSize.CAPTION)
           .fontColor(MembershipIcons.cardSubTextColor(this.appDarkMode))
       }
       .alignItems(VerticalAlign.Bottom)
-      Text(hint)
+      Text(paid ? '可开通会员' : '可兑换主题')
         .fontSize(AppFontSize.MICRO)
         .fontColor(MembershipIcons.cardSubTextColor(this.appDarkMode))
     }
     .alignItems(HorizontalAlign.Start)
-    .padding({ right: AppSpacing.LG, left: title === '充值点' ? 0 : AppSpacing.LG })
+    .padding({ right: AppSpacing.LG, left: paid ? 0 : AppSpacing.LG })
   }
 
   @Builder
@@ -1191,20 +1192,22 @@ struct AccountCenterPage {
     .backgroundColor(this.appDarkMode ? '#332A1A' : '#FFF4E3')
   }
 
+  // 标题在这里按状态算：按值传进 @Builder 的字符串在开通或升级后不会刷新。
   @Builder
-  sectionHeader(title: string, action: string, onAction: () => void) {
+  planSectionHeader() {
     Row() {
-      Text(title)
+      Text(this.membershipSku === 'LIFETIME' ? '升级超级会员' :
+        (this.membership.active ? '续费与升级' : '会员方案'))
         .fontSize(AppFontSize.SUBTITLE)
         .fontWeight(FontWeight.Bold)
         .fontColor(this.primaryTextColor())
         .layoutWeight(1)
-      if (action) {
-        Text(action)
-          .fontSize(AppFontSize.BODY)
-          .fontColor(this.accentColor())
-          .onClick(onAction)
-      }
+      Text('购买说明')
+        .fontSize(AppFontSize.BODY)
+        .fontColor(this.accentColor())
+        .onClick(() => {
+          this.showPurchaseTerms();
+        })
     }
     .width('100%')
     .padding({ left: AppSpacing.XS, right: AppSpacing.XS })
@@ -1213,10 +1216,7 @@ struct AccountCenterPage {
   @Builder
   planSection() {
     Column({ space: AppSpacing.MD }) {
-      this.sectionHeader(this.membershipSku === 'LIFETIME' ? '升级超级会员' :
-        (this.membership.active ? '续费与升级' : '会员方案'), '购买说明', () => {
-        this.showPurchaseTerms();
-      })
+      this.planSectionHeader()
       if (this.launchBanner()) {
         Row({ space: AppSpacing.SM }) {
           SymbolGlyph($r('sys.symbol.timer'))
