@@ -43,6 +43,8 @@ const SHELF_COVER_INITIAL_PREFETCH_COUNT: number = 16;
 const SHELF_COVER_UPDATE_BATCH_MS: number = 48;
 const SHELF_UPDATE_BADGE_VARIABLE: string = 'shelfHasUpdate';
 const SHELF_SEARCH_INPUT_KEY: string = 'bookshelf_search_input';
+/** 下拉偏移回退超过这个距离（vp）才算往回推，避免手指抖动时提示闪烁。 */
+const SHELF_REFRESH_PULL_DIRECTION_SLOP: number = 2;
 /** 输入停顿这么久才按新关键词重新筛选，连续打字时不必每个字都重建列表。 */
 const SHELF_SEARCH_APPLY_DELAY_MS: number = 200;
 /** 标签、书源筛选键的前缀，后面跟 encodeURIComponent 过的名字，避免名字里的逗号打乱键列表。 */
@@ -233,6 +235,10 @@ export struct BookshelfPage {
   @State isShelfRefreshing: boolean = false;
   @State shelfRefreshStatus: RefreshStatus = RefreshStatus.Inactive;
   @State shelfRefreshPrompt: string = '下拉刷新书架';
+  /** 下拉途中手指往回推时收起提示，再往下拉才重新显示。 */
+  @State shelfRefreshPullRetracting: boolean = false;
+  private shelfRefreshPullPeak: number = 0;
+  private shelfRefreshPullTrough: number = 0;
   @State editingTags: string[] = [];
   @State tagInput: string = '';
   @State shelfCoverMap: Map<string, string> = new Map();
@@ -1285,6 +1291,9 @@ export struct BookshelfPage {
           .refreshOffset(64)
           .onStateChange((state: RefreshStatus) => {
             this.updateShelfRefreshPrompt(state);
+          })
+          .onOffsetChange((offset: number) => {
+            this.trackShelfRefreshPullOffset(offset);
           })
           .onRefreshing(() => {
             this.refreshBookshelfToc();
@@ -6284,7 +6293,40 @@ export struct BookshelfPage {
     return LocalBookService.isLocalBook(book);
   }
 
+  trackShelfRefreshPullOffset(offset: number): void {
+    if (this.shelfRefreshRunning || this.isShelfRefreshing) {
+      return;
+    }
+    if (this.shelfRefreshStatus !== RefreshStatus.Drag && this.shelfRefreshStatus !== RefreshStatus.OverDrag) {
+      return;
+    }
+    if (this.shelfRefreshPullRetracting) {
+      if (offset > this.shelfRefreshPullTrough + SHELF_REFRESH_PULL_DIRECTION_SLOP) {
+        this.shelfRefreshPullRetracting = false;
+        this.shelfRefreshPullPeak = offset;
+      } else {
+        this.shelfRefreshPullTrough = Math.min(this.shelfRefreshPullTrough, offset);
+      }
+    } else if (this.shelfRefreshStatus === RefreshStatus.Drag &&
+      offset < this.shelfRefreshPullPeak - SHELF_REFRESH_PULL_DIRECTION_SLOP) {
+      // 只收起“下拉刷新书架”；“松手刷新书架”阶段往回推仍会刷新，提示要留着。
+      this.shelfRefreshPullRetracting = true;
+      this.shelfRefreshPullTrough = offset;
+    } else {
+      this.shelfRefreshPullPeak = Math.max(this.shelfRefreshPullPeak, offset);
+    }
+  }
+
+  resetShelfRefreshPullTracking(): void {
+    this.shelfRefreshPullPeak = 0;
+    this.shelfRefreshPullTrough = 0;
+    this.shelfRefreshPullRetracting = false;
+  }
+
   updateShelfRefreshPrompt(state: RefreshStatus): void {
+    if (state === RefreshStatus.Inactive || state === RefreshStatus.Done || state === RefreshStatus.Refresh) {
+      this.resetShelfRefreshPullTracking();
+    }
     this.shelfRefreshStatus = state;
     if (this.shelfRefreshRunning) {
       this.shelfRefreshPrompt = '书架刷新中';
@@ -6305,6 +6347,7 @@ export struct BookshelfPage {
 
   shouldShowShelfRefreshStatus(): boolean {
     if (this.isShelfRefreshing) return true;
+    if (this.shelfRefreshPullRetracting) return false;
     return this.shelfRefreshStatus === RefreshStatus.Drag ||
       this.shelfRefreshStatus === RefreshStatus.OverDrag ||
       this.shelfRefreshStatus === RefreshStatus.Refresh;
