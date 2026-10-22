@@ -184,6 +184,9 @@ for (const fileName of themedIconFiles) {
   const source = fs.readFileSync(path.join(mediaRoot, fileName), 'utf8');
   assert(/viewBox="0 0 24 24"/.test(source), `Invalid themed icon viewBox: ${fileName}`);
   assert(!/(<script|<image|<use|href=|url\(|<filter)/i.test(source), `Unsafe SVG feature in ${fileName}`);
+  if (fileName.startsWith('ic_theme_obsidian_archive_')) {
+    assert(!/stroke=|fill="none"/.test(source), `Exclusive tab icon needs filled outlines for tinting: ${fileName}`);
+  }
 }
 
 const themeLogoFiles = fs.readdirSync(mediaRoot).filter(fileName => /^theme_logo_.*\.svg$/.test(fileName));
@@ -203,7 +206,9 @@ const swordFrostJpegs = [
   'theme_folder_art_sword_frost.jpg'
 ];
 for (const fileName of ['theme_startup_obsidian_archive.jpg', 'theme_cover_obsidian_archive_01.jpg',
-  'theme_cover_obsidian_archive_02.jpg', 'theme_folder_art_obsidian_archive.jpg']) {
+  'theme_cover_obsidian_archive_02.jpg', 'theme_cover_obsidian_archive_03.jpg',
+  'theme_cover_obsidian_archive_04.jpg', 'theme_cover_obsidian_archive_05.jpg',
+  'theme_cover_obsidian_archive_06.jpg', 'theme_folder_art_obsidian_archive.jpg']) {
   const dimensions = jpegDimensions(path.join(mediaRoot, fileName));
   const expected = fileName.includes('startup') ? { width: 841, height: 1870 } : { width: 450, height: 660 };
   assert(dimensions.width === expected.width && dimensions.height === expected.height,

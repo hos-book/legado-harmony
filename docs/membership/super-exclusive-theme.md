@@ -4,12 +4,17 @@
 
 ## 视觉资源
 
-- 即梦 CLI 生成 5 张独立原画：启动封面、黑金书封、象牙书封、藏书分组图、桌面图标。
+- 即梦 CLI 生成启动封面、藏书分组图和桌面图标；书封第二版重绘为 6 幅：流金书页、山河长卷、月下航帆、银杏书签、星海鲸游、远山飞鸟。原两幅封面已替换，去掉拱门与碑形构图。
 - 原画以默认 5.0 模型、2K 分辨率生成；生成成功后只做居中裁切、尺寸适配与压缩。
-- 配套 SVG 为代码绘制：四个导航图标、主题标志、透明书框、浅深阅读页角饰、浅深朗读面板、「曜金星轨」正则气泡。
-- 生成任务、提示词及文件 SHA-256 见 [生成记录](../obsidian-theme-generation.json)。记录不包含认证令牌或签名下载链接。
+- 配套 SVG 为代码绘制：导航第二版使用开卷书架、折页罗盘、寻书镜和读者藏书印；「曜金藏签」强调气泡采用折角书签端饰、非对称圆角与墨底香槟字。保留 `gilded-orbit` 样式 ID，兼容已保存规则与专属主题权限。
+- 文件夹第二版采用即梦重绘的横叠藏书、织带书签和银杏叶，生成记录见 [文件夹重绘记录](../obsidian-theme-folder-refresh.json)。通过 `scripts/prepare-obsidian-folder-refresh.mjs` 处理为 450×660 的生产素材。
+- 阅读背景第二版改为暖象牙纸 `#F5EFE3` 与暖墨纸 `#1C1C1B`，搭配银杏扉页角饰及山河书页页脚。角饰为透明 SVG，沿用按页面短边缩放的布局，正文中央保持纯色；无整页图片拉伸、噪点纹理或动画。
+- 主题标志、透明书框及朗读面板沿用第一版。
+- 生成任务、提示词及文件 SHA-256 见 [首版历史记录](../obsidian-theme-generation.json) 和 [第二版书封记录](../obsidian-theme-cover-refresh.json)。第二版记录取代首版中的两幅书封记录；记录不包含认证令牌或签名下载链接。
 - `scripts/prepare-obsidian-theme.mjs` 从本地原画清单生成生产位图；`scripts/generate-obsidian-theme-vectors.mjs` 生成配套矢量资源。
-- 本地设计预览：`output/obsidian-archive/theme-preview.png`。该图由真实主题素材与配色合成，是设计示意，不是真机截图。
+- 第二版封面处理：`scripts/prepare-obsidian-cover-refresh.mjs`；预览：`scripts/preview-obsidian-refresh.mjs`，产物 `output/obsidian-archive-v2/theme-refresh-preview.png`。该图由真实主题素材与配色合成，是设计示意，不是真机截图。
+- 文件夹与阅读页预览：`scripts/preview-obsidian-reader-refresh.mjs`，产物 `output/obsidian-archive-v2/folder-reader-preview.png`；使用实际阅读配色、角饰和原有等比布局参数合成。
+- 本次视觉更新只涉及客户端，无需数据库迁移或重新领取主题。
 
 ## 领取与使用规则
 
@@ -51,6 +56,11 @@ npm test --prefix server
 node scripts/membership-theme-check.mjs
 node scripts/app-icon-check.mjs
 node scripts/theme-framework-check.mjs
+node scripts/obsidian-reader-bubbles-check.mjs
 ```
+
+2026-10-22 阅读气泡修正：`ThemeRuntime` 的气泡样式白名单补齐 `gilded-orbit`，修复应用主题时被替换为普通气泡的问题；同时将主题继承的强调文字颜色改为香槟色，避免覆盖墨底气泡预设。段评和「本章说」统一使用原生绘制的折角藏书签、细金边与小书签尾，浅色为墨底金字，深色为香槟底墨字。书源显式设置的段评颜色和圆角仍优先。
+
+新增验证从主题应用开始，经过实际阅读页上下文和原生文字样式转换，覆盖浅深色、书签资源、段评与本章说绘制、书源覆盖和授权回退。`scripts/preview-obsidian-bubbles.mjs` 使用同一运行时与实际绘制路径生成评审图；评审图的文字由 SVG 排版，不代替设备截图。
 
 服务端自动化覆盖普通会员拒绝、周年与闰日、过期续领、旧请求重放、欠款暂停、目录下架、点数不变、迁移重跑及 HTTP 认证绑定。客户端脚本覆盖授权、到期/退出后的整套与自定义部件撤回、图标权限和有效授权保留。鸿蒙 HAP 编译验证语法和资源；真机冷启动、折叠屏、字体与翻页效果仍需设备验收。

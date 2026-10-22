@@ -108,6 +108,19 @@ for (const variant of [exclusive.light, exclusive.dark]) {
   assert(contrast(variant.reader.backgroundColor, variant.reader.subTextColor) >= 4.5);
 }
 assert.equal(sandbox.runtime.onAccentColor(), '#FFFFFF', 'Preserve existing callers without an explicit fill');
+vm.runInContext(stripTypeScriptTypes(read('entry/src/main/ets/utils/HexColor.ts')
+  .replace(/\bexport /g, ''), { mode: 'transform' }), sandbox);
+vm.runInContext(source('model/reader/ReaderRegexFontRule') +
+  '\nglobalThis.bubbleResolver = ReaderRegexBubbleStyleResolver;', sandbox);
+for (const darkMode of [false, true]) {
+  const bubble = sandbox.bubbleResolver.resolve(null, {
+    darkMode, inheritedMode: 'bubble', inheritedBubbleStyleId: 'gilded-orbit',
+    inheritedColor: '#B59B68', accentColor: '#B59B68',
+    surfaceColor: darkMode ? '#191B1F' : '#F8F3E9', normalTextColor: '#302C26'
+  }, false);
+  assert(contrast(bubble.backgroundColor, bubble.textColor) >= 7,
+    `Exclusive bookplate must retain readable text in ${darkMode ? 'dark' : 'light'} mode`);
+}
 assert.equal(manager.optionForTheme('custom').title, '自定义主题');
 
 // Old devices must never call the new APIs, including the default-icon path.

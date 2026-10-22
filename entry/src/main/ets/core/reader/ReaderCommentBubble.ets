@@ -85,6 +85,9 @@ const COMMENT_BUBBLE_SPECS: Map<string, ReaderCommentBubbleSpec> = new Map<strin
     [0xFF2F6FB3, 0xFF17324F, 0xFFF0F8FF, 0xFFE8731F, 0], [0xFF102238, 0xFF9CC4EC, 0xFFE4F8FC, 0xFFE8731F, 0])],
   ['starwish-ribbon', new ReaderCommentBubbleSpec(false, 0.5, 'star',
     [0xFF6D52A8, 0xFF4A3570, 0xFFFBF6FF, 0xFFE3BE58, 0], [0xFFD9C6F2, 0xFF6D52A8, 0xFF4A3570, 0xFFE3BE58, 0])],
+  ['gilded-orbit', new ReaderCommentBubbleSpec(false, 0.12, 'folio',
+    [0xFF292620, 0xFFC5A36A, 0xFFF2DEAE, 0xFFC5A36A, 0xFF292620],
+    [0xFFDEC79A, 0xFFAF925E, 0xFF30291E, 0xFFAF925E, 0xFFF7E8C5])],
   ['pencil-mark', new ReaderCommentBubbleSpec(false, 0.15, 'sketch',
     [0xFF2F5D48, 0xFF1F3F31, 0xFFFFF3CF, 0x992F5D48, 0], [0xFFF1DE8A, 0xFF7A6A2E, 0xFF2B2620, 0x99F1DE8A, 0])]
 ]);
@@ -147,7 +150,8 @@ export class ReaderCommentBubblePainter {
     canvas.detachBrush();
 
     if (((style.stroke >>> 24) & 0xFF) > 0) {
-      const pen = ReaderCommentBubblePainter.pen(style.stroke, Math.max(1, h * 0.07));
+      const pen = ReaderCommentBubblePainter.pen(style.stroke,
+        Math.max(1, h * (style.ornament === 'folio' ? 0.045 : 0.07)));
       canvas.attachPen(pen);
       canvas.drawPath(body);
       canvas.detachPen();
@@ -201,7 +205,21 @@ export class ReaderCommentBubblePainter {
     const w = right - left;
     const h = bottom - top;
     const body = new drawing.Path();
-    if (style.cut) {
+    if (style.ornament === 'folio' && style.radiusPx < 0) {
+      // A folded ex-libris label. Preserve a source's explicit corner-radius choice.
+      const c = Math.min(h * 0.20, w / 4);
+      const r = h * 0.10;
+      body.moveTo(left + r, top);
+      body.lineTo(right - c, top);
+      body.lineTo(right, top + c);
+      body.lineTo(right, bottom - r);
+      body.quadTo(right, bottom, right - r, bottom);
+      body.lineTo(left + c, bottom);
+      body.lineTo(left, bottom - c);
+      body.lineTo(left, top + r);
+      body.quadTo(left, top, left + r, top);
+      body.close();
+    } else if (style.cut) {
       const c = Math.min(h * 0.26, w / 3);
       body.moveTo(left + c, top);
       body.lineTo(right - c, top);
@@ -223,7 +241,14 @@ export class ReaderCommentBubblePainter {
       const tailPath = new drawing.Path();
       tailPath.moveTo(baseLeft, bottom - h * 0.25);
       tailPath.lineTo(baseLeft + h * 0.36, bottom - h * 0.25);
-      tailPath.lineTo(baseLeft - h * 0.1, bottom + h * 0.3);
+      if (style.ornament === 'folio') {
+        // A small notched bookmark tail, within the same measured overhang as other comments.
+        tailPath.lineTo(baseLeft + h * 0.30, bottom + h * 0.26);
+        tailPath.lineTo(baseLeft + h * 0.12, bottom + h * 0.16);
+        tailPath.lineTo(baseLeft - h * 0.06, bottom + h * 0.26);
+      } else {
+        tailPath.lineTo(baseLeft - h * 0.1, bottom + h * 0.3);
+      }
       tailPath.close();
       body.op(tailPath, drawing.PathOp.UNION);
     }
@@ -236,6 +261,22 @@ export class ReaderCommentBubblePainter {
     const main = style.ornamentColor;
     const alt = style.ornamentAltColor;
     switch (style.ornament) {
+      case 'folio': {
+        // The ribbon sits on the outer corner, clear of even a one-digit comment count.
+        const ribbon = new drawing.Path();
+        ribbon.moveTo(right - h * 0.25, top - h * 0.18);
+        ribbon.lineTo(right + h * 0.06, top - h * 0.18);
+        ribbon.lineTo(right + h * 0.06, top + h * 0.28);
+        ribbon.lineTo(right - h * 0.095, top + h * 0.18);
+        ribbon.lineTo(right - h * 0.25, top + h * 0.28);
+        ribbon.close();
+        ReaderCommentBubblePainter.fillPath(canvas, ribbon, main);
+        const pen = ReaderCommentBubblePainter.pen(alt, Math.max(0.7, h * 0.035));
+        canvas.attachPen(pen);
+        canvas.drawLine(right - h * 0.17, top - h * 0.06, right - h * 0.02, top - h * 0.06);
+        canvas.detachPen();
+        break;
+      }
       case 'star':
         ReaderCommentBubblePainter.fillPath(canvas, ReaderCommentBubblePainter.starPath(right - h * 0.06, top + h * 0.02,
           h * 0.36), main);

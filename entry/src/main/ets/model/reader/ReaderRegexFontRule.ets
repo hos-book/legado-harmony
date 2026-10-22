@@ -493,9 +493,10 @@ export class ReaderRegexBubbleStyleResolver {
       return;
     }
     if (result.bubbleStyleId === 'gilded-orbit') {
-      result.backgroundColor = context.darkMode ? '#4C402D' : '#E9D8B3';
-      result.textColor = context.darkMode ? '#F1DEB4' : '#493B25';
-      ReaderRegexBubbleStyleResolver.setUniformRadius(result, 7);
+      // A dark foil bookplate with folded ribbon caps; the stored style ID stays compatible.
+      result.backgroundColor = context.darkMode ? '#463B2A' : '#292620';
+      result.textColor = context.darkMode ? '#F4E3BF' : '#F2DEAE';
+      ReaderRegexBubbleStyleResolver.setRadii(result, 2, 9, 9, 2);
       return;
     }
     if (result.bubbleStyleId === 'pencil-mark') {
