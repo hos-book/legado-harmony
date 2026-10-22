@@ -131,12 +131,41 @@ export async function checkSourceQuota({ db, tx, race, exchangeSync, config, clo
   config.membershipSourceLimitsEnabled = false;
   const large = { rules: 'x'.repeat(700 * 1024) };
   const annual = await user('ANNUAL');
-  await assert.rejects(sync(annual, [operation('large', large)]), { code: 'SYNC_PAYLOAD_TOO_LARGE' });
+  await assert.rejects(sync(annual, [operation('large', large)]),
+    { statusCode: 413, code: 'SYNC_PAYLOAD_TOO_LARGE', message: '单项同步数据不能超过 512KB' });
   const superAccount = await user('SUPER_LIFETIME');
   assert.equal(accepted(await sync(superAccount, [operation('large', large)])).accepted, true);
   await assert.rejects(sync(superAccount, [operation('huge', { rules: 'x'.repeat(1000 * 1024) })]),
-    { code: 'SYNC_PAYLOAD_TOO_LARGE' });
+    { statusCode: 413, code: 'SYNC_PAYLOAD_TOO_LARGE', message: '单项同步数据不能超过 960KB' });
   assert.equal(await sourceCount(superAccount), 1);
+  report(step, true);
+
+  step = 'legacy clients receive their account limit even above the super-member ceiling'; report(step);
+  const exactPayload = bytes => ({ rules: 'x'.repeat(bytes - Buffer.byteLength(JSON.stringify({ rules: '' }))) });
+  const legacySync = (account, operations) => exchangeSync(account.id, { protocolVersion: 1,
+    appVersion: '3.0.0', deviceId: account.deviceId, cursor: 0, operations });
+  const ordinaryError = { statusCode: 413, code: 'SYNC_PAYLOAD_TOO_LARGE', message: '单项同步数据不能超过 512KB' };
+  for (const sku of ['', 'MONTHLY', 'ANNUAL', 'LIFETIME']) {
+    const account = await user(sku);
+    assert.equal(accepted(await legacySync(account, [operation('boundary', exactPayload(512 * 1024))])).accepted, true);
+    for (const bytes of [512 * 1024 + 1, 960 * 1024, 960 * 1024 + 1, 1000 * 1024]) {
+      // Preserve all-or-nothing rejection: the valid operation in this batch must not be saved either.
+      await assert.rejects(legacySync(account, [operation('small', { rules: 'x' }),
+        operation('too_large', exactPayload(bytes))]), ordinaryError);
+      assert.equal(await sourceCount(account), 1);
+    }
+  }
+  assert.equal(accepted(await legacySync(superAccount,
+    [operation('boundary', exactPayload(960 * 1024))])).accepted, true);
+  await assert.rejects(legacySync(superAccount, [operation('too_large', exactPayload(960 * 1024 + 1))]),
+    { statusCode: 413, code: 'SYNC_PAYLOAD_TOO_LARGE', message: '单项同步数据不能超过 960KB' });
+  // Disabling the membership system must also restore the legacy 512 KiB ceiling and message.
+  config.membershipEnabled = false;
+  try {
+    await assert.rejects(legacySync(superAccount, [operation('disabled', exactPayload(1000 * 1024))]), ordinaryError);
+  } finally {
+    config.membershipEnabled = true;
+  }
   report(step, true);
 }
 

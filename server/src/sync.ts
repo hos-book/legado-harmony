@@ -108,6 +108,20 @@ export async function exchangeSync(userId: string, body: SyncExchangeBody) {
       'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
       [`sync-user:${userId}`]
     );
+    const oversizedSource = request.operations.some((operation) =>
+      operation.entityType === 'book_source' && operation.payloadBytes > MAX_BOOK_SOURCE_PAYLOAD_BYTES);
+    const member = config.membershipEnabled &&
+      (config.membershipSourceLimitsEnabled || config.cloudFiles.enabled || oversizedSource)
+      ? await membershipSnapshot(client, userId) : null;
+    const superMember = member?.active === true && member.state?.sku === 'SUPER_LIFETIME';
+    // Resolve the account limit before rejecting a source, including sources above 960 KiB.
+    // Legacy clients use this same endpoint and display the returned message verbatim.
+    const maxBookSourceBytes = superMember ? MAX_SUPER_BOOK_SOURCE_PAYLOAD_BYTES : MAX_BOOK_SOURCE_PAYLOAD_BYTES;
+    if (request.operations.some(operation =>
+      operation.entityType === 'book_source' && operation.payloadBytes > maxBookSourceBytes)) {
+      throw new SyncApiError(413, 'SYNC_PAYLOAD_TOO_LARGE',
+        `单项同步数据不能超过 ${Math.round(maxBookSourceBytes / 1024)}KB`);
+    }
     await registerDevice(
       client,
       userId,
@@ -119,16 +133,6 @@ export async function exchangeSync(userId: string, body: SyncExchangeBody) {
       request.cursor
     );
     const quota = await loadSyncQuotaUsage(client, userId);
-    const oversizedSource = request.operations.some((operation) =>
-      operation.entityType === 'book_source' && operation.payloadBytes > MAX_BOOK_SOURCE_PAYLOAD_BYTES);
-    const member = config.membershipEnabled &&
-      (config.membershipSourceLimitsEnabled || config.cloudFiles.enabled || oversizedSource)
-      ? await membershipSnapshot(client, userId) : null;
-    const superMember = member?.active === true && member.state?.sku === 'SUPER_LIFETIME';
-    // Only permanent super members receive the larger single-source ceiling.
-    if (oversizedSource && !superMember) {
-      throw new SyncApiError(413, 'SYNC_PAYLOAD_TOO_LARGE', '单项同步数据不能超过 512KB');
-    }
     const memberEntityBytes = Math.max(config.sync.maxEntityBytesPerUser, 320 * 1024 ** 2);
     if (member && config.membershipSourceLimitsEnabled) {
       const sources = await client.query(`SELECT count(*) AS count FROM sync_entities
@@ -348,13 +352,14 @@ function normalizeExchange(body: SyncExchangeBody) {
     deviceKind: normalizeDeviceKind(body.deviceKind),
     conflictPolicy: body.conflictPolicy === 'local' ? 'local' : 'cloud',
     cursor,
-    operations: sourceOperations.map(operation =>
-      normalizeOperation(operation, MAX_SUPER_BOOK_SOURCE_PAYLOAD_BYTES))
+    // The route bounds the entire request body. Defer only the book-source size check
+    // until exchangeSync resolves membership; other entity limits still apply here.
+    operations: sourceOperations.map(operation => normalizeOperation(operation, null))
   };
 }
 
 export function normalizeOperation(source: SyncOperationBody,
-  maxBookSourceBytes: number = MAX_BOOK_SOURCE_PAYLOAD_BYTES): NormalizedOperation {
+  maxBookSourceBytes: number | null = MAX_BOOK_SOURCE_PAYLOAD_BYTES): NormalizedOperation {
   const opId = source?.opId?.trim() || '';
   if (!UUID_PATTERN.test(opId)) {
     throw new SyncApiError(400, 'INVALID_OPERATION_ID', '同步操作标识无效');
@@ -383,7 +388,7 @@ export function normalizeOperation(source: SyncOperationBody,
     const serialized = JSON.stringify(source.payload);
     const maxPayloadBytes = entityType === 'book_source' ? maxBookSourceBytes : MAX_PAYLOAD_BYTES;
     payloadBytes = Buffer.byteLength(serialized, 'utf8');
-    if (payloadBytes > maxPayloadBytes) {
+    if (maxPayloadBytes !== null && payloadBytes > maxPayloadBytes) {
       throw new SyncApiError(413, 'SYNC_PAYLOAD_TOO_LARGE',
         `单项同步数据不能超过 ${Math.round(maxPayloadBytes / 1024)}KB`);
     }
