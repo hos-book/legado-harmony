@@ -416,6 +416,10 @@ export class CloudSyncCoordinator {
       issues.push(CloudSyncIssueStore.create(CloudSyncIssueStore.KIND_SYNC, `sync:${message}`, '同步失败', message));
       if (error instanceof AccountApiError && error.errorCode === 'SYNC_PAYLOAD_TOO_LARGE') {
         issues.push(...CloudSyncCoordinator.oversizedIssues(message, batch, localEntities));
+      } else if (error instanceof AccountApiError && error.errorCode === 'REQUEST_TOO_LARGE') {
+        // The route's body limit fires before the per-item check, and its generic message
+        // speaks of files. Batches stay well under that limit unless a single item is oversized.
+        issues.push(...CloudSyncCoordinator.oversizedIssues('超过了同步请求的大小上限', batch, localEntities));
       }
       await CloudSyncCoordinator.recordIssues(context, userId, issues);
       throw new Error(message);
@@ -1442,12 +1446,13 @@ export class CloudSyncCoordinator {
       }
     }
     if (result.length === 0 && sized.length > 0) {
-      // Limit unknown or every item measured under it: report the largest item as the likely cause.
+      // Limit unknown or every item measured under it: the largest item is the cause, certainly
+      // so when the batch holds only that one item.
       let largest = 0;
       for (let i = 1; i < sized.length; i++) {
         if (sizes[i] > sizes[largest]) largest = i;
       }
-      result.push(CloudSyncCoordinator.oversizedIssue(sized[largest], sizes[largest], message, true));
+      result.push(CloudSyncCoordinator.oversizedIssue(sized[largest], sizes[largest], message, sized.length > 1));
     }
     return result;
   }
