@@ -42,6 +42,9 @@ for(const [w,h] of [[420,616],[412,915],[960,640]]) {
         }
         near(back.commands[0][1],g.i.x,'Back uses the same crease X');
         near(back.commands[0][2],g.i.y,'Back uses the same crease Y');
+        // The visible crease DI must stay close to the reflection axis EH, otherwise the cut page swings far past the flap tips.
+        const ehx=g.h.x-g.e.x,ehy=g.h.y-g.e.y,creaseGap=Math.abs(ehx*(g.d.y-g.e.y)-ehy*(g.d.x-g.e.x))/Math.hypot(ehx,ehy);
+        assert.ok(creaseGap<=w*.04+1e-6,`Curl band must be capped: ${creaseGap} at ${w}x${h}`);
         samples++;
       }
     }

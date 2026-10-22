@@ -69,6 +69,8 @@ export class ReaderEmulationFlipPainter {
   private readonly doublePageFoldCap: number = 0.25;
   // 页角从页面角落移到手指下方的过渡距离（vp）：拖动刚开始时页角还在角上，拖过这段距离后贴住手指。
   private readonly cornerFollowRamp: number = 56;
+  // 卷曲带（C/J 到折线 EH 的距离）最宽占页宽的比例；拖动较短时仍按官方的 AF/4。
+  private readonly curlBandMaxRatio: number = 0.08;
   private static readonly CORNER_TRAJECTORY: number = 0;
   private static readonly CORNER_DRAGGING: number = 1;
   private static readonly CORNER_RELEASED: number = 2;
@@ -437,8 +439,12 @@ export class ReaderEmulationFlipPainter {
     }
     const e: FoldPoint = { x: g.x - (f.y - g.y) * (f.y - g.y) / denominatorE, y: f.y };
     const h: FoldPoint = { x: f.x, y: g.y - (f.x - g.x) * (f.x - g.x) / denominatorH };
-    const c: FoldPoint = { x: e.x - (f.x - e.x) / 2, y: f.y };
-    const j: FoldPoint = { x: f.x, y: h.y - (f.y - h.y) / 2 };
+    // 官方让卷曲起点 C/J 离折线 EH 的距离恒为 AF/4，页角拖得越远卷曲越粗：可见折线 DI 退到 EH 内侧
+    // AF/8，正面页的切口在折线两端甩出折页尖很远，看起来上下折叠处对不齐。这里把卷曲宽度封顶。
+    const aToF = Math.max(0.0001, Math.hypot(f.x - a.x, f.y - a.y));
+    const curlScale = 1 + Math.min(0.5, 2 * this.curlBandMaxRatio * width / aToF);
+    const c: FoldPoint = { x: f.x + (e.x - f.x) * curlScale, y: f.y };
+    const j: FoldPoint = { x: f.x, y: f.y + (h.y - f.y) * curlScale };
     const b = this.intersectionPoint(a, e, c, j);
     const k = this.intersectionPoint(a, h, c, j);
     const d: FoldPoint = { x: (c.x + 2 * e.x + b.x) / 4, y: (2 * e.y + c.y + b.y) / 4 };
