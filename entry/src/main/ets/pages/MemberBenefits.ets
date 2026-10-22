@@ -146,6 +146,11 @@ struct MemberBenefitsPage {
 
   giftChars(tier: string): number {
     if (this.membership.claim?.tier === tier) return this.membership.claim.chars;
+    return this.ruleGiftChars(tier);
+  }
+
+  /** 当前档位按现行规则每月可领的字数，不看本期已领记录。 */
+  ruleGiftChars(tier: string): number {
     const benefits = this.membership.benefits;
     if (this.membership.active && benefits) {
       return tier === 'STANDARD' ? benefits.standardGiftChars : benefits.premiumGiftChars;
@@ -163,6 +168,20 @@ struct MemberBenefitsPage {
     const first = new Date(cycle.startsAt + 8 * 60 * 60 * 1000);
     const last = new Date(cycle.endsAt - 1 + 8 * 60 * 60 * 1000);
     return `${first.getUTCFullYear()}年${first.getUTCMonth() + 1}月1日—${last.getUTCDate()}日（北京时间） · 二选一`;
+  }
+
+  /**
+   * 本期领取记录按领取时的规则发放（旧规则或同月升级前的档位），字数与现行规则不同；
+   * 已领卡片仍显示实际到账字数，这里补一句说明，免得和另一档的现行字数对比时看起来颠倒。
+   */
+  giftLegacyClaimText(): string {
+    const claim = this.membership.claim;
+    if (!claim || !this.membership.active) return '';
+    const standard = this.ruleGiftChars('STANDARD');
+    const premium = this.ruleGiftChars('PREMIUM');
+    const current = claim.tier === 'STANDARD' ? standard : premium;
+    if (current <= 0 || claim.chars === current) return '';
+    return `本期 ${claim.chars} 字按领取时的规则发放，下月起每月可领标准 ${standard} 字或精品 ${premium} 字`;
   }
 
   async confirmClaim(tier: string, title: string): Promise<void> {
@@ -250,6 +269,11 @@ struct MemberBenefitsPage {
         this.giftTile('PREMIUM', '精品音色')
       }
       .width('100%')
+      if (this.giftLegacyClaimText()) {
+        Text(this.giftLegacyClaimText())
+          .fontSize(AppFontSize.CAPTION)
+          .fontColor(this.primaryTextColor())
+      }
       Text('已领字数在连续会员期内有效，永久会员可累计使用')
         .fontSize(AppFontSize.CAPTION)
         .fontColor(this.subTextColor())
