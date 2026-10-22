@@ -4,7 +4,7 @@ import { MembershipSalesPilot, pilotAllows } from './membershipSales.js';
 import {
   MEMBERSHIP_POLICY_VERSION, MEMBERSHIP_PRODUCTS, MembershipError, MembershipState,
   MembershipPurchasePlan, MembershipSku, VoiceTier, membershipActive, membershipBenefits,
-  membershipCycle, membershipGiftChars, membershipProduct, planMembershipPurchase
+  membershipCycle, membershipGiftCycle, membershipGiftChars, membershipProduct, planMembershipPurchase
 } from './membershipPolicy.js';
 
 export interface MembershipDb { query: PoolClient['query']; }
@@ -74,6 +74,16 @@ export async function membershipCatalog(db: MembershipDb, userId?: string,
   }));
 }
 
+/** The account can claim once per calendar month, even after an upgrade or a new paid period. */
+async function readGiftClaim(db: MembershipDb, userId: string, cycle: ReturnType<typeof membershipGiftCycle>) {
+  const result = await db.query<{ tier: VoiceTier; chars: number }>(
+    `SELECT tier, chars FROM membership_gift_claims WHERE user_id=$1 AND
+      (gift_month=$2 OR (gift_month IS NULL AND created_at >= $3 AND created_at < $4))
+     ORDER BY created_at, period_id, cycle_index LIMIT 1`,
+    [userId, cycle.index, new Date(cycle.startsAt), new Date(cycle.endsAt)]);
+  return result.rows[0] ?? null;
+}
+
 export async function membershipSnapshot(db: MembershipDb, userId: string, now = Date.now()) {
   const state = await readMembership(db, userId);
   const debt = await db.query<{ iap_debt_points: string }>(
@@ -81,12 +91,11 @@ export async function membershipSnapshot(db: MembershipDb, userId: string, now =
   const restricted = Number(debt.rows[0]?.iap_debt_points ?? 0) > 0;
   const active = !restricted && membershipActive(state, now);
   const cycle = active ? membershipCycle(state!, now) : null;
+  const giftCycle = active ? membershipGiftCycle(state!, now) : null;
   const tierSku = active ? await membershipTierSku(db, state!, now) : null;
-  const claims = cycle ? await db.query<{ tier: VoiceTier; chars: number }>(
-    'SELECT tier, chars FROM membership_gift_claims WHERE period_id = $1 AND cycle_index = $2',
-    [state!.periodId, cycle.index]) : null;
+  const claim = giftCycle ? await readGiftClaim(db, userId, giftCycle) : null;
   return {
-    state, active, restricted, cycle, tierSku, claim: claims?.rows[0] ?? null,
+    state, active, restricted, cycle, giftCycle, tierSku, claim,
     benefits: membershipBenefits(active ? state : null, now, tierSku ?? undefined),
     serverNow: now
   };
@@ -206,20 +215,18 @@ export async function claimMembershipGift(db: MembershipDb, userId: string, tier
   if (!state || !membershipActive(state, now)) {
     throw new MembershipError(403, 'MEMBERSHIP_INACTIVE', '请先开通有效会员');
   }
-  const cycle = membershipCycle(state, now);
-  const prior = await db.query<{ tier: VoiceTier; chars: number }>(
-    'SELECT tier,chars FROM membership_gift_claims WHERE period_id=$1 AND cycle_index=$2',
-    [state.periodId, cycle.index]);
-  if (prior.rows[0]) {
-    if (prior.rows[0].tier !== tier) throw new MembershipError(409, 'MEMBERSHIP_GIFT_ALREADY_CLAIMED', '本期已领取另一档额度');
-    return { ...prior.rows[0], duplicate: true };
+  const cycle = membershipGiftCycle(state, now);
+  const prior = await readGiftClaim(db, userId, cycle);
+  if (prior) {
+    if (prior.tier !== tier) throw new MembershipError(409, 'MEMBERSHIP_GIFT_ALREADY_CLAIMED', '本月已领取另一档额度');
+    return { ...prior, duplicate: true };
   }
   const chars = membershipGiftChars(await membershipTierSku(db, state, now), tier);
   if (chars <= 0) {
     throw new MembershipError(403, 'MEMBERSHIP_GIFT_NOT_INCLUDED', '月度会员不含每月朗读礼包，年度及永久会员可领取');
   }
   await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`tts-quota:${userId}:${tier}`]);
-  const key = `membership-gift:${state.periodId}:${cycle.index}`;
+  const key = `membership-gift-month:${userId}:${cycle.index}`;
   const balance = await db.query<{ balance: string }>(`SELECT COALESCE(SUM(remaining_chars),0)::bigint AS balance
     FROM tts_quota_grants WHERE user_id=$1 AND tier=$2 AND remaining_chars>0 AND expires_at>$3`,
     [userId,tier,new Date(now)]);
@@ -231,7 +238,9 @@ export async function claimMembershipGift(db: MembershipDb, userId: string, tier
     (user_id,grant_id,tier,delta_chars,balance_after,reason,reference_id,idempotency_key)
     VALUES ($1,$2,$3,$4,$5,'MEMBERSHIP_GIFT',$6,$6)`,
     [userId,grant.rows[0]!.id,tier,chars,Number(balance.rows[0]!.balance)+chars,key]);
-  await db.query(`INSERT INTO membership_gift_claims(period_id,cycle_index,user_id,tier,chars,quota_grant_id)
-    VALUES ($1,$2,$3,$4,$5,$6)`,[state.periodId,cycle.index,userId,tier,chars,grant.rows[0]!.id]);
+  await db.query(`INSERT INTO membership_gift_claims
+    (period_id,cycle_index,user_id,tier,chars,quota_grant_id,gift_month,created_at)
+    VALUES ($1,$2,$3,$4,$5,$6,$2,$7)`,
+    [state.periodId,cycle.index,userId,tier,chars,grant.rows[0]!.id,new Date(now)]);
   return { tier, chars, duplicate: false };
 }

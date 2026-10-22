@@ -33,6 +33,8 @@ export class MembershipSnapshot {
   active: boolean = false;
   restricted: boolean = false;
   cycle: MembershipCycle | null = null;
+  /** 礼包按北京时间自然月领取，endsAt 为下月一日零点（不含）；cycle 保留旧开通日周期供兼容。 */
+  giftCycle: MembershipCycle | null = null;
   /** 当前时刻由哪个商品覆盖；定期会员续费后 state.sku 只是最后一次购买的商品。 */
   tierSku: string | null = null;
   claim: MembershipClaim | null = null;

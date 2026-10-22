@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { MembershipDb, membershipSnapshot } from './membershipService.js';
-import { MembershipError } from './membershipPolicy.js';
+import { MembershipError, membershipCalendarCycle } from './membershipPolicy.js';
 import { CloudObjectStore } from './cloudObjectStore.js';
 
 export const CLOUD_CHUNK_BYTES = 1024 ** 2;
@@ -31,8 +31,8 @@ export class CloudFileService {
   private configured(): CloudObjectStore {
     return this.store ?? fail(503, 'CLOUD_NOT_CONFIGURED', '云文件服务尚未启用');
   }
-  private async member(db: MembershipDb, userId: string) {
-    const member = await membershipSnapshot(db, userId, this.now());
+  private async member(db: MembershipDb, userId: string, now = this.now()) {
+    const member = await membershipSnapshot(db, userId, now);
     if (!member.active || member.state?.sku !== 'SUPER_LIFETIME') {
       fail(403, 'CLOUD_SUPER_REQUIRED', '此功能需要有效的永久超级会员');
     }
@@ -55,13 +55,15 @@ export class CloudFileService {
     if (!this.store) return { configured: false, eligible: false, usedBytes: 0, quotaBytes: CLOUD_QUOTA_BYTES,
       downloadBytes: 0, downloadQuotaBytes: CLOUD_QUOTA_BYTES, chunkBytes: CLOUD_CHUNK_BYTES, cycleEndsAt: null };
     return this.tx(async db => {
-      const member = await membershipSnapshot(db, userId, this.now());
-      const usage = member.cycle ? await db.query(`SELECT bytes FROM cloud_download_usage
-        WHERE user_id=$1 AND period_id=$2 AND cycle_index=$3`, [userId, member.state!.periodId, member.cycle.index]) : null;
+      const now = this.now();
+      const member = await membershipSnapshot(db, userId, now);
+      const cycle = member.active ? membershipCalendarCycle(member.state!, now) : null;
+      const usage = cycle ? await db.query(`SELECT bytes FROM cloud_download_monthly_usage
+        WHERE user_id=$1 AND month_index=$2`, [userId, cycle.index]) : null;
       return { configured: true, eligible: member.active && member.state?.sku === 'SUPER_LIFETIME',
         usedBytes: await this.used(db, userId), quotaBytes: CLOUD_QUOTA_BYTES,
         downloadBytes: Number(usage?.rows[0]?.bytes ?? 0), downloadQuotaBytes: CLOUD_QUOTA_BYTES,
-        chunkBytes: CLOUD_CHUNK_BYTES, cycleEndsAt: member.cycle?.endsAt ?? null };
+        chunkBytes: CLOUD_CHUNK_BYTES, cycleEndsAt: cycle?.endsAt ?? null };
     });
   }
 
@@ -202,32 +204,39 @@ export class CloudFileService {
       || !/^[a-zA-Z0-9_-]{8,100}$/.test(requestId)) fail(400, 'CLOUD_INVALID_CHUNK', '下载请求无效');
     return this.tx(async db => {
       await this.lock(db, userId);
-      const member = await this.member(db, userId);
+      const now = this.now();
+      const member = await this.member(db, userId, now);
+      const month = membershipCalendarCycle(member.state!, now);
       if ((await this.file(db, userId, id)).state !== 'READY') fail(409, 'CLOUD_FILE_NOT_READY', '文件尚未上传完成');
       const chunk = (await db.query<ChunkRow>('SELECT * FROM cloud_chunks WHERE file_id=$1 AND chunk_index=$2 AND ready=true', [id, index])).rows[0];
       if (!chunk) return fail(404, 'CLOUD_CHUNK_NOT_FOUND', '分块不存在');
-      const period = member.state!.periodId, cycle = member.cycle!.index;
-      const old = (await db.query<{ file_id: string; chunk_index: number; period_id: string; cycle_index: number; expires_at: Date }>(
+      const period = member.state!.periodId, cycle = month.index;
+      const old = (await db.query<{ file_id: string; chunk_index: number; period_id: string; download_month: number | null; expires_at: Date }>(
         'SELECT * FROM cloud_download_tickets WHERE user_id=$1 AND request_id=$2', [userId, requestId])).rows[0];
-      let expiresAt = this.now() + DOWNLOAD_SECONDS * 1000;
+      let expiresAt = Math.min(now + DOWNLOAD_SECONDS * 1000, month.endsAt);
       if (old) {
         if (old.file_id !== id || old.chunk_index !== index) fail(409, 'CLOUD_TICKET_CHANGED', '下载请求已改变');
         expiresAt = new Date(old.expires_at).getTime();
-        if (expiresAt - this.now() < 1000 || old.period_id !== period || old.cycle_index !== cycle) {
+        // Pre-rollout tickets (NULL month) can finish their original short-lived authorization.
+        if (expiresAt - this.now() < 1000 || old.period_id !== period ||
+            (old.download_month !== null && old.download_month !== cycle)) {
           fail(409, 'CLOUD_TICKET_EXPIRED', '下载授权已过期，请重新下载');
         }
       } else {
-        const reserved = await db.query(`INSERT INTO cloud_download_usage(user_id,period_id,cycle_index,bytes)
-          VALUES($1,$2,$3,$4) ON CONFLICT(user_id,period_id,cycle_index) DO UPDATE
-          SET bytes=cloud_download_usage.bytes+EXCLUDED.bytes
-          WHERE cloud_download_usage.bytes+EXCLUDED.bytes<=$5 RETURNING bytes`, [userId, period, cycle, chunk.bytes, CLOUD_QUOTA_BYTES]);
-        if (!reserved.rowCount) fail(409, 'CLOUD_TRAFFIC_LIMIT', '本权益月下载额度已用完');
-        await db.query(`INSERT INTO cloud_download_tickets(user_id,request_id,file_id,chunk_index,period_id,cycle_index,expires_at)
-          VALUES($1,$2,$3,$4,$5,$6,$7)`, [userId, requestId, id, index, period, cycle, new Date(expiresAt)]);
+        const reserved = await db.query(`INSERT INTO cloud_download_monthly_usage(user_id,month_index,bytes)
+          VALUES($1,$2,$3) ON CONFLICT(user_id,month_index) DO UPDATE
+          SET bytes=cloud_download_monthly_usage.bytes+EXCLUDED.bytes
+          WHERE cloud_download_monthly_usage.bytes+EXCLUDED.bytes<=$4 RETURNING bytes`, [userId, cycle, chunk.bytes, CLOUD_QUOTA_BYTES]);
+        if (!reserved.rowCount) fail(409, 'CLOUD_TRAFFIC_LIMIT', '本自然月下载额度已用完，下月1日北京时间零点重置');
+        await db.query(`INSERT INTO cloud_download_tickets
+          (user_id,request_id,file_id,chunk_index,period_id,cycle_index,expires_at,download_month)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$6)`, [userId, requestId, id, index, period, cycle, new Date(expiresAt)]);
       }
       // Sign inside the quota transaction: signing failure rolls back both charge and ticket.
       // Once issued, a capability cannot be refunded based on an untrusted client report.
-      const url = store.signDownload(chunk.object_key, Math.max(1, Math.floor((expiresAt - this.now()) / 1000)));
+      const seconds = Math.floor((expiresAt - this.now()) / 1000);
+      if (seconds < 1) fail(409, 'CLOUD_TICKET_EXPIRED', '下载授权已过期，请重新下载');
+      const url = store.signDownload(chunk.object_key, seconds);
       return { url, expiresAt, index, bytes: chunk.bytes, sha256: chunk.sha256 };
     });
   }

@@ -70,7 +70,7 @@ async function giftRows(id) {
   const grants = (await pool.query('SELECT * FROM tts_quota_grants WHERE user_id=$1', [id])).rows;
   const ledger = (await pool.query('SELECT * FROM tts_quota_ledger WHERE user_id=$1', [id])).rows;
   assert.equal(claims.length, 1); assert.equal(grants.length, 1); assert.equal(ledger.length, 1);
-  const expected = claims[0].tier === 'STANDARD' ? 3000 : 1500;
+  const expected = claims[0].tier === 'STANDARD' ? 12000 : 6000;
   assert.equal(Number(claims[0].chars), expected);
   assert.equal(Number(grants[0].total_chars), expected);
   assert.equal(Number(grants[0].remaining_chars), expected);

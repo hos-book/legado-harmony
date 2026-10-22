@@ -103,7 +103,7 @@ export async function checkCloudConcurrency({ db, tx, race, cloud, membership, r
   report(step, true);
 
   step = 'competing download requests cannot exceed monthly quota'; report(step);
-  await db.query('UPDATE cloud_download_usage SET bytes=$2 WHERE user_id=$1', [owner, quota - 6]);
+  await db.query('UPDATE cloud_download_monthly_usage SET bytes=$2 WHERE user_id=$1', [owner, quota - 6]);
   split(await compete(eight(s => s.downloadTicket(owner, file, 0, randomUUID()))), 2, 'CLOUD_TRAFFIC_LIMIT');
   assert.equal((await service.summary(owner)).downloadBytes, quota);
   assert.equal(await count('cloud_download_tickets', owner), 3);
@@ -119,7 +119,7 @@ export async function checkCloudConcurrency({ db, tx, race, cloud, membership, r
     split(await compete(eight(s => s.downloadTicket(rollback, rollbackFile, 0, randomUUID()))), 0, 'TEST_SIGN_FAILURE');
   } finally { failSign = false; }
   assert.equal(await count('cloud_download_tickets', rollback), 0);
-  assert.equal(await count('cloud_download_usage', rollback), 0);
+  assert.equal(await count('cloud_download_monthly_usage', rollback), 0);
   await service.downloadTicket(rollback, rollbackFile, 0, randomUUID());
   assert.equal((await service.summary(rollback)).downloadBytes, 3);
   report(step, true);
@@ -129,7 +129,7 @@ export async function checkCloudConcurrency({ db, tx, race, cloud, membership, r
   split(await compete(eight(s => s.downloadTicket(foreign, file, 0, randomUUID()))), 0, 'CLOUD_FILE_NOT_FOUND');
   allSuccess(await compete(eight(s => s.remove(foreign, file))));
   assert.equal(await count('cloud_download_tickets', foreign), 0);
-  assert.equal(await count('cloud_download_usage', foreign), 0);
+  assert.equal(await count('cloud_download_monthly_usage', foreign), 0);
   assert.equal((await service.manifest(owner, file)).state, 'READY');
   report(step, true);
 

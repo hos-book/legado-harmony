@@ -1,6 +1,6 @@
 /**
  * 会员档位的视觉资料。昵称颜色、卡片渐变取自对应图标的主色：
- * 月度青蓝星页、年度紫色环绕星页、永久金色无限星轨、永久超级深蓝金翼。
+ * 月度青蓝星页、年度紫色环绕星页、永久金色无限星轨、永久超级曜黑香槟金。
  */
 export class MembershipIcons {
   static readonly SKUS: string[] = ['MONTHLY', 'ANNUAL', 'LIFETIME', 'SUPER_LIFETIME'];
@@ -25,13 +25,13 @@ export class MembershipIcons {
     if (sku === 'MONTHLY') return darkMode ? '#5FD3DC' : '#138A99';
     if (sku === 'ANNUAL') return darkMode ? '#B89CFF' : '#7448D6';
     if (sku === 'LIFETIME') return darkMode ? '#E9BC69' : '#A86F14';
-    if (sku === 'SUPER_LIFETIME') return darkMode ? '#9DB6FF' : '#1F3D8F';
+    if (sku === 'SUPER_LIFETIME') return darkMode ? '#E2C99B' : '#75562D';
     return '';
   }
 
   /** 档位强调色：选中边框、徽标底色等；非会员使用香槟金。 */
   static accent(sku: string, darkMode: boolean): string {
-    if (sku === 'SUPER_LIFETIME') return darkMode ? '#E8BE5A' : '#B8862B';
+    if (sku === 'SUPER_LIFETIME') return darkMode ? '#D6B878' : '#8A6838';
     return MembershipIcons.nameColor(sku, darkMode) || (darkMode ? '#D9B77A' : '#B08A4E');
   }
 
@@ -47,7 +47,7 @@ export class MembershipIcons {
       return darkMode ? [['#46371F', 0], ['#2A2115', 1]] : [['#FCF2DC', 0], ['#EBCB8F', 1]];
     }
     if (sku === 'SUPER_LIFETIME') {
-      return darkMode ? [['#1C2C5E', 0], ['#0F1733', 1]] : [['#E2EAFB', 0], ['#B9C8EE', 1]];
+      return darkMode ? [['#303136', 0], ['#15171C', 1]] : [['#F1EDE5', 0], ['#E9DFD1', 1]];
     }
     return darkMode ? [['#3A3224', 0], ['#26211A', 1]] : [['#F7ECD6', 0], ['#E6CFA2', 1]];
   }

@@ -84,12 +84,31 @@ export function membershipCycle(state: MembershipState, now: number): {
   };
 }
 
+/** Allowance windows are Beijing calendar months, independent of paid-term anniversaries. */
+export function membershipCalendarCycle(state: MembershipState, now: number): {
+  index: number; startsAt: number; endsAt: number;
+} {
+  if (!membershipActive(state, now)) {
+    throw new MembershipError(403, 'MEMBERSHIP_INACTIVE', '请先开通有效会员');
+  }
+  const current = new Date(now + BEIJING_OFFSET_MS);
+  const year = current.getUTCFullYear(), month = current.getUTCMonth();
+  return {
+    index: year * 12 + month,
+    startsAt: Date.UTC(year, month, 1) - BEIJING_OFFSET_MS,
+    // Exclusive upper bound: the last millisecond belongs to the preceding calendar month.
+    endsAt: Date.UTC(year, month + 1, 1) - BEIJING_OFFSET_MS
+  };
+}
+
+export const membershipGiftCycle = membershipCalendarCycle;
+
 /** Monthly terms carry no monthly reading gift; annual and permanent tiers do. */
 export function membershipGiftChars(sku: MembershipSku, tier: VoiceTier): number {
   if (sku === 'MONTHLY') return 0;
-  return sku === 'SUPER_LIFETIME'
-    ? (tier === 'STANDARD' ? 3000 : 1500)
-    : (tier === 'STANDARD' ? 2000 : 1000);
+  if (sku === 'ANNUAL') return tier === 'STANDARD' ? 5000 : 2500;
+  if (sku === 'LIFETIME') return tier === 'STANDARD' ? 8000 : 4000;
+  return tier === 'STANDARD' ? 12000 : 6000;
 }
 
 export interface MembershipPurchasePlan {

@@ -8,4 +8,4 @@ for (const name of ['monthly', 'annual', 'lifetime', 'super_lifetime']) {
   await sharp(input).resize(256, 256, { fit: 'contain', background: '#00000000' })
     .png().toFile(resolve('entry/src/main/resources/base/media', `membership_${name}.png`));
 }
-console.log('Prepared four transparent C-series icons.');
+console.log('Prepared four approved transparent membership icons.');

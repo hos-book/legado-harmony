@@ -105,7 +105,7 @@ test('membership SQL transactions and quota lifecycle (embedded PostgreSQL)', as
     await buy(id, 'ANNUAL');
     const first = await tx(client => claimMembershipGift(client, id, 'STANDARD', now));
     const duplicate = await tx(client => claimMembershipGift(client, id, 'STANDARD', now));
-    assert.equal(first.chars, 2000);
+    assert.equal(first.chars, 5000);
     assert.equal(duplicate.duplicate, true);
     await assert.rejects(tx(client => claimMembershipGift(client, id, 'PREMIUM', now)), rejectedCode('MEMBERSHIP_GIFT_ALREADY_CLAIMED'));
     await buy(id, 'ANNUAL', now + 1000);
@@ -134,7 +134,7 @@ test('membership SQL transactions and quota lifecycle (embedded PostgreSQL)', as
     assert.equal((await readMembership(query, annual))!.sku, 'MONTHLY');
     const inAnnual = await membershipSnapshot(query, annual, membershipAnniversary(now, 11));
     assert.equal(inAnnual.tierSku, 'ANNUAL');
-    assert.equal(inAnnual.benefits.standardGiftChars, 2000);
+    assert.equal(inAnnual.benefits.standardGiftChars, 5000);
     await tx(c => claimMembershipGift(c, annual, 'STANDARD', membershipAnniversary(now, 11)));
     const inMonthly = await membershipSnapshot(query, annual, membershipAnniversary(now, 12));
     assert.equal(inMonthly.tierSku, 'MONTHLY');
@@ -148,14 +148,14 @@ test('membership SQL transactions and quota lifecycle (embedded PostgreSQL)', as
     await tx(client => claimMembershipGift(client, id, 'STANDARD', now));
     await buy(id, 'SUPER_LIFETIME', now + 1000);
     const repeat = await tx(client => claimMembershipGift(client, id, 'STANDARD', now + 2000));
-    assert.equal(repeat.chars, 2000);
+    assert.equal(repeat.chars, 5000);
     const grants = await db.query<{ forever: boolean }>(
       "SELECT NOT isfinite(expires_at) AS forever FROM tts_quota_grants WHERE user_id=$1 AND source='MEMBERSHIP'", [id]);
     assert.equal(grants.rows[0]!.forever, true);
     const next = await tx(client => claimMembershipGift(client, id, 'PREMIUM', membershipAnniversary(now, 1)));
-    assert.equal(next.chars, 1500);
+    assert.equal(next.chars, 6000);
     const third = await tx(client => claimMembershipGift(client, id, 'STANDARD', membershipAnniversary(now, 2)));
-    assert.equal(third.chars, 3000);
+    assert.equal(third.chars, 12000);
   });
   await t.test('first purchase starts at payment; pending quotes expire before an old membership does', async () => {
     const id = await user();
@@ -165,6 +165,70 @@ test('membership SQL transactions and quota lifecycle (embedded PostgreSQL)', as
     assert.equal(state.anchorAt, now + 60000);
     const renewal = await tx(client => quoteMembership(client, id, 'ANNUAL', state.expiresAt! - 1000));
     await assert.rejects(tx(client => purchaseMembership(client, id, renewal.quoteId, 'late', state.expiresAt!)), rejectedCode('MEMBERSHIP_QUOTE_EXPIRED'));
+  });
+  await t.test('calendar boundary resets gifts and preserves balances and legacy cycle metadata', async () => {
+    const id = await user();
+    await buy(id, 'LIFETIME');
+    const first = await tx(c => claimMembershipGift(c, id, 'STANDARD', now));
+    assert.equal(first.chars, 8000);
+    const feb = Date.parse('2028-02-01T00:00:00+08:00');
+    const before = await membershipSnapshot(query, id, feb - 1);
+    assert.equal(before.giftCycle!.startsAt, Date.parse('2028-01-01T00:00:00+08:00'));
+    assert.equal(before.giftCycle!.endsAt, feb);
+    assert.equal(before.claim!.chars, 8000);
+    const after = await membershipSnapshot(query, id, feb);
+    assert.equal(after.claim, null);
+    assert.equal(after.cycle!.index, before.cycle!.index); // Legacy anniversary metadata remains stable.
+    assert.equal(after.giftCycle!.index, before.giftCycle!.index + 1);
+    assert.equal((await tx(c => claimMembershipGift(c, id, 'STANDARD', feb))).chars, 8000);
+    assert.equal((await tx(c => claimMembershipGift(c, id, 'STANDARD', feb + 1))).duplicate, true);
+    await assert.rejects(tx(c => claimMembershipGift(c, id, 'PREMIUM', feb + 1)), rejectedCode('MEMBERSHIP_GIFT_ALREADY_CLAIMED'));
+    const balance = await db.query<{ chars: string; forever: boolean }>(
+      `SELECT sum(remaining_chars) AS chars, bool_and(NOT isfinite(expires_at)) AS forever
+       FROM tts_quota_grants WHERE user_id=$1`, [id]);
+    assert.equal(Number(balance.rows[0]!.chars), 16000);
+    assert.equal(balance.rows[0]!.forever, true);
+  });
+  await t.test('a new period in the same calendar month cannot collect again or revive old grants', async () => {
+    const id = await user();
+    const start = Date.parse('2027-01-15T10:00:00+08:00');
+    await buy(id, 'ANNUAL', start);
+    const old = (await readMembership(query, id))!;
+    const claimAt = Date.parse('2028-01-10T10:00:00+08:00');
+    await tx(c => claimMembershipGift(c, id, 'STANDARD', claimAt));
+    await buy(id, 'LIFETIME', old.expiresAt!);
+    assert.notEqual((await readMembership(query, id))!.periodId, old.periodId);
+    assert.equal((await tx(c => claimMembershipGift(c, id, 'STANDARD', old.expiresAt!))).duplicate, true);
+    const snapshot = await membershipSnapshot(query, id, old.expiresAt!);
+    assert.equal(snapshot.claim!.chars, 5000);
+    assert.equal(snapshot.benefits.standardGiftChars, 8000);
+    const grants = await db.query<{ expires_at: Date }>('SELECT expires_at FROM tts_quota_grants WHERE user_id=$1', [id]);
+    assert.equal(grants.rows.length, 1);
+    assert.equal(grants.rows[0]!.expires_at.getTime(), old.expiresAt);
+    assert.equal((await tx(c => claimMembershipGift(c, id, 'PREMIUM', Date.parse('2028-02-01T00:00:00+08:00')))).chars, 4000);
+  });
+  await t.test('legacy claims use their actual Beijing claim month, with no duplicate grant at rollout', async () => {
+    const id = await user();
+    await buy(id, 'SUPER_LIFETIME');
+    await tx(c => claimMembershipGift(c, id, 'STANDARD', now));
+    // Recreate a pre-rollout anniversary claim, retaining the actual claim date and older amount.
+    await db.query('UPDATE membership_gift_claims SET gift_month=NULL,cycle_index=0,chars=3000 WHERE user_id=$1', [id]);
+    await db.query('UPDATE tts_quota_grants SET total_chars=3000,remaining_chars=3000 WHERE user_id=$1', [id]);
+    await db.query('UPDATE tts_quota_ledger SET delta_chars=3000,balance_after=3000 WHERE user_id=$1', [id]);
+    // The additive migration is safe to rerun with both historical and current records present.
+    await db.exec(await readFile(new URL('021_membership_calendar_gifts.sql', migrations), 'utf8'));
+    assert.equal((await membershipSnapshot(query, id, now)).claim!.chars, 3000);
+    assert.deepEqual(await tx(c => claimMembershipGift(c, id, 'STANDARD', now)), {tier: 'STANDARD', chars: 3000, duplicate: true});
+    await assert.rejects(tx(c => claimMembershipGift(c, id, 'PREMIUM', now)), rejectedCode('MEMBERSHIP_GIFT_ALREADY_CLAIMED'));
+    const feb = Date.parse('2028-02-01T00:00:00+08:00');
+    assert.equal((await membershipSnapshot(query, id, feb)).claim, null);
+    assert.equal((await tx(c => claimMembershipGift(c, id, 'PREMIUM', feb))).chars, 6000);
+    assert.equal((await db.query('SELECT * FROM tts_quota_grants WHERE user_id=$1', [id])).rows.length, 2);
+    // A mistaken second insert in another period is also rejected by the unique monthly key.
+    await assert.rejects(db.query(`INSERT INTO membership_gift_claims
+      (period_id,cycle_index,user_id,tier,chars,quota_grant_id,gift_month)
+      SELECT period_id,cycle_index+1,user_id,tier,chars,quota_grant_id,gift_month
+      FROM membership_gift_claims WHERE user_id=$1 AND gift_month IS NOT NULL`, [id]), /duplicate key/);
   });
   await t.test('refund debt suspends paid membership and claims without deleting entitlement', async () => {
     const id = await user();

@@ -104,7 +104,7 @@ struct CloudFilesPage {
           .padding(AppSpacing.LG)
           .onClick(() => { this.more() })
       }
-      Text('书籍、字体与书源共用 1GB。下载按签发授权的分块计量：短时重试复用授权，过期后重新下载会再次计量，失败不自动退还额度。上传中和待清理的文件仍占用空间。')
+      Text('书籍、字体与书源共用 1GB。每个北京时间自然月有 1GB 下载额度，每月1日零点重置，未用不结转。下载按签发授权的分块计量：短时重试复用授权，过期后重新下载会再次计量，失败不自动退还额度。上传中和待清理的文件仍占用空间。')
         .fontSize(AppFontSize.CAPTION)
         .lineHeight(18)
         .fontColor(ThemeRuntime.subTextColor(this.dark))
@@ -138,7 +138,7 @@ struct CloudFilesPage {
       .width('100%')
       this.meter('存储空间', this.summary.usedBytes, this.summary.quotaBytes, '')
       this.meter('本月下载额度', this.summary.downloadBytes, this.summary.downloadQuotaBytes,
-        this.summary.cycleEndsAt ? `${this.formatDate(this.summary.cycleEndsAt)} 重置` : '')
+        this.summary.cycleEndsAt ? `${this.formatDate(this.summary.cycleEndsAt)} 00:00 重置（北京时间）` : '')
     }
     .width('100%')
     .padding(AppSpacing.XL)
@@ -154,11 +154,16 @@ struct CloudFilesPage {
           .fontSize(AppFontSize.CAPTION)
           .fontColor(MembershipIcons.cardSubTextColor(this.dark))
           .layoutWeight(1)
-        Text(`${this.formatBytes(used)} / ${this.formatBytes(total)}` + (hint ? ` · ${hint}` : ''))
+        Text(`${this.formatBytes(used)} / ${this.formatBytes(total)}`)
           .fontSize(AppFontSize.CAPTION)
           .fontColor(MembershipIcons.cardTextColor(this.dark))
       }
       .width('100%')
+      if (hint) {
+        Text(hint)
+          .fontSize(AppFontSize.CAPTION)
+          .fontColor(MembershipIcons.cardSubTextColor(this.dark))
+      }
       Progress({ value: Math.min(used, total), total: Math.max(1, total), type: ProgressType.Linear })
         .width('100%')
         .height(6)
@@ -358,8 +363,8 @@ struct CloudFilesPage {
   }
 
   formatDate(value: number): string {
-    const date = new Date(value);
-    return `${date.getMonth() + 1}月${date.getDate()}日`;
+    const date = new Date(value + 8 * 60 * 60 * 1000);
+    return `${date.getUTCMonth() + 1}月${date.getUTCDate()}日`;
   }
 
   formatBytes(bytes: number): string {

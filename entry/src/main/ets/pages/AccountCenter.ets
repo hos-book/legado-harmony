@@ -809,8 +809,8 @@ struct AccountCenterPage {
     return '1. 会员使用充值点开通，赠送点不可抵扣，不自动续费；确认前会显示服务端报价和实际扣点。\n' +
       '2. 月度、年度会员可叠加续费，有效期顺延；永久会员不重复购买，可补差价升级为永久超级会员。定期会员升级永久时，按尚未使用的时长折算抵扣，抵扣不退回、不提现。\n' +
       '3. 会员主题包含现有及以后加入会员主题库的主题，单独售卖的主题除外；已单独购买的主题保留原有效期。\n' +
-      '4. 月度会员不含每月朗读礼包。年度、永久与永久超级会员按开通日起的权益月领取，每期标准或精品二选一，升级不重复领取；年度会员用月度续费延长的月份不含礼包。已领字数在连续会员期内有效，到期后重新开通不恢复旧周期额度。\n' +
-      '5. 永久超级会员的云空间为书籍、字体与书源共用 1GB，每个权益月有 1GB 下载额度，不结转。\n' +
+      '4. 月度会员不含每月朗读礼包。年度会员每月标准 5000 字或精品 2500 字，永久会员 8000/4000 字，永久超级会员 12000/6000 字。按北京时间自然月（每月1日至月末）领取，每个账号每月标准或精品二选一，升级或重新开通不重复领取，未领不补发。领取时须有有效的年度或永久权益；年度会员用月度续费延长的时段不含礼包。已领字数可累计，在连续会员期内有效，到期后重新开通不恢复旧周期额度。\n' +
+      '5. 永久超级会员的云空间为书籍、字体与书源共用 1GB。下载额度按北京时间自然月计算，每月 1GB，每月1日零点重置，未用额度不结转。\n' +
       '6. 发生内购退款形成欠款时，会员权益暂停，补齐后恢复。';
   }
 
@@ -914,13 +914,24 @@ struct AccountCenterPage {
   }
 
   giftChars(tier: string): number {
+    if (this.membership.claim?.tier === tier) return this.membership.claim.chars;
     const benefits = this.membership.benefits;
     if (this.membership.active && benefits) {
       return tier === 'STANDARD' ? benefits.standardGiftChars : benefits.premiumGiftChars;
     }
     if (this.membershipSku === 'MONTHLY' || !this.membershipSku) return 0;
-    const superMember = this.isSuperMember();
-    return tier === 'STANDARD' ? (superMember ? 3000 : 2000) : (superMember ? 1500 : 1000);
+    if (this.isSuperMember()) return tier === 'STANDARD' ? 12000 : 6000;
+    if (this.membershipSku === 'LIFETIME') return tier === 'STANDARD' ? 8000 : 4000;
+    return tier === 'STANDARD' ? 5000 : 2500;
+  }
+
+  giftPeriodText(): string {
+    const cycle = this.membership.giftCycle;
+    if (!cycle) return '标准或精品二选一';
+    // Gift windows use Beijing time regardless of the device timezone; endsAt is exclusive.
+    const first = new Date(cycle.startsAt + 8 * 60 * 60 * 1000);
+    const last = new Date(cycle.endsAt - 1 + 8 * 60 * 60 * 1000);
+    return `${first.getUTCFullYear()}年${first.getUTCMonth() + 1}月1日—${last.getUTCDate()}日（北京时间） · 二选一`;
   }
 
   /** 月度会员不含每月朗读礼包；年度、永久与永久超级会员可领。 */
@@ -1231,7 +1242,7 @@ struct AccountCenterPage {
           .fontSize(AppFontSize.BODY)
           .fontWeight(FontWeight.Medium)
           .fontColor(this.primaryTextColor())
-        Text('年度会员起每月可领标准 2000 字或精品 1000 字')
+        Text('年度会员起每月可领标准 5000 字或精品 2500 字')
           .fontSize(AppFontSize.CAPTION)
           .fontColor(this.subTextColor())
       }
@@ -1259,8 +1270,7 @@ struct AccountCenterPage {
             .fontSize(AppFontSize.BODY_LARGE)
             .fontWeight(FontWeight.Bold)
             .fontColor(this.primaryTextColor())
-          Text(this.membership.cycle ? `本期至 ${this.formatDate(this.membership.cycle.endsAt)} · 标准或精品二选一` :
-            '标准或精品二选一')
+          Text(this.giftPeriodText())
             .fontSize(AppFontSize.CAPTION)
             .fontColor(this.subTextColor())
         }
@@ -1324,7 +1334,7 @@ struct AccountCenterPage {
   async confirmClaim(tier: string, title: string): Promise<void> {
     const decision = await promptAction.showDialog({
       title: '领取本期礼包',
-      message: `领取${title} ${this.giftChars(tier)} 字？每期只能二选一，领取后不能更换。`,
+      message: `领取${title} ${this.giftChars(tier)} 字？每个自然月只能二选一，领取后不能更换；已领字数可累计使用。`,
       buttons: [{ text: '取消', color: this.subTextColor() }, { text: '领取', color: this.accentColor() }]
     });
     if (decision.index === 1) await this.claimGift(tier);
@@ -1335,7 +1345,7 @@ struct AccountCenterPage {
     const limits = this.sourceUsage.membershipLimitsEnabled;
     const rows: BenefitCompareRow[] = [
       new BenefitCompareRow('会员主题库', '现有及新增会员主题', ['—', '✓', '✓', '✓', '✓']),
-      new BenefitCompareRow('每月朗读礼包', '标准 / 精品（字）', ['—', '—', '2000\n1000', '2000\n1000', '3000\n1500']),
+      new BenefitCompareRow('每月朗读礼包', '标准 / 精品（字）', ['—', '—', '5000\n2500', '8000\n4000', '12000\n6000']),
       new BenefitCompareRow('朗读优先排队', '高峰期优先', ['—', '✓', '✓', '✓', '✓']),
       new BenefitCompareRow('有效期', '不自动续费', ['—', '1 个月', '12 个月', '永久', '永久'])
     ];

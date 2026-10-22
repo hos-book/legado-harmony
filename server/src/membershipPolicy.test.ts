@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  membershipAnniversary, membershipCycle, membershipGiftChars, membershipBenefits,
+  membershipAnniversary, membershipCycle, membershipGiftCycle, membershipGiftChars, membershipBenefits,
   planMembershipPurchase, MembershipState, MembershipError
 } from './membershipPolicy.js';
 
@@ -75,16 +75,38 @@ test('historical discounted permanent memberships credit only their recorded val
 test('gift amounts follow the four product tiers; permanent periods never expire by age', () => {
   assert.equal(membershipGiftChars('MONTHLY', 'STANDARD'), 0);
   assert.equal(membershipGiftChars('MONTHLY', 'PREMIUM'), 0);
-  assert.equal(membershipGiftChars('ANNUAL', 'STANDARD'), 2000);
-  assert.equal(membershipGiftChars('ANNUAL', 'PREMIUM'), 1000);
-  assert.equal(membershipGiftChars('LIFETIME', 'STANDARD'), 2000);
-  assert.equal(membershipGiftChars('SUPER_LIFETIME', 'STANDARD'), 3000);
-  assert.equal(membershipGiftChars('SUPER_LIFETIME', 'PREMIUM'), 1500);
+  assert.equal(membershipGiftChars('ANNUAL', 'STANDARD'), 5000);
+  assert.equal(membershipGiftChars('ANNUAL', 'PREMIUM'), 2500);
+  assert.equal(membershipGiftChars('LIFETIME', 'STANDARD'), 8000);
+  assert.equal(membershipGiftChars('LIFETIME', 'PREMIUM'), 4000);
+  assert.equal(membershipGiftChars('SUPER_LIFETIME', 'STANDARD'), 12000);
+  assert.equal(membershipGiftChars('SUPER_LIFETIME', 'PREMIUM'), 6000);
   const life = planMembershipPurchase(null, [], 'SUPER_LIFETIME', jan31, 'life').next;
   assert.equal(membershipCycle(life, membershipAnniversary(jan31, 240)).index, 240);
   assert.equal(membershipBenefits(life, jan31).cloudStorageBytes, 1024 ** 3);
   assert.equal(membershipBenefits(life, jan31).sourceCount, null);
   assert.equal(membershipBenefits(initial.next, initial.next.expiresAt!).sourceBytes, 50 * 1024);
   assert.equal(membershipBenefits(initial.next, jan31).standardGiftChars, 0);
-  assert.equal(membershipBenefits(initial.next, jan31, 'ANNUAL').premiumGiftChars, 1000);
+  assert.equal(membershipBenefits(initial.next, jan31, 'ANNUAL').premiumGiftChars, 2500);
+});
+
+test('gift months start at Beijing midnight, cover leap/ordinary February and cross years', () => {
+  const annual = planMembershipPurchase(null, [], 'ANNUAL', jan31, 'annual').next;
+  const feb = time('2028-02-01T00:00:00');
+  assert.deepEqual(membershipGiftCycle(annual, feb - 1), {
+    index: 2028 * 12, startsAt: time('2028-01-01T00:00:00'), endsAt: feb
+  });
+  assert.deepEqual(membershipGiftCycle(annual, feb), {
+    index: 2028 * 12 + 1, startsAt: feb, endsAt: time('2028-03-01T00:00:00')
+  });
+  assert.equal(membershipGiftCycle(annual, Date.parse('2028-02-29T16:00:00Z')).index, 2028 * 12 + 2);
+  assert.equal(membershipCycle(annual, feb).index, 0); // Legacy paid-term anniversary remains available for compatibility.
+  const life = planMembershipPurchase(annual, [], 'LIFETIME', feb, 'unused').next;
+  assert.equal(membershipGiftCycle(life, feb).index, membershipGiftCycle(annual, feb).index);
+  assert.equal(membershipGiftCycle(life, time('2029-02-15T00:00:00')).endsAt, time('2029-03-01T00:00:00'));
+  assert.equal(membershipGiftCycle(life, time('2029-01-01T00:00:00')).index, 2029 * 12);
+  assert.throws(() => membershipGiftCycle(annual, jan31 - 1), MembershipError);
+  assert.throws(() => membershipGiftCycle(annual, annual.expiresAt!), MembershipError);
+  // A partial final membership month still has a calendar window, but expiry blocks claiming.
+  assert.equal(membershipGiftCycle(annual, annual.expiresAt! - 1).endsAt, time('2029-02-01T00:00:00'));
 });

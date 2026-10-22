@@ -87,7 +87,7 @@ test('cloud files: isolation, reservations, integrity, retries and quota enforce
   const tx = <T>(fn: (client: MembershipDb) => Promise<T>) => db.transaction(client =>
     fn({ query: client.query.bind(client) as unknown as MembershipDb['query'] }));
   await db.exec('UPDATE membership_products SET sales_enabled=true');
-  const now = Date.now();
+  const now = Date.parse('2028-01-15T10:00:00+08:00');
   let clock = now + 1000;
   const users = [randomUUID(), randomUUID(), randomUUID()];
   for (const id of users) {
@@ -159,6 +159,19 @@ test('cloud files: isolation, reservations, integrity, retries and quota enforce
   assert.equal((await app.inject({ method: 'POST', url: `/v1/cloud-files/${upload.id}/chunks`, payload: { index: 1, data: 'YWJj' } })).statusCode, 404);
   assert.equal((await app.inject({ method: 'GET', url: `/v1/cloud-files/${upload.id}/chunks/1` })).statusCode, 404);
   const apiId = randomUUID();
+  const oldPeriod = (await db.query<{ period_id: string }>(
+    'SELECT period_id FROM membership_accounts WHERE user_id=$1', [owner])).rows[0]!.period_id;
+  // Rollout deliberately gives a fresh 1 GiB; historical anniversary usage is retained for audit.
+  await db.query('INSERT INTO cloud_download_usage(user_id,period_id,cycle_index,bytes) VALUES($1,$2,0,$3)',
+    [owner, oldPeriod, CLOUD_QUOTA_BYTES]);
+  assert.equal((await service.summary(owner)).downloadBytes, 0);
+  assert.equal((await service.summary(owner)).cycleEndsAt, Date.parse('2028-02-01T00:00:00+08:00'));
+  const legacyId = randomUUID();
+  await db.query(`INSERT INTO cloud_download_tickets(user_id,request_id,file_id,chunk_index,period_id,cycle_index,expires_at)
+    VALUES($1,$2,$3,1,$4,0,$5)`, [owner, legacyId, upload.id, oldPeriod, new Date(clock + 30000)]);
+  // A still-valid old ticket may finish without charging the freshly reset allowance.
+  await downloadChunk(owner, upload.id, 1, legacyId);
+  assert.equal((await service.summary(owner)).downloadBytes, 0);
   const response = await app.inject({ method: 'POST', url: `/v1/cloud-files/${upload.id}/chunks/1/download-ticket`, payload: { requestId: apiId } });
   assert.equal(response.statusCode, 200);
   assert.equal(response.headers['cache-control'], 'no-store');
@@ -181,12 +194,38 @@ test('cloud files: isolation, reservations, integrity, retries and quota enforce
   await assert.rejects(downloadChunk(owner, upload.id, 0));
   assert.equal((await service.summary(owner)).downloadBytes, 6);
   failSign = false;
-  await db.query('UPDATE cloud_download_usage SET bytes=$2 WHERE user_id=$1', [owner, CLOUD_QUOTA_BYTES - 2]);
+  await db.exec(await readFile(new URL('022_cloud_calendar_downloads.sql', migrations), 'utf8'));
+  assert.equal((await service.summary(owner)).downloadBytes, 6); // Rerunning migration never resets usage.
+  await db.query('UPDATE cloud_download_monthly_usage SET bytes=$2 WHERE user_id=$1', [owner, CLOUD_QUOTA_BYTES - 2]);
   await assert.rejects(downloadChunk(owner, upload.id, 1), { code: 'CLOUD_TRAFFIC_LIMIT' });
+  clock = Date.parse('2028-02-01T00:00:00+08:00');
+  assert.equal((await service.summary(owner)).downloadBytes, 0);
+  assert.equal((await service.summary(owner)).cycleEndsAt, Date.parse('2028-03-01T00:00:00+08:00'));
+  await downloadChunk(owner, upload.id, 1);
+  assert.equal((await service.summary(owner)).downloadBytes, 3);
   clock = membershipAnniversary(now, 1);
+  assert.equal((await service.summary(owner)).downloadBytes, 3); // No reset on the old opening day.
+  // Replacing the paid period cannot reset the account's calendar-month counter.
+  const replacement = randomUUID();
+  await db.query(`INSERT INTO membership_periods(id,user_id,sku,anchor_at,paid_months,permanent_credit_points)
+    VALUES($1,$2,'SUPER_LIFETIME',$3,0,2490)`, [replacement, owner, new Date(clock)]);
+  await db.query('UPDATE membership_accounts SET period_id=$2,revision=revision+1 WHERE user_id=$1', [owner,replacement]);
+  assert.equal((await service.summary(owner)).downloadBytes, 3);
+  clock = Date.parse('2028-03-01T00:00:00+08:00') - 1500;
+  const lastId = randomUUID();
+  const lastTicket = await downloadChunk(owner, upload.id, 1, lastId);
+  assert.equal(lastTicket.expiresAt, Date.parse('2028-03-01T00:00:00+08:00'));
+  assert.equal(new URL(lastTicket.url).searchParams.get('ttl'), '1');
+  assert.equal((await service.summary(owner)).downloadBytes, 6);
+  clock = lastTicket.expiresAt - 500;
+  await assert.rejects(downloadChunk(owner, upload.id, 1), {code: 'CLOUD_TICKET_EXPIRED'});
+  assert.equal((await service.summary(owner)).downloadBytes, 6); // Subsecond tickets roll back their charge.
+  clock = lastTicket.expiresAt;
+  await assert.rejects(downloadChunk(owner, upload.id, 1, lastId), {code: 'CLOUD_TICKET_EXPIRED'});
   assert.equal((await service.summary(owner)).downloadBytes, 0);
   await downloadChunk(owner, upload.id, 1);
   assert.equal((await service.summary(owner)).downloadBytes, 3);
+  assert.equal(Number((await db.query<{bytes: string}>('SELECT bytes FROM cloud_download_usage WHERE user_id=$1', [owner])).rows[0]!.bytes), CLOUD_QUOTA_BYTES);
   await assert.rejects(service.prepare(owner, { ...input, requestId: randomUUID(), bytes: CLOUD_QUOTA_BYTES }), { code: 'CLOUD_STORAGE_LIMIT' });
   await db.query('INSERT INTO account_debts(user_id,iap_debt_points) VALUES($1,10)', [owner]);
   await assert.rejects(downloadChunk(owner, upload.id, 1), { code: 'CLOUD_SUPER_REQUIRED' });
