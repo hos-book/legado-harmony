@@ -262,6 +262,7 @@ export struct BookshelfPage {
   @StorageLink('bookshelfShowTypeBadge') bookshelfShowTypeBadge: boolean = true;
   @StorageLink('bookshelfLayoutMode') bookshelfLayoutMode: string = 'compact';
   @StorageLink('bookshelfLastReadLeafMode') bookshelfLastReadLeafMode: string = 'adaptive';
+  @StorageLink('bookshelfLastReadPinMode') @Watch('onLastReadPinModeChanged') bookshelfLastReadPinMode: string = 'medium';
   @StorageLink('bookshelfBookOpenAnimation') bookshelfBookOpenAnimation: boolean = true;
   @StorageLink('bookshelfCoverAlbums') @Watch('onShelfCoverSettingsChanged') bookshelfCoverAlbums: string = '';
   @StorageLink('bookshelfLightCoverAlbumId') @Watch('onShelfCoverSettingsChanged') bookshelfLightCoverAlbumId: string = '';
@@ -396,6 +397,7 @@ export struct BookshelfPage {
       this.bookshelfShowTypeBadge = settings.showTypeBadge;
       this.bookshelfLayoutMode = settings.layoutMode;
       this.bookshelfLastReadLeafMode = settings.lastReadLeafMode;
+      this.bookshelfLastReadPinMode = settings.lastReadPinMode;
       this.bookshelfBookOpenAnimation = settings.bookOpenAnimation;
     } catch (e) {
       console.warn('恢复书架显示设置失败:', e);
@@ -404,6 +406,11 @@ export struct BookshelfPage {
 
   onShelfChanged(): void {
     this.scheduleLoadBooks();
+  }
+
+  // 置顶开关决定平铺数据源里是否剔除上次阅读的书，切换后立即重建，避免同一本书出现两次或消失。
+  onLastReadPinModeChanged(): void {
+    this.reloadShelfDataSources(true);
   }
 
   onPrivateShelfEnabledChanged(): void {
@@ -2924,8 +2931,12 @@ export struct BookshelfPage {
   }
 
   shouldShowLatestExpandedTileBook(): boolean {
-    return this.isTileLayout() && this.activeShelfGroupId === 0 && !this.isBookMultiSelect &&
-      !this.shelfAppliedSearchKeyword;
+    return this.isTileLayout() && this.bookshelfLastReadPinMode !== 'off' && this.activeShelfGroupId === 0 &&
+      !this.isBookMultiSelect && !this.shelfAppliedSearchKeyword;
+  }
+
+  isLatestTileCardLarge(): boolean {
+    return this.bookshelfLastReadPinMode === 'large';
   }
 
   getTileBooksWithoutLatest(books: Book[], latest: Book | null = this.getLatestReadTileBook(books)): Book[] {
@@ -2962,7 +2973,7 @@ export struct BookshelfPage {
     const latestBook = this.getLatestReadTileBook(books);
     const latestBookUrl = (latestBook?.bookUrl || '').trim();
     const cacheKey = `${mode}_${this.shelfViewKey()}_${this.activeShelfGroupId}_${this.isBookMultiSelect ? '1' : '0'}_` +
-      `${latestBookUrl}_` +
+      `${this.shouldShowLatestExpandedTileBook() ? latestBookUrl : ''}_` +
       `${books.map((book: Book) => `${book.bookUrl}:${book.name}:${this.getBookReadTime(book)}:${this.getBookAddTime(book)}:` +
         `${book.group}:${book.isPinned ? '1' : '0'}`).join('|')}_` +
       `${this.shelfGroups.map((group: BookGroup) => `${group.groupId}:${group.groupName}`).join('|')}`;
@@ -3119,13 +3130,24 @@ export struct BookshelfPage {
       .columnEnd(this.shelfTileColumnCount() - 1)
 
       if (this.shouldShowLatestExpandedTileBook()) {
-        ForEach(this.getLatestReadTileBooks(this.books), (book: Book) => {
-        GridItem() {
-          this.shelfTileExpandedBook(book)
+        if (this.isLatestTileCardLarge()) {
+          ForEach(this.getLatestReadTileBooks(this.books), (book: Book) => {
+          GridItem() {
+            this.shelfTileLatestCard(book)
+          }
+          // 占满整行：宽屏列数多于三列时，旁边若再排一本书，卡片与封面高度对不齐。
+          .columnStart(0)
+          .columnEnd(this.shelfTileColumnCount() - 1)
+          }, (book: Book) => this.shelfBookRenderKey(book, `latest_card_${this.shelfViewKey()}`))
+        } else {
+          ForEach(this.getLatestReadTileBooks(this.books), (book: Book) => {
+          GridItem() {
+            this.shelfTileExpandedBook(book)
+          }
+          .columnStart(0)
+          .columnEnd(1)
+          }, (book: Book) => this.shelfBookRenderKey(book, `expanded_${this.shelfViewKey()}`))
         }
-        .columnStart(0)
-        .columnEnd(1)
-        }, (book: Book) => this.shelfBookRenderKey(book, `expanded_${this.shelfViewKey()}`))
       }
 
       if (this.shouldUseTileGroupFolders()) {
@@ -3303,6 +3325,96 @@ export struct BookshelfPage {
       ),
       GestureMask.IgnoreInternal
     )
+  }
+
+  // “大”样式：占满一整行的继续阅读卡片，左侧书名与进度，右侧封面。
+  @Builder
+  shelfTileLatestCard(book: Book) {
+    Row({ space: AppSpacing.LG }) {
+      Column() {
+        Text('继续阅读')
+          .fontSize(AppFontSize.CAPTION)
+          .fontColor(this.accentColor())
+          .maxLines(1)
+
+        Text(this.shelfTileBookDisplayName(book))
+          .width('100%')
+          .fontSize(AppFontSize.TITLE)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.primaryTextColor())
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .wordBreak(WordBreak.BREAK_WORD)
+          .margin({ top: AppSpacing.SM })
+
+        Text(this.getReadChapterText(book) || this.getLastReadChapterText(book))
+          .width('100%')
+          .fontSize(AppFontSize.BODY)
+          .fontColor(this.subTextColor())
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .margin({ top: AppSpacing.SM })
+
+        Blank()
+          .layoutWeight(1)
+
+        Progress({ value: this.getReadProgressValue(book), total: 100, type: ProgressType.Linear })
+          .width('100%')
+          .height(4)
+          .color(this.accentColor())
+          .backgroundColor(this.appDarkMode ? '#2D3138' : '#E8EAED')
+      }
+      .layoutWeight(1)
+      .height('100%')
+      .padding({ top: AppSpacing.XS, bottom: AppSpacing.XS })
+      .alignItems(HorizontalAlign.Start)
+
+      Stack({ alignContent: Alignment.TopStart }) {
+        this.coverView(book, '100%', '100%', ImageFit.Cover)
+        this.bookTypeCoverBadge(book)
+      }
+      .height('100%')
+      .aspectRatio(0.735)
+      .borderRadius(6)
+      .clip(true)
+      .border({ width: ThemeRuntime.glassBorderWidth(), color: this.glassBorderColor() })
+    }
+    .width('100%')
+    .height(this.shelfTileLatestCardHeight())
+    .padding(AppSpacing.XL)
+    .backgroundColor(this.glassCardColor())
+    .borderRadius(ThemeRuntime.cardRadius())
+    .border({ width: ThemeRuntime.glassBorderWidth(), color: this.glassBorderColor() })
+    .shadow({ radius: ThemeRuntime.glassShadowRadius(), color: this.glassShadowColor(),
+      offsetX: ThemeRuntime.glassShadowOffsetX(), offsetY: ThemeRuntime.glassShadowOffsetY() })
+    .priorityGesture(
+      GestureGroup(GestureMode.Exclusive,
+        LongPressGesture({ repeat: false })
+          .onAction((event: GestureEvent) => {
+            this.showBookActions(book, event);
+          }),
+        TapGesture()
+          .onAction((event: GestureEvent) => {
+            if (this.consumeShelfSwipeClick()) {
+              return;
+            }
+            const finger = event.fingerList.length > 0 ? event.fingerList[0] : undefined;
+            this.openShelfBook(book, finger ? finger.globalX : this.contextViewportWidth / 2,
+              finger ? finger.globalY : this.contextViewportHeight / 2);
+          })
+      ),
+      GestureMask.IgnoreInternal
+    )
+  }
+
+  shelfTileLatestCardHeight(): number {
+    const horizontalPadding = 40;
+    const columnCount = this.shelfTileColumnCount();
+    const columnGap = this.shelfTileColumnGap();
+    const contentWidth = Math.max(1, this.shelfTileViewportWidth - horizontalPadding);
+    const columnWidth = Math.max(1, (contentWidth - columnGap * (columnCount - 1)) / columnCount);
+    // 封面约占一列宽度的七成，卡片高度随之换算，宽屏多列时也不会被拉得过高。
+    return Math.round(columnWidth * 0.7 / 0.735) + AppSpacing.XL * 2;
   }
 
   @Builder

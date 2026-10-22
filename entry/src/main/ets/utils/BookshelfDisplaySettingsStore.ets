@@ -13,6 +13,8 @@ export class BookshelfDisplaySettings {
   showTypeBadge: boolean = true;
   layoutMode: string = 'compact';
   lastReadLeafMode: string = 'adaptive';
+  // 平铺布局里上次阅读的书是否置顶：off 不置顶，medium 跨两列的展开书本，large 占满一整行的继续阅读卡片。
+  lastReadPinMode: string = 'medium';
   bookOpenAnimation: boolean = true;
 }
 
@@ -28,6 +30,7 @@ export class BookshelfDisplaySettingsStore {
   private static readonly KEY_SHOW_TYPE_BADGE: string = 'bookshelfShowTypeBadge';
   private static readonly KEY_LAYOUT_MODE: string = 'bookshelfLayoutMode';
   private static readonly KEY_LAST_READ_LEAF_MODE: string = 'bookshelfLastReadLeafMode';
+  private static readonly KEY_LAST_READ_PIN_MODE: string = 'bookshelfLastReadPinMode';
   private static readonly KEY_BOOK_OPEN_ANIMATION: string = 'bookshelfBookOpenAnimation';
   private static cachedSettings: BookshelfDisplaySettings | null = null;
 
@@ -58,6 +61,9 @@ export class BookshelfDisplaySettingsStore {
     settings.lastReadLeafMode = BookshelfDisplaySettingsStore.normalizeLastReadLeafMode(
       await BookshelfDisplaySettingsStore.getString(
         store, BookshelfDisplaySettingsStore.KEY_LAST_READ_LEAF_MODE, 'adaptive'));
+    settings.lastReadPinMode = BookshelfDisplaySettingsStore.normalizeLastReadPinMode(
+      await BookshelfDisplaySettingsStore.getString(
+        store, BookshelfDisplaySettingsStore.KEY_LAST_READ_PIN_MODE, 'medium'));
     settings.bookOpenAnimation = await BookshelfDisplaySettingsStore.getBoolean(
       store, BookshelfDisplaySettingsStore.KEY_BOOK_OPEN_ANIMATION, true);
     BookshelfDisplaySettingsStore.cachedSettings = BookshelfDisplaySettingsStore.clone(settings);
@@ -79,6 +85,8 @@ export class BookshelfDisplaySettingsStore {
       BookshelfDisplaySettingsStore.normalizeLayoutMode(settings.layoutMode));
     await store.put(BookshelfDisplaySettingsStore.KEY_LAST_READ_LEAF_MODE,
       BookshelfDisplaySettingsStore.normalizeLastReadLeafMode(settings.lastReadLeafMode));
+    await store.put(BookshelfDisplaySettingsStore.KEY_LAST_READ_PIN_MODE,
+      BookshelfDisplaySettingsStore.normalizeLastReadPinMode(settings.lastReadPinMode));
     await store.put(BookshelfDisplaySettingsStore.KEY_BOOK_OPEN_ANIMATION, settings.bookOpenAnimation !== false);
     await store.flush();
     CloudSyncChangeTracker.markApplicationPreferenceChanged();
@@ -98,6 +106,8 @@ export class BookshelfDisplaySettingsStore {
       BookshelfDisplaySettingsStore.normalizeLayoutMode(settings.layoutMode));
     AppStorage.setOrCreate(BookshelfDisplaySettingsStore.KEY_LAST_READ_LEAF_MODE,
       BookshelfDisplaySettingsStore.normalizeLastReadLeafMode(settings.lastReadLeafMode));
+    AppStorage.setOrCreate(BookshelfDisplaySettingsStore.KEY_LAST_READ_PIN_MODE,
+      BookshelfDisplaySettingsStore.normalizeLastReadPinMode(settings.lastReadPinMode));
     AppStorage.setOrCreate(BookshelfDisplaySettingsStore.KEY_BOOK_OPEN_ANIMATION,
       settings.bookOpenAnimation !== false);
   }
@@ -116,6 +126,8 @@ export class BookshelfDisplaySettingsStore {
       AppStorage.get<string>(BookshelfDisplaySettingsStore.KEY_LAYOUT_MODE) ?? 'compact');
     settings.lastReadLeafMode = BookshelfDisplaySettingsStore.normalizeLastReadLeafMode(
       AppStorage.get<string>(BookshelfDisplaySettingsStore.KEY_LAST_READ_LEAF_MODE) ?? 'adaptive');
+    settings.lastReadPinMode = BookshelfDisplaySettingsStore.normalizeLastReadPinMode(
+      AppStorage.get<string>(BookshelfDisplaySettingsStore.KEY_LAST_READ_PIN_MODE) ?? 'medium');
     settings.bookOpenAnimation = AppStorage.get<boolean>(BookshelfDisplaySettingsStore.KEY_BOOK_OPEN_ANIMATION) ?? true;
     return settings;
   }
@@ -152,6 +164,13 @@ export class BookshelfDisplaySettingsStore {
     return 'adaptive';
   }
 
+  private static normalizeLastReadPinMode(value: string): string {
+    if (value === 'off' || value === 'large') {
+      return value;
+    }
+    return 'medium';
+  }
+
   private static clone(source: BookshelfDisplaySettings): BookshelfDisplaySettings {
     const settings = new BookshelfDisplaySettings();
     settings.showTags = source.showTags;
@@ -164,6 +183,7 @@ export class BookshelfDisplaySettingsStore {
     settings.showTypeBadge = source.showTypeBadge !== false;
     settings.layoutMode = BookshelfDisplaySettingsStore.normalizeLayoutMode(source.layoutMode);
     settings.lastReadLeafMode = BookshelfDisplaySettingsStore.normalizeLastReadLeafMode(source.lastReadLeafMode);
+    settings.lastReadPinMode = BookshelfDisplaySettingsStore.normalizeLastReadPinMode(source.lastReadPinMode);
     settings.bookOpenAnimation = source.bookOpenAnimation !== false;
     return settings;
   }

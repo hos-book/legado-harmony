@@ -35,6 +35,7 @@ struct BookshelfSettingsPage {
   @StorageLink('bookshelfShowTypeBadge') bookshelfShowTypeBadge: boolean = true;
   @StorageLink('bookshelfLayoutMode') bookshelfLayoutMode: string = 'compact';
   @StorageLink('bookshelfLastReadLeafMode') bookshelfLastReadLeafMode: string = 'adaptive';
+  @StorageLink('bookshelfLastReadPinMode') bookshelfLastReadPinMode: string = 'medium';
   @StorageLink('bookshelfBookOpenAnimation') bookshelfBookOpenAnimation: boolean = true;
   @StorageLink('bookshelfCoverAlbums') @Watch('onCoverAlbumsChanged') bookshelfCoverAlbums: string = '';
   @StorageLink('bookshelfLightCoverAlbumId') bookshelfLightCoverAlbumId: string = '';
@@ -213,6 +214,14 @@ struct BookshelfSettingsPage {
       })
     if (this.bookshelfLayoutMode === 'tile') {
       this.itemDivider()
+      this.selectItem('上次阅读置顶', '最近阅读的书排在最前的样式',
+        this.lastReadPinOptions(), this.lastReadPinSelectedIndex(), (index: number) => {
+          this.bookshelfLastReadPinMode = index === 0 ? 'off' : (index === 2 ? 'large' : 'medium');
+          this.onDisplaySettingChanged();
+        })
+    }
+    if (this.bookshelfLayoutMode === 'tile' && this.bookshelfLastReadPinMode === 'medium') {
+      this.itemDivider()
       this.selectItem('上次阅读扉页设置', '最近阅读书籍封面右侧的展示内容',
         this.lastReadLeafOptions(), this.lastReadLeafSelectedIndex(), (index: number) => {
           this.bookshelfLastReadLeafMode = index === 0 ? 'bookInfo' :
@@ -339,6 +348,7 @@ struct BookshelfSettingsPage {
       this.bookshelfShowTypeBadge = settings.showTypeBadge;
       this.bookshelfLayoutMode = settings.layoutMode;
       this.bookshelfLastReadLeafMode = settings.lastReadLeafMode;
+      this.bookshelfLastReadPinMode = settings.lastReadPinMode;
       this.bookshelfBookOpenAnimation = settings.bookOpenAnimation;
     } catch (e) {
       console.warn('重新加载书架显示设置失败:', e);
@@ -489,6 +499,7 @@ struct BookshelfSettingsPage {
     settings.showTypeBadge = this.bookshelfShowTypeBadge;
     settings.layoutMode = this.bookshelfLayoutMode;
     settings.lastReadLeafMode = this.bookshelfLastReadLeafMode;
+    settings.lastReadPinMode = this.bookshelfLastReadPinMode;
     settings.bookOpenAnimation = this.bookshelfBookOpenAnimation;
     BookshelfDisplaySettingsStore.applyToStorage(settings);
     BookshelfDisplaySettingsStore.save(getContext(this), settings).catch((e: Error) => {
@@ -687,6 +698,14 @@ struct BookshelfSettingsPage {
 
   bookshelfLayoutSelectedIndex(): number {
     return this.bookshelfLayoutMode === 'tile' ? 2 : (this.bookshelfLayoutMode === 'loose' ? 1 : 0);
+  }
+
+  lastReadPinOptions(): SelectOption[] {
+    return [{ value: '关闭' }, { value: '中' }, { value: '大' }];
+  }
+
+  lastReadPinSelectedIndex(): number {
+    return this.bookshelfLastReadPinMode === 'off' ? 0 : (this.bookshelfLastReadPinMode === 'large' ? 2 : 1);
   }
 
   lastReadLeafOptions(): SelectOption[] {
