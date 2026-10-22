@@ -17,7 +17,7 @@ import {
 import { AccountSessionStore } from '../account/AccountSessionStore';
 import { MembershipIcons } from '../account/MembershipIcons';
 import { MembershipCommerceService } from '../account/MembershipCommerceService';
-import { MembershipOrder, MembershipProduct, MembershipSnapshot } from '../account/MembershipModels';
+import { MembershipOrder, MembershipProduct, MembershipPromotion, MembershipSnapshot } from '../account/MembershipModels';
 import { CloudSyncSummary } from '../account/CloudSyncModels';
 import { CloudFileClient } from '../account/CloudFileClient';
 import { CloudFileSummary } from '../account/CloudFileModels';
@@ -788,14 +788,53 @@ struct AccountCenterPage {
     if (!this.accountLoggedIn) return '登录后开通会员';
     const product = this.selectedProduct();
     if (!product) return '请选择会员方案';
-    if (!product.salesEnabled) return '暂未开放购买';
+    if (!product.salesEnabled) {
+      return this.opensLater(product) ? `${this.formatDateTime(product.salesStartsAt!)} 开放订购` : '暂未开放购买';
+    }
     const blocked = this.purchaseBlockReason(product);
     if (blocked) return blocked;
     if (!this.agreed) return '请先阅读并勾选购买说明';
     const current = this.membership.active ? this.membership.state : null;
     if (current && product.months === null) return `升级为${product.name}`;
     if (current) return `续费${product.name}`;
-    return `使用 ${product.points} 充值点开通`;
+    return `使用 ${this.priceOf(product)} 充值点开通`;
+  }
+
+  /** 当前实际扣点；旧服务端没有 pricePoints 时用原价。 */
+  priceOf(product: MembershipProduct): number {
+    return product.pricePoints > 0 ? product.pricePoints : product.points;
+  }
+
+  discounted(product: MembershipProduct): boolean {
+    return this.priceOf(product) < product.points;
+  }
+
+  opensLater(product: MembershipProduct): boolean {
+    return !product.salesEnabled && product.salesStartsAt !== null && product.salesStartsAt > Date.now();
+  }
+
+  /** 活动结束时间是次日零点，展示为最后一天。 */
+  promotionLastDay(promotion: MembershipPromotion): string {
+    const last = new Date(promotion.endsAt - 1);
+    return `${last.getMonth() + 1}月${last.getDate()}日`;
+  }
+
+  formatDateTime(value: number): string {
+    const date = new Date(value);
+    const pad = (n: number): string => n < 10 ? `0${n}` : `${n}`;
+    return `${date.getMonth() + 1}月${date.getDate()}日 ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  }
+
+  /** 首发活动横幅：任一档位有进行中或即将开始的活动时显示。 */
+  launchBanner(): string {
+    // 旧服务端不返回 promotion 字段，解析后是 undefined 而不是 null。
+    const promoted = this.memberProducts.filter((item: MembershipProduct) => !!item.promotion);
+    if (promoted.length === 0) return '';
+    const promotion = promoted[0].promotion!;
+    const names = promoted.map((item: MembershipProduct) => item.name).join('与');
+    const start = new Date(promotion.startsAt);
+    const period = `${start.getMonth() + 1}月${start.getDate()}日至${this.promotionLastDay(promotion)}`;
+    return `${promotion.label}：${period}，${names}${promotion.pricePoints * 2 === promoted[0].points ? '半价' : '限时优惠'}`;
   }
 
   purchaseEnabled(): boolean {
@@ -1125,11 +1164,28 @@ struct AccountCenterPage {
       this.sectionHeader(this.membership.active ? '续费与升级' : '会员方案', '购买说明', () => {
         this.showPurchaseTerms();
       })
+      if (this.launchBanner()) {
+        Row({ space: AppSpacing.SM }) {
+          SymbolGlyph($r('sys.symbol.timer'))
+            .fontSize(16)
+            .fontColor([MembershipIcons.accent('LIFETIME', this.appDarkMode)])
+          Text(this.launchBanner())
+            .fontSize(AppFontSize.CAPTION)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(MembershipIcons.cardTextColor(this.appDarkMode))
+            .layoutWeight(1)
+        }
+        .width('100%')
+        .padding({ left: AppSpacing.LG, right: AppSpacing.LG, top: AppSpacing.MD, bottom: AppSpacing.MD })
+        .borderRadius(ThemeRuntime.mediumRadius())
+        .linearGradient({ angle: 90, colors: MembershipIcons.cardGradient('LIFETIME', this.appDarkMode) })
+      }
       Scroll() {
         Row({ space: AppSpacing.MD }) {
           ForEach(this.memberProducts, (product: MembershipProduct) => {
             this.planCard(product)
-          }, (product: MembershipProduct) => `${product.sku}_${product.salesEnabled}_${product.points}`)
+          }, (product: MembershipProduct) =>
+            `${product.sku}_${product.salesEnabled}_${this.priceOf(product)}_${product.promotion?.startsAt ?? 0}`)
         }
         .padding({ left: AppSpacing.XS, right: AppSpacing.XS, top: AppSpacing.SM, bottom: AppSpacing.SM })
       }
@@ -1163,14 +1219,22 @@ struct AccountCenterPage {
           .fontColor(this.primaryTextColor())
           .maxLines(1)
         Row({ space: AppSpacing.XXS }) {
-          Text(`${product.points}`)
+          Text(`${this.priceOf(product)}`)
             .fontSize(AppFontSize.DISPLAY)
             .fontWeight(FontWeight.Bold)
-            .fontColor(this.primaryTextColor())
+            .fontColor(this.discounted(product) ? MembershipIcons.accent(product.sku, this.appDarkMode) :
+              this.primaryTextColor())
           Text('点')
             .fontSize(AppFontSize.CAPTION)
             .fontColor(this.subTextColor())
             .margin({ bottom: 5 })
+          if (this.discounted(product)) {
+            Text(`${product.points}`)
+              .fontSize(AppFontSize.CAPTION)
+              .fontColor(this.subTextColor())
+              .decoration({ type: TextDecorationType.LineThrough, color: this.subTextColor() })
+              .margin({ bottom: 5, left: AppSpacing.XS })
+          }
         }
         .alignItems(VerticalAlign.Bottom)
         Text(this.planSubtitle(product))
@@ -1202,14 +1266,21 @@ struct AccountCenterPage {
         this.dividerColor()
     })
     .opacity(product.salesEnabled && this.purchaseBlockReason(product) === '' ? 1 : 0.55)
-    .accessibilityText(`${product.name}，${product.points} 点，${this.planSubtitle(product)}`)
+    .accessibilityText(`${product.name}，${this.priceOf(product)} 点，${this.planSubtitle(product)}`)
     .onClick(() => {
       if (!this.memberBusy) this.selectedSku = product.sku;
     })
   }
 
   planSubtitle(product: MembershipProduct): string {
+    const promotion = product.promotion;
+    if (this.opensLater(product)) {
+      const start = new Date(product.salesStartsAt!);
+      const opening = `${start.getMonth() + 1}月${start.getDate()}日开放`;
+      return promotion ? `${opening} · ${promotion.label}` : opening;
+    }
     if (!product.salesEnabled) return '准备中';
+    if (promotion && this.discounted(product)) return `${promotion.label} · 至${this.promotionLastDay(promotion)}`;
     if (product.months === null) return '永久有效 · 每月礼包';
     if (product.sku === 'MONTHLY') return '1 个月 · 不含礼包';
     return `${product.months} 个月 · 每月礼包`;
@@ -1226,6 +1297,9 @@ struct AccountCenterPage {
 
   planBadge(product: MembershipProduct): string {
     if (this.membershipSku === product.sku) return '当前';
+    if (product.promotion && (this.discounted(product) || this.opensLater(product))) {
+      return product.promotion.pricePoints * 2 === product.points ? '半价' : '优惠';
+    }
     if (product.sku === 'ANNUAL' && !this.membershipSku) return '推荐';
     if (product.sku === 'SUPER_LIFETIME') return '云空间';
     return '';
@@ -1355,7 +1429,9 @@ struct AccountCenterPage {
     rows.push(new BenefitCompareRow('单个书源大小', '云同步上限',
       limits ? ['50KB', '512KB', '512KB', '512KB', '960KB'] : ['512KB', '512KB', '512KB', '512KB', '960KB']));
     rows.push(new BenefitCompareRow('动态头像', 'GIF / WebP 动图', ['—', '—', '—', '✓', '✓']));
-    rows.push(new BenefitCompareRow('书籍字体云空间', '与书源共用', ['—', '—', '—', '—', '1GB']));
+    rows.push(new BenefitCompareRow('自定义字体云端同步', '导入即上传，换机可选', ['—', '—', '—', '—', '✓']));
+    rows.push(new BenefitCompareRow('本地书籍云端同步', '加入书架即上传', ['—', '—', '—', '—', '✓']));
+    rows.push(new BenefitCompareRow('云端空间', '书籍、字体与书源共用', ['—', '—', '—', '—', '1GB']));
     rows.push(new BenefitCompareRow('每月下载额度', '云空间下载', ['—', '—', '—', '—', '1GB']));
     return rows;
   }

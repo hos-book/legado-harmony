@@ -42,13 +42,26 @@ export class MembershipSnapshot {
   serverNow: number = 0;
 }
 
+export class MembershipPromotion {
+  pricePoints: number = 0;
+  label: string = '';
+  startsAt: number = 0;
+  endsAt: number = 0;
+}
+
 export class MembershipProduct {
   sku: string = '';
   name: string = '';
+  /** 原价；当前实际扣点见 pricePoints（活动期间更低）。 */
   points: number = 0;
+  pricePoints: number = 0;
   months: number | null = null;
   tier: string = '';
   salesEnabled: boolean = false;
+  /** 计划开售时间；null 表示由服务端手动开关。 */
+  salesStartsAt: number | null = null;
+  /** 进行中或即将开始的活动价。 */
+  promotion: MembershipPromotion | null = null;
 }
 
 export class MembershipCatalog {
