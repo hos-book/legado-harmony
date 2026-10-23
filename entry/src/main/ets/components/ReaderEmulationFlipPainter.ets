@@ -99,12 +99,10 @@ export class ReaderEmulationFlipPainter {
   private creaseShadowColor: string = 'rgba(17,17,17,0.42)';
   private edgeShadowColor: string = 'rgba(17,17,17,0.3)';
   private paperEdgeColor: string = 'rgba(0,0,0,0.1)';
-  private highlightColor: string = 'rgba(255,255,255,0.1)';
-  private highlightClearColor: string = 'rgba(255,255,255,0)';
 
   /**
    * 按主题纸色推导折页用色。纸背是纸色稍微压暗（夜间主题为提亮）后的不透明罩色，
-   * 只隐约透出背面的镜像文字；夜间主题的阴影更重，并靠高光和纸边描线区分层次。
+   * 只隐约透出背面的镜像文字；夜间主题的阴影更重，并靠纸边描线区分层次。
    */
   private applyPalette(paperColor: string, dark: boolean): void {
     const key = `${paperColor}_${dark ? 1 : 0}`;
@@ -125,7 +123,6 @@ export class ReaderEmulationFlipPainter {
     this.creaseShadowColor = dark ? 'rgba(0,0,0,0.66)' : 'rgba(17,17,17,0.42)';
     this.edgeShadowColor = dark ? 'rgba(0,0,0,0.55)' : 'rgba(17,17,17,0.3)';
     this.paperEdgeColor = dark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.12)';
-    this.highlightColor = dark ? 'rgba(255,255,255,0.07)' : 'rgba(255,255,255,0.22)';
   }
 
   // 支持 #RGB、#RRGGBB、#AARRGGBB 与 rgb()/rgba()；无法识别时退回官方米黄。
@@ -818,48 +815,66 @@ export class ReaderEmulationFlipPainter {
     // 纸张抬起的高度：两端贴着页面，翻到一半时最高，投影随之变宽。
     const lift = Math.sin(Math.PI * curl);
     if (flapWidth > 0.5) {
-      // 3) 纸背的柱面明暗：靠近折线处背光最暗，中段迎光有一道高光，外侧纸边略微压暗。
+      // 3) 纸背明暗：只在折线一侧有一段由深到浅的卷曲阴影，其余纸面均匀。
+      // 原先中段一道高光、外侧一道压暗，加上折线阴影，纸背上明暗交替，看起来像竖条纹。
       context.save();
       context.beginPath();
       context.rect(flapLeft, 0, flapWidth, height);
       context.clip();
-      // 渐变按整张纸背的宽度铺开，纸边滑出窗口后只是被裁掉，明暗不会被挤压。
       const creaseSide = creaseX;
       const edgeSide = direction > 0 ? 2 * creaseX - width : 2 * creaseX;
-      const shade = context.createLinearGradient(creaseSide, 0, edgeSide, 0);
-      shade.addColorStop(0, this.shadowBackDeepColor);
-      shade.addColorStop(0.22, this.shadowLightColor);
-      shade.addColorStop(0.45, this.highlightClearColor);
-      shade.addColorStop(0.62, this.highlightColor);
-      shade.addColorStop(0.8, this.highlightClearColor);
-      shade.addColorStop(0.82, this.shadowLightColor);
-      shade.addColorStop(1, this.paperEdgeColor);
-      context.fillStyle = shade;
-      context.fillRect(flapLeft, 0, flapWidth, height);
+      // 卷曲带宽按整张纸背的宽度取，纸边滑出窗口后只是被裁掉，明暗不会被挤压。
+      const foldBand = Math.min(Math.abs(creaseSide - edgeSide) * 0.4, width * 0.16);
+      this.fillEasedShadow(context, creaseSide, creaseSide + (direction > 0 ? -foldBand : foldBand), 0, height,
+        this.shadowBackDeepColor);
       context.restore();
 
-      // 4) 纸的外侧边落在当前页上的投影。纸边滑出窗口后不再需要。
-      const edgeShadowWidth = Math.min(width * 0.07, 84) * lift;
+      // 4) 纸的外侧边：一条细线把纸背和下层页面分开，再在当前页上落一段柔和投影。纸边滑出窗口后不再需要。
       const edgeVisible = direction > 0 ? 2 * creaseX - width > 0 : 2 * creaseX < width;
       if (edgeVisible) {
+        const edgeShadowWidth = Math.min(width * 0.06, 72) * lift;
         if (direction > 0) {
-          this.fillHorizontalGradient(context, flapLeft - edgeShadowWidth, flapLeft, 0, height,
-            this.shadowLightColor, this.edgeShadowColor);
+          this.fillEasedShadow(context, flapLeft, flapLeft - edgeShadowWidth, 0, height, this.edgeShadowColor);
         } else {
-          this.fillHorizontalGradient(context, flapRight, flapRight + edgeShadowWidth, 0, height,
-            this.edgeShadowColor, this.shadowLightColor);
+          this.fillEasedShadow(context, flapRight, flapRight + edgeShadowWidth, 0, height, this.edgeShadowColor);
         }
+        context.save();
+        context.beginPath();
+        context.moveTo(edgeSide, 0);
+        context.lineTo(edgeSide, height);
+        context.lineWidth = Math.max(0.5, this.vpPerPx);
+        context.strokeStyle = this.paperEdgeColor;
+        context.stroke();
+        context.restore();
       }
     }
     // 5) 折线处落在目标页上的投影。
     const shadowWidth = Math.min(width * 0.10, 120) * (0.45 + 0.55 * lift);
-    if (direction > 0) {
-      this.fillHorizontalGradient(context, creaseX, creaseX + shadowWidth, 0, height,
-        this.creaseShadowColor, this.shadowLightColor);
-    } else {
-      this.fillHorizontalGradient(context, creaseX - shadowWidth, creaseX, 0, height,
-        this.shadowLightColor, this.creaseShadowColor);
+    this.fillEasedShadow(context, creaseX, creaseX + (direction > 0 ? shadowWidth : -shadowWidth), 0, height,
+      this.creaseShadowColor);
+  }
+
+  /**
+   * 从 fromX（最深，取 color 的不透明度）到 toX（全透明）按 (1-t)² 衰减的水平阴影，fromX 可在 toX 任一侧。
+   * 两端都是线性渐变时，起止处的亮度折点会被眼睛放大成一条硬边，多段并排就成了条纹。
+   */
+  private fillEasedShadow(context: CanvasRenderingContext2D, fromX: number, toX: number, top: number,
+    height: number, color: string): void {
+    if (Math.abs(toX - fromX) <= 0.5) {
+      return;
     }
+    const rgba = color.match(/^rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\s*\)$/i);
+    const rgb = rgba ? `${rgba[1]},${rgba[2]},${rgba[3]}` : '0,0,0';
+    const alpha = rgba ? Number(rgba[4]) : 0.3;
+    const gradient = context.createLinearGradient(fromX, 0, toX, 0);
+    const steps = 6;
+    for (let index = 0; index <= steps; index++) {
+      const t = index / steps;
+      const strength = (1 - t) * (1 - t);
+      gradient.addColorStop(t, `rgba(${rgb},${(alpha * strength).toFixed(4)})`);
+    }
+    context.fillStyle = gradient;
+    context.fillRect(Math.min(fromX, toX), top, Math.abs(toX - fromX), height);
   }
 
   private rotationDegrees(deltaX: number, deltaY: number): number {
