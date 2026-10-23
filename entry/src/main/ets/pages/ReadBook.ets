@@ -165,6 +165,10 @@ const READER_PAGE_CURL_SNAPSHOT_SCALE = 0.42;
 // 3D 仿真每帧只画两三次整页贴图，不像网格卷曲那样反复采样，可以用更高的快照分辨率换取清晰的文字。
 const READER_PAGE_3D_SNAPSHOT_SCALE = 0.75;
 const READER_CURL_REGION_UNSET = -1;
+// 一次拖动的意图：越过点击阈值时按方向判定一次，之后不再在翻页与下拉书签之间切换。
+const READER_PAN_INTENT_NONE = 0;
+const READER_PAN_INTENT_TURN = 1;
+const READER_PAN_INTENT_BOOKMARK = 2;
 const READER_PROGRESS_OFFSET_KEY = 'readProgressCharOffsetV2';
 const READER_V2_NO_FRAGMENTS: ReaderV2PageFragment[] = [];
 const READER_V2_IMAGE_LOADING_SIZE = 32;
@@ -556,6 +560,7 @@ struct ReadBookPage {
   private readerBookmarkPullStartDistance: number = 48;
   private readerBookmarkPullDirectionRatio: number = 1.5;
   private readerPanActive: boolean = false;
+  private readerPanIntent: number = READER_PAN_INTENT_NONE;
   private readerPageTurnGestureCommitted: boolean = false;
   private readerGestureTurnGuardUntil: number = 0;
   private readerGestureTurnAllowance: number = 0;
@@ -8579,10 +8584,17 @@ struct ReadBookPage {
     this.captureReaderCurlStartRegion(event);
     this.updateReaderCurlFinger(event);
     this.readerPanActive = true;
+    this.readerPanIntent = READER_PAN_INTENT_NONE;
     this.deferReaderPaginationForInteraction();
     this.readerTouchMoved = false;
     this.suppressReaderTapClick = false;
     this.slideResetSerial++;
+  }
+
+  // 拖动一开始就明显朝下时才算下拉书签；起手偏横向的拖动整个过程都按翻页处理。
+  isBookmarkPullDirection(offsetX: number, offsetY: number): boolean {
+    return this.readerQuickBookmarkEnabled && this.readerEffectivePageTurnMode() !== 0 && offsetY > 0 &&
+      offsetY > Math.abs(offsetX) * this.readerBookmarkPullDirectionRatio;
   }
 
   canHandleBookmarkPull(offsetX: number, offsetY: number): boolean {
@@ -8645,8 +8657,21 @@ struct ReadBookPage {
       }
       return;
     }
-    if (this.bookmarkPullActive || this.canHandleBookmarkPull(offsetX, offsetY)) {
-      this.updateBookmarkPullEffect(offsetX, offsetY);
+    if (this.readerPanIntent === READER_PAN_INTENT_NONE) {
+      if (!this.isReaderTouchMoved(offsetX, offsetY)) {
+        return;
+      }
+      // 原先每帧都重新判断：斜向下的拖动先按翻页卷起/滑动了页面、准备了目标页，下移到 48vp 后又被
+      // 下拉书签接管，翻页状态没有清理就直接置零，松手时还会切换书签而不是翻页。这里只判定一次。
+      this.readerPanIntent = this.isBookmarkPullDirection(offsetX, offsetY) ?
+        READER_PAN_INTENT_BOOKMARK : READER_PAN_INTENT_TURN;
+    }
+    if (this.readerPanIntent === READER_PAN_INTENT_BOOKMARK) {
+      this.readerTouchMoved = true;
+      this.suppressReaderTapClick = true;
+      if (this.bookmarkPullActive || this.canHandleBookmarkPull(offsetX, offsetY)) {
+        this.updateBookmarkPullEffect(offsetX, offsetY);
+      }
       return;
     }
     if (!this.isPageTurnAnimationEnabled()) {
@@ -8671,6 +8696,12 @@ struct ReadBookPage {
       this.readerTouchMoved = true;
       this.suppressReaderTapClick = true;
       this.finishBookmarkPull(this.canCommitBookmarkPull(event.offsetX, event.offsetY));
+      return;
+    }
+    if (this.readerPanIntent === READER_PAN_INTENT_BOOKMARK) {
+      // 朝下拉了但没拉到书签起始距离：既不翻页也不当作点击。
+      this.readerTouchMoved = true;
+      this.suppressReaderTapClick = true;
       return;
     }
     const offsetX = event.offsetX;
@@ -8747,6 +8778,7 @@ struct ReadBookPage {
       this.readerTouchLastX = x;
       this.readerTouchLastY = y;
       this.readerTouchActive = true;
+      this.readerPanIntent = READER_PAN_INTENT_NONE;
       this.readerPageTurnGestureCommitted = false;
       this.readerGestureTurnGuardUntil = 0;
       this.readerGestureTurnAllowance = 0;
@@ -8866,6 +8898,11 @@ struct ReadBookPage {
   finishReaderHorizontalTouch(canCommitTap: boolean = true): void {
     const offsetX = this.readerTouchLastX - this.readerTouchStartX;
     const offsetY = this.readerTouchLastY - this.readerTouchStartY;
+    // 已判定为下拉书签的拖动由 PanGesture 收尾，触摸抬起不能再按横向位移补一次翻页。
+    if (this.readerPanIntent === READER_PAN_INTENT_BOOKMARK) {
+      this.suppressReaderTapClick = true;
+      return;
+    }
     if (this.isReaderPageTurnCommitGesture(offsetX, offsetY)) {
       this.readerTouchMoved = true;
       this.suppressReaderTapClick = true;
@@ -17024,24 +17061,27 @@ struct ReadBookPage {
     return color.length >= 9 && color.toUpperCase().endsWith('00') ? '#FFFFFF' : color;
   }
 
-  // 3D 仿真单页拖动时把手指位置交给绘制器，页角点跟随手指。手势层与卷曲画布都铺满阅读页，
-  // 手指的组件内坐标可以直接当作画布坐标。
+  // 3D 仿真单页拖动时把手指位置交给绘制器，纸张抓取点跟随手指。手势层与卷曲画布都铺满阅读页，
+  // 手指的组件内坐标可以直接当作画布坐标。上一页还在自动翻完时不接管，免得半途的折页跳到新手指处。
   updateReaderCurlFinger(event: GestureEvent): void {
-    if (!this.is3DPageTurnAnimation() || this.isLandscapeDoublePageActive() || !event || !event.fingerList ||
-      event.fingerList.length === 0) {
+    if (!this.is3DPageTurnAnimation() || this.isLandscapeDoublePageActive() || this.isPageTurning || !event ||
+      !event.fingerList || event.fingerList.length === 0) {
       return;
     }
     this.readerEmulationFlipPainter.dragCorner(event.fingerList[0].localX, event.fingerList[0].localY);
   }
 
   captureReaderCurlStartRegion(event: GestureEvent): void {
+    if (this.isPageTurning) {
+      return;
+    }
     this.readerCurlStartRegion = ReaderEmulationFlipRegion.MIDDLE;
     if (!this.is3DPageTurnAnimation() || !event || !event.fingerList || event.fingerList.length === 0) {
       return;
     }
     const localY = event.fingerList[0].localY;
     const height = this.getPageTurnHeight();
-    // 中部起手走竖直折线，上/下部起手走折角。
+    // 上/下部起手抓页角折过去；中部起手抓右边缘与手指同高处，折线随手指上下倾斜。
     if (localY < height / 3) {
       this.readerCurlStartRegion = ReaderEmulationFlipRegion.TOP;
     } else if (localY > height * 2 / 3) {
@@ -17285,6 +17325,15 @@ struct ReadBookPage {
     const distance = this.getPageTurnDistance();
     const targetOffset = direction > 0 ? -distance : distance;
     const remaining = Math.abs(targetOffset - this.getPageSlideAxisOffset());
+    if (this.is3DPageTurnAnimation() && !this.isLandscapeDoublePageActive()) {
+      // 单页平折：时长按折页还要走的可见行程算，整页约 400ms；曲线接近匀速、收尾略缓，
+      // 折线在后半程保持稳定的速度扫出左边缘，而不是先冲过大半程再停住。
+      const releasedFraction = this.readerEmulationFlipPainter.flatRemainingFraction(this.getPageTurnWidth());
+      const fraction = releasedFraction >= 0 ? releasedFraction : remaining / Math.max(1, distance);
+      const flatDuration = Math.max(180, Math.round(400 * Math.pow(Math.max(0, fraction), 0.6)));
+      await this.animateReaderPageCurlOffset(targetOffset, flatDuration, true, 'cubic-bezier(0.3, 0.4, 0.7, 1)');
+      return;
+    }
     // A long symmetric EaseInOut made the last part of the sheet appear to stop before the
     // incoming page was committed. Finish with a shorter, momentum-preserving edge motion.
     // 3D 仿真的纸角行程比位移长，同样的时长会显得一闪而过，给它更宽裕的补完时间。
@@ -17319,7 +17368,7 @@ struct ReadBookPage {
   }
 
   animateReaderPageCurlOffset(targetOffset: number, duration: number,
-    completingPageTurn: boolean = false): Promise<void> {
+    completingPageTurn: boolean = false, easing: string = ''): Promise<void> {
     const activeAnimator = this.readerPageCurlAnimator;
     this.readerPageCurlAnimator = null;
     if (activeAnimator) activeAnimator.cancel();
@@ -17338,8 +17387,8 @@ struct ReadBookPage {
       try {
         pageCurlAnimator = Animator.create({
           duration: Math.max(1, duration),
-          easing: completingPageTurn ? 'cubic-bezier(0.18, 0.68, 0.32, 0.98)' :
-            'cubic-bezier(0.65, 0, 0.35, 1)',
+          easing: easing ? easing : (completingPageTurn ? 'cubic-bezier(0.18, 0.68, 0.32, 0.98)' :
+            'cubic-bezier(0.65, 0, 0.35, 1)'),
           delay: 0,
           fill: 'forwards',
           direction: 'normal',
