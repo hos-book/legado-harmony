@@ -69,7 +69,7 @@ Node 检查使用替身，不会验证真机 QuickJS、系统网页控件或实�
 
 `WebBookService` 支持可信宿主通过 `SourceEngineHost.setReaderImagesDeferred(source, true)` 为单次阅读请求保留完整 ReaderImageMarker，先返回清单，再由宿主下载和处理各页。策略默认关闭，不属于书源字段；请求头、解码参数、原始 `imageIndex` 和尺寸都须传递到逐图管线，下载及导出保留默认完整物化行为。该接口的存在不代表轻页阅读器已经启用按需模式。
 
-简听 v0.1.67 已接入这一策略，图片总并发最多 6，后台预加载最多占 2 个名额，可见页优先；图片脚本保持逐张执行，队列总容量同步为 6。规则作者仍使用公共规范中的 `content.images` 和 `content.imageDecode`，无需为简听另写并发配置。
+按需模式的下载并发、后台预加载名额、可见页优先级和图片脚本队列由接入宿主实现，接入应用应在自己的文档中说明实际限制。规则作者仍使用公共规范中的 `content.images` 和 `content.imageDecode`，无需在书源 JSON 中声明宿主并发配置。
 
 ## 4.3.927 验收补充
 
