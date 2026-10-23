@@ -14,6 +14,7 @@ import { HdsFeedback } from '../utils/HdsFeedback';
 import { SystemDialogSession } from '../utils/SystemDialogSession';
 import { AppFontSize } from '../theme/AppFontSize';
 import { AppSpacing } from '../theme/AppSpacing';
+import { CollapsingHeader } from '../utils/CollapsingHeader';
 
 class CoverGalleryExportResult {
   zipPath: string = '';
@@ -23,6 +24,8 @@ class CoverGalleryExportResult {
 @Entry
 @Component
 struct CoverGalleryManagerPage {
+  @State headerCollapse: number = 0;
+  private headerScroller: Scroller = new Scroller();
   @StorageLink('bookshelfCoverAlbums') bookshelfCoverAlbums: string = '';
   @StorageLink('bookshelfLightCoverAlbumId') bookshelfLightCoverAlbumId: string = '';
   @StorageLink('bookshelfDarkCoverAlbumId') bookshelfDarkCoverAlbumId: string = '';
@@ -62,7 +65,7 @@ struct CoverGalleryManagerPage {
 
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
-      Scroll() {
+      Scroll(this.headerScroller) {
         Column() {
           Row()
             .height(56 + this.statusBarHeight)
@@ -84,8 +87,29 @@ struct CoverGalleryManagerPage {
       .width('100%')
       .height('100%')
       .backgroundColor(this.pageColor())
+      .onDidScroll((_xOffset: number, yOffset: number) => {
+        this.headerCollapse = CollapsingHeader.next(this.headerCollapse, yOffset,
+          this.headerScroller.currentOffset().yOffset);
+      })
+      .onScrollStop(() => {
+        const target = CollapsingHeader.settle(this.headerCollapse, this.headerScroller.currentOffset().yOffset);
+        if (target !== this.headerCollapse) {
+          animateTo({ duration: 200, curve: Curve.FastOutSlowIn }, () => {
+            this.headerCollapse = target;
+          });
+        }
+      })
 
-      this.titleBar()
+      // 顶栏随列表上滑跟手收起、下滑展开，与其他二级页面一致。
+      Column() {
+        this.titleBar()
+      }
+      .width('100%')
+      .height(56 + this.statusBarHeight - this.headerCollapse)
+      .backgroundColor(this.pageColor())
+      .clip(true)
+      .opacity(CollapsingHeader.contentOpacity(this.headerCollapse))
+      .hitTestBehavior(CollapsingHeader.acceptsTouch(this.headerCollapse) ? HitTestMode.Default : HitTestMode.None)
 
 
 
@@ -616,8 +640,6 @@ struct CoverGalleryManagerPage {
     .width('100%')
     .height(56 + this.statusBarHeight)
     .padding({ top: this.statusBarHeight })
-    .backgroundColor(ThemeRuntime.topBarColor(this.appDarkMode))
-    .backdropBlur(ThemeRuntime.topBarBlur())
     .alignItems(VerticalAlign.Center)
   }
 

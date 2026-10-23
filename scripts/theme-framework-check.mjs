@@ -57,7 +57,7 @@ const readerBackgroundComponent = read('entry/src/main/ets/components/ReaderThem
 const indexPage = read('entry/src/main/ets/pages/Index.ets') + '\n' +
   ['HomeTabShells', 'BookshelfPage', 'ExplorePage', 'SearchPage', 'SettingsTabPage']
     .map((name) => read(`entry/src/main/ets/components/home/${name}.ets`)).join('\n');
-const bookModel = read('sourceengine/src/main/ets/model/data/Book.ts');
+const bookModel = read('harmony-book-source-engine/sourceengine/src/main/ets/model/data/Book.ts');
 const themePage = read('entry/src/main/ets/pages/ThemeSettings.ets');
 const readerSettingsPage = read('entry/src/main/ets/pages/Settings.ets');
 const ttsSettingsPage = read('entry/src/main/ets/pages/TtsSettings.ets');
@@ -83,7 +83,7 @@ const pages = JSON.parse(read('entry/src/main/resources/base/profile/main_pages.
 
 const expectedThemes = [
   'classic-blue', 'warm-paper', 'forest-mist', 'ink-wash', 'neon-night', 'sword-frost',
-  'qingluan-water', 'cat-pipi', 'azure-mecha', 'starwish-magic', 'letterpress-page'
+  'qingluan-water', 'cat-pipi', 'azure-mecha', 'starwish-magic', 'letterpress-page', 'obsidian-archive'
 ];
 for (const themeId of expectedThemes) {
   assert(models.includes(`'${themeId}'`), `Theme id is missing from ThemeModels: ${themeId}`);
@@ -184,6 +184,9 @@ for (const fileName of themedIconFiles) {
   const source = fs.readFileSync(path.join(mediaRoot, fileName), 'utf8');
   assert(/viewBox="0 0 24 24"/.test(source), `Invalid themed icon viewBox: ${fileName}`);
   assert(!/(<script|<image|<use|href=|url\(|<filter)/i.test(source), `Unsafe SVG feature in ${fileName}`);
+  if (fileName.startsWith('ic_theme_obsidian_archive_')) {
+    assert(!/stroke=|fill="none"/.test(source), `Exclusive tab icon needs filled outlines for tinting: ${fileName}`);
+  }
 }
 
 const themeLogoFiles = fs.readdirSync(mediaRoot).filter(fileName => /^theme_logo_.*\.svg$/.test(fileName));
@@ -202,6 +205,15 @@ const swordFrostJpegs = [
   'theme_cover_sword_frost_05.jpg', 'theme_cover_sword_frost_06.jpg',
   'theme_folder_art_sword_frost.jpg'
 ];
+for (const fileName of ['theme_startup_obsidian_archive.jpg', 'theme_cover_obsidian_archive_01.jpg',
+  'theme_cover_obsidian_archive_02.jpg', 'theme_cover_obsidian_archive_03.jpg',
+  'theme_cover_obsidian_archive_04.jpg', 'theme_cover_obsidian_archive_05.jpg',
+  'theme_cover_obsidian_archive_06.jpg', 'theme_folder_art_obsidian_archive.jpg']) {
+  const dimensions = jpegDimensions(path.join(mediaRoot, fileName));
+  const expected = fileName.includes('startup') ? { width: 841, height: 1870 } : { width: 450, height: 660 };
+  assert(dimensions.width === expected.width && dimensions.height === expected.height,
+    `Invalid Obsidian artwork dimensions: ${fileName}`);
+}
 for (const fileName of swordFrostJpegs) {
   const filePath = path.join(mediaRoot, fileName);
   assert(fs.existsSync(filePath), `Sword Frost artwork is missing: ${fileName}`);
@@ -280,7 +292,7 @@ for (const fileName of catPipiSvgs) {
 }
 
 const bubbleStyles = ['qq-soft', 'qq-solid', 'capsule', 'paper', 'neon', 'sword-talisman', 'qingluan-jade',
-  'pipi-soft-paw', 'mecha-comm', 'starwish-ribbon', 'pencil-mark'];
+  'pipi-soft-paw', 'mecha-comm', 'starwish-ribbon', 'pencil-mark', 'gilded-orbit'];
 for (const styleId of bubbleStyles) {
   assert(models.includes(`'${styleId}'`), `Bubble style is missing from ThemeModels: ${styleId}`);
   assert(regexModel.includes(`'${styleId}'`), `Bubble resolver/codec is missing style: ${styleId}`);
@@ -304,8 +316,8 @@ assert(readerBackgroundComponent.includes('ThemeAssetRegistry.readerBackgroundDe
 assert(reader.includes('ReaderThemeBackground({') && reader.includes('customImageFit: this.getBackgroundImageFit()'),
   'Reader root surface does not draw the responsive theme background');
 assert(readerBackgroundComponent.includes('.objectFit(ImageFit.Contain)') &&
-  readerBackgroundComponent.includes('readerBackgroundBorderColor'),
-  'Builtin reader backgrounds must preserve ornament proportions and draw a responsive native border');
+  !readerBackgroundComponent.includes('.border('),
+  'Builtin reader backgrounds must preserve ornament proportions and draw no frame border');
 assert(indexPage.includes('ThemeRuntime.iconPackId()'), 'Floating tab bar does not resolve the active icon pack');
 for (const tabId of ['bookshelf', 'explore', 'search', 'mine']) {
   assert(indexPage.includes(`this.navigationIcon('${tabId}')`), `Floating tab icon is not themed: ${tabId}`);
@@ -315,18 +327,32 @@ assert(indexPage.includes('this.shelfSortButton()') &&
   indexPage.includes("this.sortDropdownItem('新阅读', 'recentRead')") &&
   !indexPage.includes("this.sortChip('新阅读', 'recentRead')"),
   'Bookshelf sorting must use a compact dropdown selector');
-assert(indexPage.includes('shelfScopeSegment()') &&
-  indexPage.includes('expandedShelfScopeSegment()') &&
-  indexPage.includes("this.scopeDropdownItem('网络', 'network')") &&
-  indexPage.includes("this.scopeDropdownItem('本地', 'local')") &&
-  !indexPage.includes("this.scopeChip('网络', 'network')"),
-  'Bookshelf network/local switch must use the compact dropdown selector');
+assert(indexPage.includes('this.shelfScopeTabs()') &&
+  indexPage.includes('this.shelfScopeTabIndicatorX()') &&
+  indexPage.includes("TYPE_TAB_IDS: string[] = ['all', 'text', 'image', 'audio', 'video']") &&
+  indexPage.includes('this.refreshShelfTypeTabs()') &&
+  indexPage.includes('this.switchShelfScopeBySelection(id)') &&
+  !indexPage.includes('expandedShelfScopeSegment()'),
+  'Bookshelf tabs must switch book types, hide empty types and keep the private shelf out of the bar');
+assert(indexPage.includes('this.shelfFilterButton()') &&
+  indexPage.includes("FILTER_SOURCE_KEYS: string[] = ['network', 'local']") &&
+  indexPage.includes("FILTER_STATUS_KEYS: string[] = ['finished', 'ongoing']") &&
+  indexPage.includes('this.matchesShelfFilters(book)'),
+  'Bookshelf filter must offer source and status conditions beside the layout button');
+assert(indexPage.includes('ImmersiveMaterialSurface({') &&
+  read('entry/src/main/ets/components/ImmersiveMaterialSurface.ets').includes('barFloatingStyle({'),
+  'Bookshelf header controls must sit on the HDS immersive material surface');
+assert(indexPage.includes('this.shelfMenuPopupOptions(') &&
+  indexPage.includes('ImmersiveMaterialRuntime.popupMenuOptions(') &&
+  !indexPage.includes('shelfSortFloatingMenu()') && !indexPage.includes('shelfGroupFloatingMenu()'),
+  'Bookshelf header dropdowns must use system popups with the immersive material');
 assert((indexPage.includes("this.actionItem('多选'") ||
   indexPage.includes("this.contextActionItem($r('sys.symbol.checkmark_circle'), '多选'")) &&
   indexPage.includes('this.bookMultiSelectBar()'),
   'Bookshelf multi-select entry and action bar must stay connected');
-assert(indexPage.includes("this.shelfGroupChip('未分组', -1)") && indexPage.includes("Text('＋')"),
-  'Bookshelf group bar must include ungrouped and add-group actions');
+assert(indexPage.includes('this.shelfGroupSwitcher()') &&
+  indexPage.includes("this.shelfGroupMenuItem('未分组', -1)") && indexPage.includes("Text('新建分组')"),
+  'Bookshelf group menu must include ungrouped and add-group actions');
 const settingsPageSource = indexPage.slice(indexPage.indexOf('struct SettingsPage'));
 assert(settingsPageSource.includes('.backgroundColor(this.pageColor())'),
   'Mine page background is not connected to the active theme');
@@ -376,11 +402,28 @@ assert(themeColorPage.includes('settings.themeId = ThemeIds.CUSTOM') &&
 assert(!otherSettingsPage.includes("router.pushUrl({ url: 'pages/ThemeColorSettings' })"),
   'Other settings still exposes the removed legacy theme-color entry');
 assert(themePage.includes('ReaderThemeHelper.APP_THEME_INDEX'), 'Theme selection does not enable the app reader theme');
-assert(themePage.includes('settings.fontFilePath'), 'Custom font override is not protected during theme selection');
-assert(themePage.includes('ThemeAssetRegistry.themeLogo(theme.id)') &&
+// Global fonts are preserved by the settings store when switching theme profiles.
+// The theme page delegates to that store and reapplies the selected application font.
+assert(themePage.includes('await ReaderSettingsStore.switchThemeProfile(') &&
+  themePage.includes('ReaderFontBootstrap.applyApplicationFont('),
+  'Theme selection must switch reader profiles and reapply the global application font');
+const switchThemeProfile = readerStore.match(/static async switchThemeProfile\b[\s\S]*?(?=\n  static async )/)?.[0] || '';
+const preserveFontsAt = switchThemeProfile.indexOf('ReaderSettingsStore.copyGlobalFontSettings(current, next)');
+assert(preserveFontsAt >= 0 &&
+  preserveFontsAt < switchThemeProfile.indexOf('ReaderSettingsStore.persistThemeProfile(store, nextId, next)') &&
+  preserveFontsAt < switchThemeProfile.indexOf('ReaderSettingsStore.applyToStorage(next)'),
+  'Theme profile switching must preserve global fonts before persisting or applying the next profile');
+const copyGlobalFontSettings = readerStore.match(/private static copyGlobalFontSettings\b[\s\S]*?(?=\n  private static )/)?.[0] || '';
+for (const field of ['fontFamily', 'fontFilePath', 'fontSourceName', 'fontMode', 'systemFontFamily', 'customFontsRaw']) {
+  assert(copyGlobalFontSettings.includes(`target.${field} = source.${field};`),
+    `Theme profile switching must preserve the global font setting: ${field}`);
+}
+assert(/if \(activeFamily && AppStorage\.get<boolean>\('readerFontRegistered'\)\)\s*\{\s*return activeFamily;/.test(fontBootstrap),
+  'A registered global font must take precedence over the theme application font');
+assert(themePage.includes('AppIconManager.optionById(this.appIconId).preview') &&
   !themePage.includes("Text('Aa')") &&
   !themePage.includes('颜色、阅读背景、正则气泡与悬浮底栏已统一'),
-  'Current theme summary must use the theme logo without the legacy description');
+  'Current theme summary must display the actual desktop icon without the legacy description');
 assert(runtime.includes('static accentSurfaceColor(darkMode: boolean)'),
   'Theme runtime does not expose a themed selected-surface color');
 assert(ttsSettingsPage.includes('? this.accentColor() : this.inputColor()') &&
@@ -394,10 +437,9 @@ for (const marginName of ['Left', 'Right', 'Top', 'Bottom']) {
     `Reader ${marginName.toLowerCase()} margin is not persisted or applied`);
 }
 assert(readerSettingsPage.includes('this.typographyStepper()') &&
-  readerSettingsPage.includes("{ value: '左边距' }") &&
-  readerSettingsPage.includes("{ value: '右边距' }") &&
-  readerSettingsPage.includes("{ value: '上边距' }") &&
-  readerSettingsPage.includes("{ value: '下边距' }") &&
+  readerSettingsPage.includes('Select(this.typographySettingOptions())') &&
+  readerSettingsPage.includes('return ReaderTypographyField.LABELS.map((label: string): SelectOption => ({ value: label }))') &&
+  readerLayoutSettings.includes("'左边距', '右边距', '上边距', '下边距'") &&
   readerSettingsPage.includes('adjustCurrentTypographySetting'),
   'Reader typography dropdown/stepper does not expose all four margins');
 assert(reader.includes('input.marginLeftPx = this.toMeasurePx(this.getEffectiveReaderMarginLeft())') &&
@@ -457,13 +499,22 @@ assert(bookSourcePage.includes('checkOptionsDialog()') &&
   bookSourcePage.includes('handleCheckedSourceCompletion') &&
   searchCoordinator.includes('await options.onSourceComplete'),
   'Book source validation must support immediate disable/delete actions per completed source');
-assert(indexPage.includes("TextInput({ placeholder: '输入书源关键词'") &&
-  indexPage.includes("Button('搜索')") &&
-  indexPage.includes('this.exploreSourceDropdown()') &&
+assert(indexPage.includes("TextInput({ placeholder: '搜索书源名称、地址或分组'") &&
+  indexPage.includes('this.exploreSourcePickerContent()') &&
   !indexPage.includes('builder: this.exploreSourcePopup') &&
   indexPage.includes('applyExploreSourceFilter') &&
   indexPage.includes('getFilteredExploreSourceOptions()'),
-  'Explore source dropdown must support keyword filtering from an explicit search button');
+  'Explore source picker must filter sources by keyword inside the immersive popup');
+assert(indexPage.includes('this.exploreChannelBar()') &&
+  indexPage.includes('this.explorePlatformMenuContent()') &&
+  indexPage.includes('this.exploreFilterPopupContent()') &&
+  !indexPage.includes('compactExploreFilterBar()') && !indexPage.includes('inlineExploreFilterRow('),
+  'Explore header must stay at a title row plus one channel bar, with modes and filters in popups');
+assert(indexPage.includes('this.searchScopeLabel()') &&
+  indexPage.includes('this.searchSettingsContent()') &&
+  indexPage.includes('this.searchIdleContent()') &&
+  !indexPage.includes('searchSettingsDialog()'),
+  'Search header must use the title row scope label, a settings popup and inline search history');
 assert(!themePage.includes("'衬线字体'") && !themePage.includes("'清晰字体'") &&
   !themePage.includes("'水墨图标'") && !themePage.includes("'主题图标'") &&
   !themePage.includes('themeFeatureChips') && !themePage.includes('featureChip(') &&
@@ -479,7 +530,7 @@ const desktopThemeIcons = [
 ];
 for (const iconName of desktopThemeIcons) {
   const fileName = `ic_app_theme_${iconName}.png`;
-  const filePath = path.join(mediaRoot, fileName);
+  const filePath = path.join(root, 'AppScope/resources/base/media', fileName);
   assert(fs.existsSync(filePath), `Theme desktop icon is missing: ${fileName}`);
   const png = fs.readFileSync(filePath);
   assert(png.length < 500 * 1024, `Theme desktop icon exceeds 500 KB: ${fileName}`);

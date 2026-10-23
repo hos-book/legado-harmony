@@ -9,6 +9,7 @@ import { ThemeStartupCover } from '../components/ThemeStartupCover';
 import { ThemeIds } from '../theme/ThemeModels';
 import { AppThemeSettingsStore } from '../utils/AppThemeSettingsStore';
 import { HdsFeedback } from '../utils/HdsFeedback';
+import { CloudAutoSync } from '../account/CloudAutoSync';
 
 @Entry
 @Component
@@ -130,6 +131,7 @@ struct StartupPage {
     }
     try {
       const book = await LocalBookService.importExternalBook(getContext(this), uri, format, sourceName);
+      CloudAutoSync.schedule(getContext(this), 5000);
       const opened = await RecentReadShortcut.openBook(book.bookUrl, true);
       if (!opened) await this.replaceToIndex();
     } catch (e) {

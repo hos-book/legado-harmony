@@ -1,6 +1,6 @@
 {
   "name": "entry",
-  "version": "4.0.919",
+  "version": "4.3.927",
   "description": "开源轻页主模块",
   "main": "Index.ets",
   "author": "李其健",
@@ -8,7 +8,7 @@
   "repository": "https://github.com/wip3l/legado-harmony.git",
   "license": "GPL-3.0",
   "dependencies": {
-    "@devzeng/quickjs": "file:../quickjs",
-    "@legado/sourceengine": "file:../sourceengine"
+    "@devzeng/quickjs": "file:../harmony-book-source-engine/quickjs",
+    "@legado/sourceengine": "file:../harmony-book-source-engine/sourceengine"
   }
 }

@@ -1,6 +1,6 @@
 import { AbilityConstant, UIAbility, Want, Configuration, ConfigurationConstant } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { window } from '@kit.ArkUI';
+import { UIContext, window } from '@kit.ArkUI';
 import { RecentReadShortcut, RECENT_READ_SHORTCUT_ACTION, OPEN_BOOK_SHORTCUT_ACTION } from '../utils/RecentReadShortcut';
 import { CoverGalleryStore } from '../utils/CoverGalleryStore';
 import { BookshelfDisplaySettingsStore } from '../utils/BookshelfDisplaySettingsStore';
@@ -10,6 +10,7 @@ import { AppThemeSettingsStore } from '../utils/AppThemeSettingsStore';
 import { GlassSettingsStore } from '../utils/GlassSettingsStore';
 import { AppThemeModeStore } from '../utils/AppThemeModeStore';
 import { AppIconSettingsStore } from '../utils/AppIconSettingsStore';
+import { AppIconManager } from '../utils/AppIconManager';
 import { ReaderFontBootstrap } from '../utils/ReaderFontBootstrap';
 import { ReaderSystemFontHelper } from '../utils/ReaderSystemFontHelper';
 import { TtsSettingsStore } from '../utils/TtsSettingsStore';
@@ -18,12 +19,15 @@ import { ThemeRuntime } from '../theme/ThemeRuntime';
 import { ThemeIds } from '../theme/ThemeModels';
 import { ThemeTrialManager } from '../utils/ThemeTrialManager';
 import { AccountSessionStore } from '../account/AccountSessionStore';
+import { MembershipThemeGuard } from '../account/MembershipThemeGuard';
 import { HuaweiAccountService } from '../account/HuaweiAccountService';
 import { CloudSyncSettingsStore } from '../account/CloudSyncSettingsStore';
 import { CloudSyncCoordinator } from '../account/CloudSyncCoordinator';
 import { CloudSyncChangeTracker } from '../account/CloudSyncChangeTracker';
 import { StartupCoverTextStore } from '../utils/StartupCoverTextStore';
-import { BookSourceRuntimeStore, TlsTrustStore } from '@legado/sourceengine';
+import { BookSourceRuntimeStore, NativeSourceInteraction, SourceScriptNotice, TlsTrustStore } from '@legado/sourceengine';
+import { AppSourceInteraction } from '../utils/AppSourceInteraction';
+import { HdsFeedback } from '../utils/HdsFeedback';
 import { QuickJsDiagnostics } from '@legado/sourceengine/Diagnostics';
 import { AppDatabase } from '../model/data/AppDatabase';
 import fs from '@ohos.file.fs';
@@ -32,6 +36,7 @@ import { FullTextCacheCancelCoordinator } from '../utils/FullTextCacheCancelCoor
 import { lanReaderServer } from '../core/lan/LanReaderServer';
 import { LanReaderPasswordStore } from '../core/lan/LanReaderPasswordStore';
 import { readStatsTracker } from '../core/stats/ReadStatsTracker';
+import { CloudAutoSync } from '../account/CloudAutoSync';
 
 export default class EntryAbility extends UIAbility {
   private appliedColorMode: number = -1;
@@ -39,8 +44,11 @@ export default class EntryAbility extends UIAbility {
   private themeBootstrapPromise: Promise<void> = Promise.resolve();
   private readerBootstrapPromise: Promise<void> = Promise.resolve();
   private accountBootstrapPromise: Promise<void> = Promise.resolve();
+  private membershipThemeTimer: number = -1;
   private deferredStartupScheduled: boolean = false;
   private mainWindowStage: window.WindowStage | null = null;
+  // 系统全局字体的 ID，后台换了手机字体后回到前台靠它发现变化。
+  private systemFontId: string = '';
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(0x0000, 'testTag', '%{public}s', 'Ability onCreate');
@@ -66,6 +74,11 @@ export default class EntryAbility extends UIAbility {
     CloudSyncChangeTracker.initializeStorage();
     readStatsTracker.init(this.context);
     BookSourceRuntimeStore.install(AppDatabase.getInstance());
+    SourceScriptNotice.setHandler((sourceName: string, message: string): void => {
+      HdsFeedback.showToast(sourceName ? `${sourceName}：${message}` : message);
+    });
+    // 原生书源脚本的提示、刷新发现页、打开网页。
+    NativeSourceInteraction.setHandler(new AppSourceInteraction(this.context));
     TlsTrustStore.load(this.context).catch((e: Error) => {
       hilog.warn(0x0000, 'testTag', 'Load TLS trust settings failed: %{public}s', JSON.stringify(e));
     });
@@ -81,6 +94,8 @@ export default class EntryAbility extends UIAbility {
     AppStorage.setOrCreate('readerSystemFontFamily', ReaderSystemFontHelper.FALLBACK_SYSTEM_FONT_FAMILY);
     AppStorage.setOrCreate('readerActiveFontFamily', '');
     AppStorage.setOrCreate('readerFontRegistered', false);
+    AppStorage.setOrCreate('systemFontRevision', 0);
+    this.systemFontId = this.context.config.fontId || '';
     PersistentStorage.persistProp('readerPageTurnMode', 1);
     PersistentStorage.persistProp('readerPreloadEnabled', true);
     PersistentStorage.persistProp('readerPreloadChapterCount', 1);
@@ -150,6 +165,7 @@ export default class EntryAbility extends UIAbility {
     PersistentStorage.persistProp('bookshelfShowLastReadChapter', false);
     PersistentStorage.persistProp('bookshelfLayoutMode', 'compact');
     PersistentStorage.persistProp('bookshelfLastReadLeafMode', 'adaptive');
+    PersistentStorage.persistProp('bookshelfLastReadPinMode', 'medium');
     PersistentStorage.persistProp('bookshelfBookOpenAnimation', true);
     PersistentStorage.persistProp('bookshelfCoverAlbums', '');
     PersistentStorage.persistProp('bookshelfLightCoverAlbumId', '');
@@ -159,10 +175,13 @@ export default class EntryAbility extends UIAbility {
     PersistentStorage.persistProp('bookshelfIgnoreSourceCover', false);
     PersistentStorage.persistProp('bookshelfCoverMode', 'sequence');
     PersistentStorage.persistProp('searchExploreShowResultCover', true);
+    PersistentStorage.persistProp('searchExploreShowResultCoverBackground', true);
     PersistentStorage.persistProp('searchExploreUseBookshelfCoverGallery', false);
     PersistentStorage.persistProp('searchExploreShowResultTags', true);
     PersistentStorage.persistProp('searchExploreAggregateResults', true);
     PersistentStorage.persistProp('searchResultCategory', 'all');
+    PersistentStorage.persistProp('searchResultLayout', 'list');
+    PersistentStorage.persistProp('exploreResultLayout', 'list');
     PersistentStorage.persistProp('searchExplorePromptAddToShelfOnBack', true);
     PersistentStorage.persistProp('searchExploreExactSearch', false);
     PersistentStorage.persistProp('searchExploreExactSearchMatchAuthor', true);
@@ -221,9 +240,21 @@ export default class EntryAbility extends UIAbility {
     });
     // Theme and glass affect the first frame, but they are independent and can be restored in parallel.
     this.themeBootstrapPromise = Promise.all([appThemePromise, glassPromise]).then(() => {});
-    // Reader preferences and custom font registration are not needed to paint Index/Startup. Keep their I/O warm,
-    // but do not make the first application content wait for them.
-    this.readerBootstrapPromise = ReaderSettingsStore.load(this.context).then((settings) => {
+    Promise.all([this.themeBootstrapPromise, this.accountBootstrapPromise]).then(() => {
+      this.membershipThemeTimer = setInterval(() => {
+        MembershipThemeGuard.refresh(this.context).catch((error: Error) => console.warn('主题权益检查失败', error.message));
+      }, 60000);
+      return MembershipThemeGuard.refresh(this.context);
+    }).then(() => {
+      // Font and local-book cloud sync waits for the account and stays out of the first frames.
+      CloudAutoSync.schedule(this.context, 8000);
+    }).catch((error: Error) => console.warn('主题权益初始化检查失败', error.message));
+    // Reader preferences and custom font registration are not needed to paint Index/Startup, so the first
+    // content does not wait for them. They do wait for the theme: reader settings are kept per theme, and
+    // loading before appThemeId is restored would read the default theme's copy (including its global font).
+    this.readerBootstrapPromise = appThemePromise.then(() => {
+      return ReaderSettingsStore.load(this.context);
+    }).then((settings) => {
       ReaderSettingsStore.applyToStorage(settings);
       if (AppStorage.get<boolean>('lanReaderEnabled')) {
         return lanReaderServer.start(this.context);
@@ -234,6 +265,7 @@ export default class EntryAbility extends UIAbility {
     });
     AppIconSettingsStore.load(this.context).then((settings) => {
       AppIconSettingsStore.applyToStorage(settings);
+      return AppIconManager.syncCurrentIcon(this.context);
     }).catch((e: Error) => {
       hilog.warn(0x0000, 'testTag', 'Sync app icon settings failed: %{public}s', JSON.stringify(e));
     });
@@ -241,6 +273,7 @@ export default class EntryAbility extends UIAbility {
   }
 
   onDestroy(): void {
+    if (this.membershipThemeTimer >= 0) clearInterval(this.membershipThemeTimer);
     lanReaderServer.stop().catch(() => undefined);
     readStatsTracker.flush();
     hilog.info(0x0000, 'testTag', '%{public}s', 'Ability onDestroy');
@@ -289,13 +322,27 @@ export default class EntryAbility extends UIAbility {
       QuickJsDiagnostics.initialize(this.context).catch((error: Error) => {
         hilog.warn(0x0000, 'QuickJS', 'Migration initialization failed: %{public}s', error.message);
       });
+      // ReaderFontHelper only counts a font as registered when the UIContext registration succeeds, so a null
+      // context here always fell back to the theme font when Index (not Startup) was the first page.
       this.readerBootstrapPromise
         .then(() => ReaderFontBootstrap.registerFromSettings(
-          this.context, null, 'ability-after-first-content'))
+          this.context, this.mainUIContext(), 'ability-after-first-content'))
         .catch((e: Error) => {
           hilog.warn(0x0000, 'testTag', 'Deferred reader bootstrap failed: %{public}s', JSON.stringify(e));
         });
     }, 80);
+  }
+
+  private mainUIContext(): UIContext | null {
+    if (!this.mainWindowStage) {
+      return null;
+    }
+    try {
+      return this.mainWindowStage.getMainWindowSync().getUIContext();
+    } catch (e) {
+      hilog.warn(0x0000, 'testTag', 'Get main UIContext failed: %{public}s', JSON.stringify(e));
+      return null;
+    }
   }
 
   onWindowStageDestroy(): void {
@@ -314,12 +361,16 @@ export default class EntryAbility extends UIAbility {
     }
     ThemeTrialManager.stopIfExpired();
     this.syncSystemColorMode(this.context.config);
+    this.syncSystemFont(this.context.config, 'foreground');
     this.accountBootstrapPromise
       .then(() => HuaweiAccountService.renewSession(this.context))
+      .then(() => MembershipThemeGuard.refresh(this.context))
       .catch((e: Error) => {
         hilog.warn(0x0000, 'testTag', 'Renew account session failed: %{public}s', JSON.stringify(e));
       })
       .finally(() => {
+        // A failed renewal must not skip the file sync; it checks login and membership itself.
+        CloudAutoSync.schedule(this.context, 5000);
         setTimeout(() => {
           CloudSyncCoordinator.syncAutomatically(
             this.context, CloudSyncCoordinator.TRIGGER_FOREGROUND).catch((e: Error) => {
@@ -374,6 +425,28 @@ export default class EntryAbility extends UIAbility {
 
   onConfigurationUpdate(newConfig: Configuration): void {
     this.syncSystemColorMode(newConfig);
+    this.syncSystemFont(newConfig, 'configuration-update');
+  }
+
+  private syncSystemFont(config: Configuration, source: string): void {
+    const fontId = config.fontId || '';
+    if (!fontId || fontId === this.systemFontId) {
+      return;
+    }
+    const known = !!this.systemFontId;
+    this.systemFontId = fontId;
+    if (!known) {
+      return;
+    }
+    // 等阅读设置载入后再处理，回写的系统字体名才不会被启动流程用旧值盖掉。
+    // 回调先于 ArkUI 收到这次配置变化（日志里相差约 30ms），延后一点，等它装好新的主题字体再清缓存、重排。
+    this.readerBootstrapPromise.then(() => {
+      setTimeout(() => {
+        ReaderFontBootstrap.onSystemFontChanged(this.context, this.mainUIContext(), source);
+      }, 500);
+    }).catch((e: Error) => {
+      hilog.warn(0x0000, 'testTag', 'Sync system font failed: %{public}s', JSON.stringify(e));
+    });
   }
 
   private syncSystemColorMode(config: Configuration): void {
@@ -412,11 +485,7 @@ export default class EntryAbility extends UIAbility {
     }
     this.modeDependentThemeKey = themeKey;
     AppThemeSettingsStore.reapplyCustomForMode(darkMode);
-    try {
-      this.context.getApplicationContext().setFont(ThemeRuntime.fontFamily());
-    } catch (e) {
-      hilog.warn(0x0000, 'testTag', 'Apply mode-dependent theme font failed: %{public}s', JSON.stringify(e));
-    }
+    ReaderFontBootstrap.applyApplicationFont(this.context, 'mode-dependent-theme');
   }
 
   private setApplicationColorMode(colorMode: number): void {

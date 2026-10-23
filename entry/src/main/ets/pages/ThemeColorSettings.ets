@@ -223,6 +223,10 @@ struct ThemeColorSettingsPage {
 
   async setComponentSource(category: string, themeId: string): Promise<void> {
     if (!themeId) return;
+    if (themeId === ThemeIds.OBSIDIAN_ARCHIVE && !AccountSessionStore.hasOwnedEntitlement(themeId)) {
+      this.refreshAvailableThemes();
+      return;
+    }
     try {
       const settings = this.settingsFromState();
       const dark = this.selectedMode === 'dark';
@@ -430,6 +434,7 @@ struct ThemeColorSettingsPage {
     const available: ThemePack[] = [];
     const trialThemeId = AppStorage.get<string>('themeTrialThemeId') || '';
     for (const theme of themes) {
+      if (theme.id === ThemeIds.OBSIDIAN_ARCHIVE && !AccountSessionStore.hasOwnedEntitlement(theme.id)) continue;
       if (BuiltinThemeRegistry.isFree(theme.id) ||
         (theme.id === this.appThemeId && theme.id !== trialThemeId) ||
         AccountSessionStore.hasValidEntitlement(theme.id)) {

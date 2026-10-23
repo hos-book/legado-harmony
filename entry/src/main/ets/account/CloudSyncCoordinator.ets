@@ -16,6 +16,7 @@ import {
   CloudSyncOperation
 } from './CloudSyncModels';
 import { CloudSyncSettings, CloudSyncSettingsStore } from './CloudSyncSettingsStore';
+import { CloudSyncIssue, CloudSyncIssueStore } from './CloudSyncIssueStore';
 import { CloudSyncChangeSnapshot, CloudSyncChangeTracker } from './CloudSyncChangeTracker';
 import {
   CloudSyncEntityState,
@@ -24,7 +25,8 @@ import {
 } from './CloudSyncStateStore';
 import { AppDatabase } from '../model/data/AppDatabase';
 import { Book, BookGroup, BookInfoRule, BookListRule, BookSource, Bookmark, ContentRule, ExploreRule, ReadConfig, SearchRule, TocRule } from '@legado/sourceengine';
-import { ReaderSettings, ReaderSettingsStore } from '../utils/ReaderSettingsStore';
+import { ReaderSettingsStore } from '../utils/ReaderSettingsStore';
+import { ReaderPreferencesSync, ReaderPreferencesSyncPayload } from './ReaderPreferencesSync';
 import {
   ReaderReplaceRule,
   ReaderReplaceRuleStore
@@ -147,6 +149,7 @@ class AppearanceModeSyncPayload {
 
 class SearchPreferencesSyncPayload {
   showResultCover: boolean = true;
+  showResultCoverBackground: boolean = true;
   useBookshelfCoverGallery: boolean = false;
   showResultTags: boolean = true;
   aggregateSearchResults: boolean = true;
@@ -166,9 +169,13 @@ class LocalSyncEntity {
   payloadJson: string = '';
   contentHash: string = '';
   localKey: string = '';
+  /** 给用户看的名称（书源名、书名等），只用于同步问题记录。 */
+  label: string = '';
 }
 
 export class CloudSyncRunResult {
+  skipped: number = 0;
+  warning: string = '';
   uploaded: number = 0;
   downloaded: number = 0;
   conflicts: number = 0;
@@ -192,10 +199,7 @@ export class CloudSyncCoordinator {
   private static readonly MAX_RATE_LIMIT_RETRIES: number = 3;
   private static protectedLocalBooksDuringSync: number = 0;
   private static protectedLocalBookEntityIdsDuringSync: Set<string> = new Set<string>();
-  // Older reader_settings payloads predate eye-turn support. Keep track of a
-  // compatibility merge so the normalized payload is uploaded after the
-  // current remote-apply transaction finishes instead of silently resetting
-  // the device and leaving the cloud object on the old schema forever.
+  // 将旧版完整阅读设置回填为仅含字体规则和主题的同步数据。
   private static readerSettingsBackfillPending: boolean = false;
 
   static async syncNow(context: Context, conflictPolicy: string = 'cloud'): Promise<CloudSyncRunResult> {
@@ -308,6 +312,7 @@ export class CloudSyncCoordinator {
     const changeSnapshot: CloudSyncChangeSnapshot = CloudSyncChangeTracker.snapshot();
 
     const result = new CloudSyncRunResult();
+    const issues: CloudSyncIssue[] = [];
     CloudSyncCoordinator.protectedLocalBooksDuringSync = 0;
     CloudSyncCoordinator.protectedLocalBookEntityIdsDuringSync.clear();
     CloudSyncCoordinator.readerSettingsBackfillPending = false;
@@ -316,12 +321,15 @@ export class CloudSyncCoordinator {
     await CloudSyncSettingsStore.saveRuntimeState(context, userId, settings.status,
       settings.lastSuccessAt, settings.pendingCount, settings.errorMessage);
 
+    // Kept outside the try so a whole-request rejection can name the items it was about.
+    let localEntities: LocalSyncEntity[] = [];
+    let batch: CloudSyncOperation[] = [];
     try {
       const db = AppDatabase.getInstance();
       await db.initWithContext(context);
       const deviceId = await CloudSyncStateStore.deviceId(context);
       const state = await CloudSyncStateStore.load(context, userId);
-      const localEntities = (await CloudSyncCoordinator.buildLocalEntities(context, db, settings))
+      localEntities = (await CloudSyncCoordinator.buildLocalEntities(context, db, settings))
         .filter((entity: LocalSyncEntity) =>
           CloudSyncCoordinator.scopeAllows(settings, entity.entityType));
       const operations = CloudSyncCoordinator.buildOperations(localEntities, state, settings);
@@ -337,13 +345,20 @@ export class CloudSyncCoordinator {
         if (exchangePages > CloudSyncCoordinator.MAX_EXCHANGE_PAGES) {
           throw new Error('同步分页次数异常，请稍后重试');
         }
-        const batch = CloudSyncCoordinator.takeOperationBatch(remaining);
+        batch = CloudSyncCoordinator.takeOperationBatch(remaining);
         const cursorBeforeExchange = state.cursor;
         const request = await CloudSyncCoordinator.exchangeRequest(
           context, deviceId, state.cursor, batch, conflictPolicy);
         const response = await CloudSyncCoordinator.exchangeSyncWithRetry(request);
         CloudSyncCoordinator.validateResponse(response);
         const operationMap = CloudSyncCoordinator.operationEntityMap(batch, localEntities);
+        for (const ack of response.acknowledgements || []) {
+          if (ack.error) {
+            result.skipped++;
+            result.warning = ack.error.message;
+            issues.push(CloudSyncCoordinator.rejectionIssue(ack, operationMap[ack.opId]));
+          }
+        }
         CloudSyncChangeTracker.beginRemoteApply();
         try {
           result.conflicts += await CloudSyncCoordinator.applyAcknowledgements(
@@ -379,12 +394,13 @@ export class CloudSyncCoordinator {
         }
       }
 
-      settings.status = CloudSyncSettingsStore.STATUS_SYNCED;
+      settings.status = result.skipped > 0 ? CloudSyncSettingsStore.STATUS_ERROR : CloudSyncSettingsStore.STATUS_SYNCED;
       settings.lastSuccessAt = Date.now();
-      settings.pendingCount = 0;
-      settings.errorMessage = '';
+      settings.pendingCount = result.skipped;
+      settings.errorMessage = result.skipped > 1 ? `${result.skipped} 项未能上传，详见同步问题` : result.warning;
       await CloudSyncSettingsStore.saveRuntimeState(context, userId, settings.status,
         settings.lastSuccessAt, settings.pendingCount, settings.errorMessage);
+      await CloudSyncCoordinator.recordIssues(context, userId, issues);
       CloudSyncChangeTracker.markSynced(changeSnapshot);
       if (result.downloaded > 0) {
         AppStorage.setOrCreate('shelfUpdateTime', Date.now());
@@ -395,7 +411,18 @@ export class CloudSyncCoordinator {
       settings.errorMessage = error instanceof Error ? error.message : String(error);
       await CloudSyncSettingsStore.saveRuntimeState(context, userId, settings.status,
         settings.lastSuccessAt, settings.pendingCount, settings.errorMessage);
-      throw new Error(settings.errorMessage || '同步失败');
+      // Items rejected on earlier pages are still worth reporting alongside the failure itself.
+      const message = settings.errorMessage || '同步失败';
+      issues.push(CloudSyncIssueStore.create(CloudSyncIssueStore.KIND_SYNC, `sync:${message}`, '同步失败', message));
+      if (error instanceof AccountApiError && error.errorCode === 'SYNC_PAYLOAD_TOO_LARGE') {
+        issues.push(...CloudSyncCoordinator.oversizedIssues(message, batch, localEntities));
+      } else if (error instanceof AccountApiError && error.errorCode === 'REQUEST_TOO_LARGE') {
+        // The route's body limit fires before the per-item check, and its generic message
+        // speaks of files. Batches stay well under that limit unless a single item is oversized.
+        issues.push(...CloudSyncCoordinator.oversizedIssues('超过了同步请求的大小上限', batch, localEntities));
+      }
+      await CloudSyncCoordinator.recordIssues(context, userId, issues);
+      throw new Error(message);
     } finally {
       // A protected tombstone can arrive on a later exchange page. Retain the entity identities
       // until every page in this run has been applied, then avoid leaking them into the next run.
@@ -470,6 +497,7 @@ export class CloudSyncCoordinator {
         'book_group',
         CloudSyncCoordinator.identity('group', group.groupName),
         payload,
+        group.groupName,
         group.groupName
       ));
     }
@@ -509,7 +537,7 @@ export class CloudSyncCoordinator {
       shelf.originOrder = book.originOrder;
       shelf.readConfig = book.readConfig;
       shelf.shelfModifiedTime = book.shelfModifiedTime;
-      result.push(CloudSyncCoordinator.entity('bookshelf_item', bookId, shelf, book.bookUrl));
+      result.push(CloudSyncCoordinator.entity('bookshelf_item', bookId, shelf, book.bookUrl, book.name));
 
       const progress = new ReadingProgressSyncPayload();
       progress.bookUrl = book.bookUrl;
@@ -518,14 +546,15 @@ export class CloudSyncCoordinator {
       progress.chapterIndex = book.durChapterIndex;
       progress.chapterPos = book.durChapterPos;
       progress.updatedAt = book.durChapterTime;
-      result.push(CloudSyncCoordinator.entity('reading_progress', bookId, progress, book.bookUrl));
+      result.push(CloudSyncCoordinator.entity('reading_progress', bookId, progress, book.bookUrl, book.name));
     }
 
     // Local files are deliberately never uploaded. Publish only a compact
     // progress snapshot keyed by a content fingerprint so another device that
     // has imported the same edition can apply it.
+    // Cloud placeholders (super-member book sync, not downloaded yet) carry no reading position of their own.
     const localBooks = allBooks.filter((book: Book) =>
-      book.origin === 'local' && !book.pendingAddToShelf);
+      book.origin === 'local' && !book.pendingAddToShelf && book.getVariable('cloudPlaceholder') !== '1');
     for (const book of localBooks) {
       const hadContentHash = book.getVariable(LocalBookService.LOCAL_CONTENT_HASH_KEY).trim().length > 0;
       const contentHash = await LocalBookService.ensureContentHash(book);
@@ -544,7 +573,7 @@ export class CloudSyncCoordinator {
       progress.chapterPos = book.durChapterPos;
       progress.updatedAt = book.durChapterTime;
       result.push(CloudSyncCoordinator.entity(
-        'reading_progress', localBookId, progress, `local:${contentHash}`));
+        'reading_progress', localBookId, progress, `local:${contentHash}`, book.name));
     }
 
     const bookmarks = await db.getAllBookmarks();
@@ -568,7 +597,8 @@ export class CloudSyncCoordinator {
         'bookmark',
         CloudSyncCoordinator.identity('bookmark', bookmarkKey),
         payload,
-        bookmarkKey
+        bookmarkKey,
+        `${bookmark.bookName} · ${bookmark.chapterName}`
       ));
     }
 
@@ -580,33 +610,26 @@ export class CloudSyncCoordinator {
           'book_source',
           CloudSyncCoordinator.identity('source', source.bookSourceUrl),
           payload,
-          source.bookSourceUrl
+          source.bookSourceUrl,
+          source.bookSourceName
         ));
       }
     }
 
     const readerSettings = await ReaderSettingsStore.load(context);
-    const safeReaderSettings = JSON.parse(JSON.stringify(readerSettings)) as ReaderSettings;
-    // Global font selection and the local font catalog are device-local. Keep
-    // these fields deterministic so changing the global font neither uploads a
-    // new reader-settings revision nor changes another device's selection.
-    safeReaderSettings.fontFamily = '';
-    safeReaderSettings.fontFilePath = '';
-    safeReaderSettings.fontSourceName = '系统默认';
-    safeReaderSettings.fontMode = 'system';
-    safeReaderSettings.systemFontFamily = '';
-    safeReaderSettings.customFontsRaw = '';
+    const safeReaderSettings = ReaderPreferencesSync.toPayload(readerSettings);
     result.push(CloudSyncCoordinator.entity(
       'reader_settings', 'global', safeReaderSettings, 'global'));
 
     const replaceRules = await ReaderReplaceRuleStore.load(context);
     for (const rule of replaceRules) {
       result.push(CloudSyncCoordinator.entity(
-        'replace_rule', `rule_${Math.max(0, Math.floor(rule.id))}`, rule, String(rule.id)));
+        'replace_rule', `rule_${Math.max(0, Math.floor(rule.id))}`, rule, String(rule.id), rule.name));
     }
 
     const themeSettings = await AppThemeSettingsStore.load(context);
     const safeThemeSettings = JSON.parse(JSON.stringify(themeSettings)) as AppThemeSettings;
+    safeThemeSettings.themeApplyLayoutEnabled = false;
     safeThemeSettings.customLightReaderBackgroundAssetId = '';
     safeThemeSettings.customDarkReaderBackgroundAssetId = '';
     safeThemeSettings.customLightStartupImagePath = '';
@@ -626,6 +649,7 @@ export class CloudSyncCoordinator {
     const searchSettings = await SearchExploreSettingsStore.load(context);
     const searchPreferences = new SearchPreferencesSyncPayload();
     searchPreferences.showResultCover = searchSettings.showResultCover;
+    searchPreferences.showResultCoverBackground = searchSettings.showResultCoverBackground;
     searchPreferences.useBookshelfCoverGallery = searchSettings.useBookshelfCoverGallery;
     searchPreferences.showResultTags = searchSettings.showResultTags;
     searchPreferences.aggregateSearchResults = searchSettings.aggregateSearchResults;
@@ -640,6 +664,7 @@ export class CloudSyncCoordinator {
     const schemesPayload = new CustomThemeSchemesSyncPayload();
     schemesPayload.schemes = themeSchemes.map((scheme: CustomThemeScheme) => {
       const safeScheme = JSON.parse(JSON.stringify(scheme)) as CustomThemeScheme;
+      safeScheme.settings.themeApplyLayoutEnabled = false;
       safeScheme.settings.customLightReaderBackgroundAssetId = '';
       safeScheme.settings.customDarkReaderBackgroundAssetId = '';
       safeScheme.settings.customLightStartupImagePath = '';
@@ -804,6 +829,7 @@ export class CloudSyncCoordinator {
   ): Promise<number> {
     let conflicts = 0;
     for (const ack of acknowledgements) {
+      if (ack.error) continue; // A quota rejection is not a remote conflict; preserve local data.
       const local = operationMap[ack.opId];
       if (!local) {
         continue;
@@ -953,59 +979,18 @@ export class CloudSyncCoordinator {
       entityState.localKey = source.bookSourceUrl;
       CloudSyncCoordinator.notifyBookSourcesChanged();
     } else if (entityType === 'reader_settings') {
-      const readerSettings = JSON.parse(raw) as ReaderSettings;
-      // Global font settings are device-local and deliberately excluded from
-      // sync. Always restore them from this device before saving the remaining
-      // remote reader preferences.
-      const localReaderSettings = await ReaderSettingsStore.load(context);
-      readerSettings.fontFamily = localReaderSettings.fontFamily;
-      readerSettings.fontFilePath = localReaderSettings.fontFilePath;
-      readerSettings.fontSourceName = localReaderSettings.fontSourceName;
-      readerSettings.fontMode = localReaderSettings.fontMode;
-      readerSettings.systemFontFamily = localReaderSettings.systemFontFamily;
-      readerSettings.customFontsRaw = localReaderSettings.customFontsRaw;
-      let needsEyeTurnBackfill = false;
-      if (typeof readerSettings.eyeTurnEnabled !== 'boolean') {
-        readerSettings.eyeTurnEnabled = localReaderSettings.eyeTurnEnabled;
-        needsEyeTurnBackfill = true;
-      }
-      if (typeof readerSettings.eyeTurnPortraitCalibration !== 'string') {
-        readerSettings.eyeTurnPortraitCalibration = localReaderSettings.eyeTurnPortraitCalibration;
-        needsEyeTurnBackfill = true;
-      }
-      if (typeof readerSettings.eyeTurnLandscapeCalibration !== 'string') {
-        readerSettings.eyeTurnLandscapeCalibration = localReaderSettings.eyeTurnLandscapeCalibration;
-        needsEyeTurnBackfill = true;
-      }
-      if (typeof readerSettings.eyeTurnPreviousEnabled !== 'boolean') {
-        readerSettings.eyeTurnPreviousEnabled = localReaderSettings.eyeTurnPreviousEnabled;
-        needsEyeTurnBackfill = true;
-      }
-      if (typeof readerSettings.eyeTurnNextEnabled !== 'boolean') {
-        readerSettings.eyeTurnNextEnabled = localReaderSettings.eyeTurnNextEnabled;
-        needsEyeTurnBackfill = true;
-      }
-      if (typeof readerSettings.eyeTurnPreviousDwellMs !== 'number') {
-        readerSettings.eyeTurnPreviousDwellMs = localReaderSettings.eyeTurnPreviousDwellMs;
-        needsEyeTurnBackfill = true;
-      }
-      if (typeof readerSettings.eyeTurnNextDwellMs !== 'number') {
-        readerSettings.eyeTurnNextDwellMs = localReaderSettings.eyeTurnNextDwellMs;
-        needsEyeTurnBackfill = true;
-      }
-      if (typeof readerSettings.readerInfoBarConfig !== 'string' || !readerSettings.readerInfoBarConfig) {
-        // 云端数据来自还没有页眉页脚槽位配置的旧版本：保留本机配置，稍后回填上传。
-        readerSettings.readerInfoBarConfig = localReaderSettings.readerInfoBarConfig;
-        needsEyeTurnBackfill = true;
-      }
-      if (needsEyeTurnBackfill) {
+      const remote = JSON.parse(raw) as ReaderPreferencesSyncPayload;
+      const local = await ReaderSettingsStore.load(context);
+      const merged = ReaderPreferencesSync.merge(local, remote);
+      await ReaderSettingsStore.saveReaderFontRuleSettings(context, merged);
+      await ReaderSettingsStore.saveThemeSettings(context, merged.lightThemeIndex, merged.darkThemeIndex,
+        merged.lightCustomThemeBackgroundColor, merged.lightCustomThemeTextColor,
+        merged.darkCustomThemeBackgroundColor, merged.darkCustomThemeTextColor,
+        AppStorage.get<boolean>('appDarkMode') || false, merged.customThemesRaw);
+      if (remote.syncVersion !== 2) {
+        // 下一轮将旧版完整设置替换为精简数据；旧排版字段不会写回本机。
         CloudSyncCoordinator.readerSettingsBackfillPending = true;
       }
-      await ReaderSettingsStore.saveAll(
-        context,
-        readerSettings,
-        AppStorage.get<boolean>('appDarkMode') || false
-      );
       entityState.localKey = 'global';
     } else if (entityType === 'replace_rule') {
       const remoteRule = JSON.parse(raw) as ReaderReplaceRule;
@@ -1017,6 +1002,7 @@ export class CloudSyncCoordinator {
     } else if (entityType === 'theme_settings') {
       const themeSettings = JSON.parse(raw) as AppThemeSettings;
       const localThemeSettings = await AppThemeSettingsStore.load(context);
+      themeSettings.themeApplyLayoutEnabled = localThemeSettings.themeApplyLayoutEnabled;
       themeSettings.customLightStartupImagePath = localThemeSettings.customLightStartupImagePath;
       themeSettings.customDarkStartupImagePath = localThemeSettings.customDarkStartupImagePath;
       await AppThemeSettingsStore.save(context, themeSettings);
@@ -1035,6 +1021,7 @@ export class CloudSyncCoordinator {
       const remoteSearch = JSON.parse(raw) as SearchPreferencesSyncPayload;
       const searchSettings = await SearchExploreSettingsStore.load(context);
       searchSettings.showResultCover = remoteSearch.showResultCover !== false;
+      searchSettings.showResultCoverBackground = remoteSearch.showResultCoverBackground !== false;
       searchSettings.useBookshelfCoverGallery = remoteSearch.useBookshelfCoverGallery === true;
       searchSettings.showResultTags = remoteSearch.showResultTags !== false;
       searchSettings.aggregateSearchResults = remoteSearch.aggregateSearchResults !== false;
@@ -1403,14 +1390,111 @@ export class CloudSyncCoordinator {
   }
 
   private static entity(entityType: string, entityId: string, payload: Object,
-    localKey: string): LocalSyncEntity {
+    localKey: string, label: string = ''): LocalSyncEntity {
     const result = new LocalSyncEntity();
     result.entityType = entityType;
     result.entityId = entityId;
     result.payloadJson = JSON.stringify(payload);
     result.contentHash = CloudSyncCoordinator.digest(result.payloadJson);
     result.localKey = localKey;
+    result.label = label;
     return result;
+  }
+
+  private static rejectionIssue(ack: CloudSyncAcknowledgement,
+    entity: LocalSyncEntity | undefined): CloudSyncIssue {
+    const entityType = entity ? entity.entityType : '';
+    const typeLabel = CloudSyncCoordinator.entityTypeLabel(entityType);
+    const name = entity && entity.label ? entity.label.trim() : '';
+    const deleting = !!entity && !entity.payloadJson;
+    const title = `${typeLabel}${name ? `“${name}”` : ''}${deleting ? '删除未同步' : '未能上传'}`;
+    const issue = CloudSyncIssueStore.create(
+      entityType === 'book_source' ? CloudSyncIssueStore.KIND_BOOK_SOURCE : CloudSyncIssueStore.KIND_REJECTED,
+      `reject:${entityType}:${entity ? entity.entityId : ack.opId}:${ack.error?.code || ''}`,
+      title,
+      ack.error?.message || '服务端拒收了这项数据');
+    if (entity && entityType === 'book_source') issue.sourceUrl = entity.localKey;
+    if (entity && entity.payloadJson) {
+      issue.bytes = new util.TextEncoder().encodeInto(entity.payloadJson).byteLength;
+    }
+    return issue;
+  }
+
+  /**
+   * The server rejects the whole request when one item exceeds its size limit, so no
+   * acknowledgement names it. Measure the batch locally against the limit quoted in the message.
+   */
+  private static oversizedIssues(message: string, batch: CloudSyncOperation[],
+    entities: LocalSyncEntity[]): CloudSyncIssue[] {
+    const match = /不能超过\s*(\d+)\s*KB/i.exec(message);
+    const limitBytes = match ? Number(match[1]) * 1024 : 0;
+    const encoder = new util.TextEncoder();
+    const sized: LocalSyncEntity[] = [];
+    const sizes: number[] = [];
+    for (const operation of batch) {
+      if (operation.operation !== 'upsert') continue;
+      const entity = entities.find((item: LocalSyncEntity) =>
+        item.entityType === operation.entityType && item.entityId === operation.entityId);
+      if (!entity || !entity.payloadJson) continue;
+      sized.push(entity);
+      sizes.push(encoder.encodeInto(entity.payloadJson).byteLength);
+    }
+    const result: CloudSyncIssue[] = [];
+    for (let i = 0; i < sized.length; i++) {
+      if (limitBytes > 0 && sizes[i] > limitBytes) {
+        result.push(CloudSyncCoordinator.oversizedIssue(sized[i], sizes[i], message, false));
+      }
+    }
+    if (result.length === 0 && sized.length > 0) {
+      // Limit unknown or every item measured under it: the largest item is the cause, certainly
+      // so when the batch holds only that one item.
+      let largest = 0;
+      for (let i = 1; i < sized.length; i++) {
+        if (sizes[i] > sizes[largest]) largest = i;
+      }
+      result.push(CloudSyncCoordinator.oversizedIssue(sized[largest], sizes[largest], message, sized.length > 1));
+    }
+    return result;
+  }
+
+  private static oversizedIssue(entity: LocalSyncEntity, bytes: number, message: string,
+    guessed: boolean): CloudSyncIssue {
+    const name = entity.label ? `“${entity.label.trim()}”` : '';
+    const issue = CloudSyncIssueStore.create(
+      entity.entityType === 'book_source' ? CloudSyncIssueStore.KIND_BOOK_SOURCE : CloudSyncIssueStore.KIND_REJECTED,
+      `oversize:${entity.entityType}:${entity.entityId}`,
+      `${CloudSyncCoordinator.entityTypeLabel(entity.entityType)}${name}过大，导致整次同步失败`,
+      guessed ? `${message}。这是本次同步中最大的一项，可能是它超出了限额。` :
+        `${message}。在它被删除或变小之前，每次同步都会失败。`);
+    issue.bytes = bytes;
+    if (entity.entityType === 'book_source') issue.sourceUrl = entity.localKey;
+    return issue;
+  }
+
+  private static entityTypeLabel(entityType: string): string {
+    switch (entityType) {
+      case 'book_group': return '书架分组';
+      case 'bookshelf_item': return '书架书籍';
+      case 'reading_progress': return '阅读进度';
+      case 'bookmark': return '书签';
+      case 'book_source': return '书源';
+      case 'reader_settings': return '阅读设置';
+      case 'replace_rule': return '替换规则';
+      case 'theme_settings': return '主题设置';
+      case 'appearance_mode': return '显示模式';
+      case 'bookshelf_display': return '书架布局';
+      case 'search_preferences': return '搜索设置';
+      case 'custom_theme_schemes': return '自定义主题';
+      default: return '同步数据';
+    }
+  }
+
+  private static async recordIssues(context: Context, userId: string, issues: CloudSyncIssue[]): Promise<void> {
+    try {
+      await CloudSyncIssueStore.record(context, userId, issues);
+    } catch (e) {
+      console.warn('记录同步问题失败:', e);
+    }
   }
 
   private static identity(prefix: string, value: string): string {
@@ -1456,13 +1540,13 @@ export class CloudSyncCoordinator {
     }
     if (entityType === 'reader_settings' ||
       entityType === 'replace_rule' ||
-      entityType === 'theme_settings') {
+      entityType === 'theme_settings' ||
+      entityType === 'custom_theme_schemes') {
       return settings.readingPreferencesEnabled;
     }
     if (entityType === 'appearance_mode' ||
       entityType === 'bookshelf_display' ||
-      entityType === 'search_preferences' ||
-      entityType === 'custom_theme_schemes') {
+      entityType === 'search_preferences') {
       return settings.applicationPreferencesEnabled;
     }
     return false;

@@ -132,6 +132,7 @@ export class BuiltinThemeRegistry {
     themes.push(BuiltinThemeRegistry.azureMecha());
     themes.push(BuiltinThemeRegistry.starwishMagic());
     themes.push(BuiltinThemeRegistry.letterpressPage());
+    themes.push(BuiltinThemeRegistry.obsidianArchive());
     themes.push(BuiltinThemeRegistry.classicBlue());
     themes.push(BuiltinThemeRegistry.warmPaper());
     themes.push(BuiltinThemeRegistry.forestMist());
@@ -163,7 +164,7 @@ export class BuiltinThemeRegistry {
     theme.book.coverAssetId = '';
     theme.book.shelfFrameAssetId = '';
     theme.book.shelfFolderAssetId = '';
-    theme.radius = BuiltinThemeRegistry.radius(4, 8, 12, 8, 16, 8);
+    theme.radius = BuiltinThemeRegistry.radius(6, 12, 20, 12, 24, 8);
     theme.readerLayout = BuiltinThemeRegistry.readerLayout(20, 12, 0, 18, 18, 18, 18);
     return theme;
   }
@@ -524,6 +525,26 @@ export class BuiltinThemeRegistry {
     theme.radius = BuiltinThemeRegistry.radius(10, 14, 22, 16, 24, 16);
     theme.readerLayout = BuiltinThemeRegistry.readerLayout(20, 14, 2, 22, 22, 22, 22);
     theme.glass = BuiltinThemeRegistry.glass(22, 18, 86, 72, 58, 24, 18, 4);
+    return theme;
+  }
+
+  private static obsidianArchive(): ThemePack {
+    const theme = BuiltinThemeRegistry.theme(
+      ThemeIds.OBSIDIAN_ARCHIVE, '曜金藏书',
+      '曜黑藏书，香槟描金。献给把阅读珍藏一生的你。', 'serif', 'obsidian-archive');
+    theme.light = BuiltinThemeRegistry.variant(
+      BuiltinThemeRegistry.colors('#F3EFE7', '#FFFCF6', '#EAE3D7', '#242320', '#71685B', '#DCD2C0',
+        '#795A2F', '#75562D', '#A6423C'),
+      BuiltinThemeRegistry.reader('#F5EFE3', 'obsidian-archive-light', '#302C26', '#746B5D', 'light'),
+      BuiltinThemeRegistry.regex(ThemeBubbleStyles.GILDED_ORBIT, '#292620', '#F2DEAE'));
+    theme.dark = BuiltinThemeRegistry.variant(
+      BuiltinThemeRegistry.colors('#121418', '#1D2025', '#272A30', '#EFE7D9', '#B4AA99', '#3A3731',
+        '#D6B878', '#80613C', '#E79086'),
+      BuiltinThemeRegistry.reader('#1C1C1B', 'obsidian-archive-dark', '#DED6C8', '#AEA492', 'dark'),
+      BuiltinThemeRegistry.regex(ThemeBubbleStyles.GILDED_ORBIT, '#463B2A', '#F4E3BF'));
+    theme.radius = BuiltinThemeRegistry.radius(6, 12, 20, 14, 18, 7);
+    theme.readerLayout = BuiltinThemeRegistry.readerLayout(21, 14, 8, 25, 25, 26, 26);
+    theme.glass = BuiltinThemeRegistry.glass(20, 16, 92, 86, 48, 24, 14, 3);
     return theme;
   }
 

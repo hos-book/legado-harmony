@@ -184,8 +184,6 @@ struct BookChapterListPage {
     .height(56 + this.statusBarHeight)
     .padding({ right: AppSpacing.XL, top: this.statusBarHeight })
     .alignItems(VerticalAlign.Center)
-    .backgroundColor(ThemeRuntime.topBarColor(this.appDarkMode))
-    .backdropBlur(ThemeRuntime.topBarBlur())
     .position({ x: 0, y: 0 })
   }
 
@@ -460,7 +458,7 @@ struct BookChapterListPage {
         await db.insertBook(book, 'chapter_list_insert');
       }
       // The reader derives its opening chapter from durChapterIndex alone (see
-      // ReadBookEngine.openBookFresh / applyLatestReadingProgress). durChapterPos must be reset
+      // ReadBookEngine.openBookFresh / applyLatestBookState). durChapterPos must be reset
       // too: savedReaderProgressOffset only matches on chapter, so a stale page would land
       // somewhere inside the target chapter.
       book.durChapterIndex = chapter.index;

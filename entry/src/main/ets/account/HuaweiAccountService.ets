@@ -6,6 +6,7 @@ import { http } from '@kit.NetworkKit';
 import { AccountCommerceApi } from './AccountCommerceApi';
 import {
   AccountApiError,
+  AvatarCrop,
   AccountSnapshot,
   HuaweiLoginResponse,
   IapCreditResponse,
@@ -191,13 +192,13 @@ export class HuaweiAccountService {
   }
 
   static async updateProfile(context: Context, displayName: string, avatarBase64: string,
-    removeAvatar: boolean): Promise<AccountSnapshot> {
+    removeAvatar: boolean, avatarCrop: AvatarCrop | null = null): Promise<AccountSnapshot> {
     await AccountSessionStore.load(context);
     if (!AccountSessionStore.isLoggedIn()) {
       throw new Error('请先登录华为账号');
     }
     const snapshot = await AccountCommerceApi.updateProfile(
-      displayName, avatarBase64, removeAvatar, AccountSessionStore.token());
+      displayName, avatarBase64, removeAvatar, AccountSessionStore.token(), avatarCrop);
     await AccountSessionStore.updateSnapshot(context, snapshot);
     return AccountSessionStore.account();
   }

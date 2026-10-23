@@ -1,7 +1,10 @@
 import { promptAction, router } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
+import { AppIconManager } from '../utils/AppIconManager';
+import { AppIconSettingsStore } from '../utils/AppIconSettingsStore';
 import { AppThemeSettings, AppThemeSettingsStore } from '../utils/AppThemeSettingsStore';
-import { ReaderSettings, ReaderSettingsStore } from '../utils/ReaderSettingsStore';
+import { ReaderSettingsStore } from '../utils/ReaderSettingsStore';
+import { ReaderFontBootstrap } from '../utils/ReaderFontBootstrap';
 import { ReaderThemeHelper } from '../utils/ReaderThemeHelper';
 import { syncSystemBars } from '../utils/SystemBars';
 import { RecentReadCardUpdater } from '../utils/RecentReadCardUpdater';
@@ -9,6 +12,7 @@ import { ThemeTrialManager } from '../utils/ThemeTrialManager';
 import { CustomThemeScheme, CustomThemeSchemeStore } from '../utils/CustomThemeSchemeStore';
 import { BuiltinThemeRegistry } from '../theme/BuiltinThemeRegistry';
 import { ImmersiveBackButton } from '../components/ImmersiveBackButton';
+import { CollapsingHeader } from '../utils/CollapsingHeader';
 import { ThemeStartupCover } from '../components/ThemeStartupCover';
 import { ReaderThemeBackground } from '../components/ReaderThemeBackground';
 import { TtsPanelThemeBackground } from '../components/TtsPanelThemeBackground';
@@ -20,13 +24,18 @@ import { AccountApiError, ThemeCatalogItem, ThemeCatalogResponse,
   ThemeEntitlement } from '../account/AccountCommerceModels';
 import { AccountCommerceApi } from '../account/AccountCommerceApi';
 import { AccountSessionStore } from '../account/AccountSessionStore';
+import { MembershipCommerceService } from '../account/MembershipCommerceService';
 import { HuaweiAccountService } from '../account/HuaweiAccountService';
 import {
   ReaderRegexBubbleStyleResolver,
   ReaderRegexEmphasisContext,
   ReaderResolvedRegexEmphasis
 } from '../model/reader/ReaderRegexFontRule';
-import fs from '@ohos.file.fs';
+import {
+  ReaderCommentBubbleImage,
+  ReaderCommentBubbleStyles,
+  ReaderCommentBubblePainter
+} from '../core/reader/ReaderCommentBubble';
 import { StartupCoverTextStore } from '../utils/StartupCoverTextStore';
 import { HdsFeedback } from '../utils/HdsFeedback';
 import { AdaptiveSwitch } from '../components/AdaptiveSwitch';
@@ -39,7 +48,7 @@ const STORE_COVER_MAX_HEIGHT = 340;
 // Detail pager: the focused pane leaves its neighbours peeking in on both sides.
 const STORE_PAGER_PANE_WIDTH_RATIO = 0.78;
 const STORE_PAGER_PANE_MAX_WIDTH = 420;
-const STORE_PAGE_FIXED_HEIGHT = 228;
+const STORE_PAGE_FIXED_HEIGHT = 256;
 const STORE_READER_PANE_LINE_HEIGHT = 17;
 const STARTUP_COPY_STRIP_HEIGHT = 40;
 const STORE_BOOK_COVER_RATIO = 46 / 64;
@@ -91,6 +100,7 @@ const MY_THEME_THUMB_COVER_HEIGHT = 76;
 class ThemeApplyChoice {
   applyLayout: boolean = false;
   applyCover: boolean = false;
+  applyIcon: boolean = false;
 
   static preserve(): ThemeApplyChoice {
     return new ThemeApplyChoice();
@@ -98,6 +108,10 @@ class ThemeApplyChoice {
 }
 
 /** One theme the user can apply right away; customSchemeId is set for custom schemes. */
+class ThemeSettingsRouteParams {
+  themeId: string = '';
+}
+
 class ThemeListEntry {
   theme: ThemePack;
   customSchemeId: string;
@@ -113,6 +127,7 @@ class ThemeListEntry {
 struct ThemeSettingsPage {
   @StorageLink('appDarkMode') appDarkMode: boolean = false;
   @StorageLink('appThemeId') appThemeId: string = AppThemeSettingsStore.DEFAULT_THEME_ID;
+  @StorageLink('appIconId') appIconId: string = AppIconSettingsStore.DEFAULT_ICON_ID;
   @StorageLink('appThemeBookCoverEnabled') themeBookCoverEnabled: boolean = false;
   @StorageLink('themeRevision') themeRevision: number = 0;
   @StorageLink('appCustomBaseThemeId') customBaseThemeId: string = AppThemeSettingsStore.DEFAULT_THEME_ID;
@@ -145,6 +160,8 @@ struct ThemeSettingsPage {
   customThemeSchemesRevision: number = 0;
   @StorageLink('startupCoverTextsRevision') startupCoverTextsRevision: number = 0;
   @StorageProp('statusBarHeight') statusBarHeight: number = 0;
+  @State headerCollapse: number = 0;
+  private themeListScroller: Scroller = new Scroller();
   @StorageProp('navBarHeight') navBarHeight: number = 0;
   @State applyingThemeId: string = '';
   @State focusedThemeId: string = '';
@@ -168,6 +185,7 @@ struct ThemeSettingsPage {
   @State applyDialogHasCover: boolean = false;
   @State applyDialogApplyLayout: boolean = false;
   @State applyDialogApplyCover: boolean = false;
+  @State applyDialogApplyIcon: boolean = true;
   private pendingApplyChoice: ((choice: ThemeApplyChoice | null) => void) | null = null;
   @State themeCatalog: ThemeCatalogItem[] = [];
   @State themeCatalogLoaded: boolean = false;
@@ -183,6 +201,8 @@ struct ThemeSettingsPage {
   /** Same measurement for the "当前使用" card on the main list. */
   @State cardRowWidth: number = 0;
   private customSchemeRefreshSerial: number = 0;
+  private commentBubbleImages: Map<string, ReaderCommentBubbleImage | null> =
+    new Map<string, ReaderCommentBubbleImage | null>();
 
   aboutToAppear(): void {
     this.loadThemeSettings();
@@ -190,10 +210,17 @@ struct ThemeSettingsPage {
     this.initializeAccount();
     this.refreshThemeCatalog();
     this.syncBars();
+    const params = router.getParams() as ThemeSettingsRouteParams;
+    if (params?.themeId === ThemeIds.OBSIDIAN_ARCHIVE) {
+      this.openThemePager([new ThemeListEntry(BuiltinThemeRegistry.findById(params.themeId))], 0);
+    }
   }
 
   onPageShow(): void {
     ThemeTrialManager.stopIfExpired();
+    AppIconManager.syncCurrentIcon(getContext(this)).catch((error: Error) => {
+      console.warn('同步桌面图标失败:', error);
+    });
     this.refreshCustomSchemes();
     this.syncBars();
   }
@@ -213,7 +240,7 @@ struct ThemeSettingsPage {
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       // 列表铺满整页并从顶栏下方滚过去，上下留白由列表里的占位项提供。
-      PageScaffold({ title: '主题', scrollable: false, edgeToEdge: true, content: () => {
+      PageScaffold({ title: '主题', scrollable: false, edgeToEdge: true, externalCollapse: this.headerCollapse, content: () => {
         this.themeList()
       }, actions: () => {
         this.pointsBadge()
@@ -250,7 +277,7 @@ struct ThemeSettingsPage {
 
   @Builder
   themeList() {
-    List({ space: AppSpacing.LG }) {
+    List({ space: AppSpacing.LG, scroller: this.themeListScroller }) {
       // List padding is fixed to the viewport in ArkUI. Use real list items
       // for the safe-area gaps so they scroll away with the content.
       ListItem() {
@@ -316,6 +343,18 @@ struct ThemeSettingsPage {
     })
     .scrollBar(BarState.Off)
     .backgroundColor(this.pageColor())
+    .onDidScroll((yOffset: number) => {
+      this.headerCollapse = CollapsingHeader.next(this.headerCollapse, yOffset,
+        this.themeListScroller.currentOffset().yOffset);
+    })
+    .onScrollStop(() => {
+      const target = CollapsingHeader.settle(this.headerCollapse, this.themeListScroller.currentOffset().yOffset);
+      if (target !== this.headerCollapse) {
+        animateTo({ duration: 200, curve: Curve.FastOutSlowIn }, () => {
+          this.headerCollapse = target;
+        });
+      }
+    })
   }
 
   async initializeAccount(): Promise<void> {
@@ -393,7 +432,7 @@ struct ThemeSettingsPage {
     if (customScheme) {
       const unavailableStartupTheme = this.unavailableCustomStartupTheme(customScheme.settings);
       if (unavailableStartupTheme) {
-        HdsFeedback.showToast(`启动封面主题「${unavailableStartupTheme}」尚未获取或已过期`);
+        HdsFeedback.showToast(`方案使用的主题「${unavailableStartupTheme}」尚未获取或已过期`);
         return;
       }
     }
@@ -450,10 +489,24 @@ struct ThemeSettingsPage {
       this.readerLightThemeIndex = ReaderThemeHelper.APP_THEME_INDEX;
       this.readerDarkThemeIndex = ReaderThemeHelper.APP_THEME_INDEX;
       this.focusedThemeId = '';
-      await this.applyThemeFontWhenAvailable();
+      ReaderFontBootstrap.applyApplicationFont(getContext(this), 'theme-settings');
       this.refreshRecentReadCard();
       this.syncBars();
-      HdsFeedback.showToast(choice.applyLayout ? `已应用「${theme.name}」主题` : `已应用「${theme.name}」主题，排版保持不变`);
+      let iconNotice = '';
+      if (choice.applyIcon) {
+        if (!AppIconManager.isSupported()) {
+          iconNotice = `；桌面图标未更换，${AppIconManager.UNSUPPORTED_MESSAGE}`;
+        } else {
+          try {
+            await AppIconManager.applyIcon(getContext(this), AppIconManager.optionForTheme(theme.id));
+          } catch (error) {
+            console.warn('应用主题桌面图标失败:', error);
+            iconNotice = '；桌面图标切换失败，可在图标设置中重试';
+          }
+        }
+      }
+      HdsFeedback.showToast((choice.applyLayout ? `已应用「${theme.name}」主题` :
+        `已应用「${theme.name}」主题，排版保持不变`) + iconNotice);
     } catch (e) {
       console.error('应用主题失败:', e);
       HdsFeedback.showToast('应用主题失败，请稍后重试');
@@ -468,7 +521,9 @@ struct ThemeSettingsPage {
       `段距 ${theme.readerLayout.paragraphSpacing} · 边距 ${theme.readerLayout.marginLeft}/${theme.readerLayout.marginRight}`;
     this.applyDialogHasCover = this.themeHasBookCover(theme);
     this.applyDialogApplyLayout = previous.themeApplyLayoutEnabled;
-    this.applyDialogApplyCover = this.applyDialogHasCover && previous.themeBookCoverEnabled;
+    // 主题带封面时默认勾选“应用主题封面”，不再沿用上次的选择。
+    this.applyDialogApplyCover = this.applyDialogHasCover;
+    this.applyDialogApplyIcon = true;
     this.showThemeApplyDialog = true;
     return new Promise<ThemeApplyChoice | null>(
       (resolve: (choice: ThemeApplyChoice | null) => void) => {
@@ -480,6 +535,7 @@ struct ThemeSettingsPage {
     const choice = new ThemeApplyChoice();
     choice.applyLayout = this.applyDialogApplyLayout;
     choice.applyCover = this.applyDialogHasCover && this.applyDialogApplyCover;
+    choice.applyIcon = this.applyDialogApplyIcon;
     const resolve = this.pendingApplyChoice;
     this.closeThemeApplyDialog();
     if (resolve) {
@@ -507,6 +563,7 @@ struct ThemeSettingsPage {
     if (themeId === ThemeIds.CUSTOM || this.hasThemeAccess(themeId)) {
       return true;
     }
+    if (themeId === ThemeIds.OBSIDIAN_ARCHIVE) return this.claimExclusiveTheme();
     const offer = this.themeOffer(themeId);
     if (!offer) {
       if (this.themeCatalogLoaded) {
@@ -576,11 +633,48 @@ struct ThemeSettingsPage {
   themeOffer(themeId: string): ThemeCatalogItem | null {
     for (let index = 0; index < this.themeCatalog.length; index++) {
       const offer = this.themeCatalog[index];
-      if (offer && offer.themeId === themeId && offer.pricePoints > 0 && offer.validDays > 0) {
+      if (offer && offer.themeId === themeId &&
+        (offer.pricePoints > 0 || offer.acquisition === 'SUPER_CLAIM') && offer.validDays > 0) {
         return offer;
       }
     }
     return null;
+  }
+
+  async claimExclusiveTheme(): Promise<boolean> {
+    if (!this.accountLoggedIn) {
+      HdsFeedback.showToast('请登录终身超级会员账号后领取');
+      router.pushUrl({ url: 'pages/AccountCenter' });
+      return false;
+    }
+    try {
+      await HuaweiAccountService.refresh(getContext(this));
+      if (AccountSessionStore.activeMembershipSku() !== 'SUPER_LIFETIME') {
+        HdsFeedback.showToast('「曜金藏书」仅供终身超级会员领取，不支持点数购买');
+        router.pushUrl({ url: 'pages/AccountCenter' });
+        return false;
+      }
+      if (AccountSessionStore.hasOwnedEntitlement(ThemeIds.OBSIDIAN_ARCHIVE)) return true;
+      if (!this.themeOffer(ThemeIds.OBSIDIAN_ARCHIVE)) {
+        await this.refreshThemeCatalog();
+        if (!this.themeOffer(ThemeIds.OBSIDIAN_ARCHIVE)) {
+          HdsFeedback.showToast('专属主题暂未开放领取，请稍后再试');
+          return false;
+        }
+      }
+      const choice = await promptAction.showDialog({
+        title: '领取「曜金藏书」',
+        message: '终身超级会员专属，不扣除点数。领取后有效一年，到期后可再次手动领取；有效期内不重复叠加。',
+        buttons: [{ text: '取消', color: this.subTextColor() }, { text: '领取一年', color: this.accentColor() }]
+      });
+      if (choice.index !== 1) return false;
+      await MembershipCommerceService.claimSuperTheme(getContext(this), ThemeIds.OBSIDIAN_ARCHIVE);
+      HdsFeedback.showToast('已领取「曜金藏书」，有效一年');
+      return AccountSessionStore.hasOwnedEntitlement(ThemeIds.OBSIDIAN_ARCHIVE);
+    } catch (e) {
+      HdsFeedback.showToast((e as Error).message || '领取失败，请稍后重试');
+      return false;
+    }
   }
 
   async setThemeBookCoverEnabled(enabled: boolean): Promise<void> {
@@ -594,29 +688,6 @@ struct ThemeSettingsPage {
     } catch (e) {
       console.error('保存主题封面设置失败:', e);
       HdsFeedback.showToast('保存主题封面设置失败');
-    }
-  }
-
-  async applyThemeFontWhenAvailable(): Promise<void> {
-    const settings: ReaderSettings = await ReaderSettingsStore.load(getContext(this));
-    if (settings.fontFilePath && this.fontFileExists(settings.fontFilePath)) {
-      return;
-    }
-    try {
-      getContext(this).getApplicationContext().setFont(ThemeRuntime.fontFamily());
-    } catch (e) {
-      console.warn('应用主题默认字体失败:', e);
-    }
-  }
-
-  fontFileExists(filePath: string): boolean {
-    if (!filePath) {
-      return false;
-    }
-    try {
-      return fs.accessSync(filePath);
-    } catch (e) {
-      return false;
     }
   }
 
@@ -810,8 +881,6 @@ struct ThemeSettingsPage {
     .width('100%')
     .height(56 + this.statusBarHeight)
     .padding({ top: this.statusBarHeight, left: AppSpacing.LG, right: AppSpacing.LG })
-    .backgroundColor(this.titleBarSurfaceColor())
-    .backdropBlur(ThemeRuntime.topBarBlur())
     .alignItems(VerticalAlign.Center)
   }
 
@@ -873,31 +942,41 @@ struct ThemeSettingsPage {
       this.themePreviewPanes(theme, customSchemeId, true)
 
       Row({ space: AppSpacing.MD }) {
-        Text(theme.name)
-          .fontSize(AppFontSize.SUBTITLE)
-          .fontWeight(FontWeight.Bold)
-          .fontFamily(theme.typography.appFontFamily)
-          .fontColor(this.activeVariant(theme).colors.primaryTextColor)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .layoutWeight(1)
+        Image(AppIconManager.optionForTheme(theme.id).preview)
+          .width(52)
+          .height(52)
+          .borderRadius(13)
+          .objectFit(ImageFit.Cover)
+          .draggable(false)
+          .accessibilityText(`${theme.name}桌面图标预览`)
+        Column({ space: AppSpacing.XXS }) {
+          Text(theme.name)
+            .fontSize(AppFontSize.SUBTITLE)
+            .fontWeight(FontWeight.Bold)
+            .fontFamily(theme.typography.appFontFamily)
+            .fontColor(this.activeVariant(theme).colors.primaryTextColor)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          Text(theme.description)
+            .fontSize(AppFontSize.CAPTION)
+            .fontColor(this.activeVariant(theme).colors.subTextColor)
+            .maxLines(2)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
         this.storeThemeStatusPill(theme, customSchemeId)
       }
       .width('100%')
       .alignItems(VerticalAlign.Center)
 
       Row({ space: AppSpacing.MD }) {
-        Text(theme.description)
-          .fontSize(AppFontSize.CAPTION)
-          .fontColor(this.activeVariant(theme).colors.subTextColor)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .layoutWeight(1)
         Text(this.storeThemeCaption(theme))
           .fontSize(AppFontSize.CAPTION)
           .fontColor(this.activeVariant(theme).colors.accentColor)
       }
       .width('100%')
+      .justifyContent(FlexAlign.End)
       .alignItems(VerticalAlign.Center)
 
       this.storeNavInfoRow(theme)
@@ -1077,19 +1156,9 @@ struct ThemeSettingsPage {
       Text() {
         ForEach(READER_PREVIEW_SEGMENTS, (segment: ReaderPreviewSegment) => {
           if (segment.comment) {
-            ContainerSpan() {
-              Span('\u00A0')
-                .fontSize(this.storeReaderPaneFontSize(inPager) * 0.85)
-              ImageSpan(ThemeAssetRegistry.commentBubbleIcon(this.themeCommentPreview(theme).bubbleStyleId))
-                .width(this.storeReaderPaneFontSize(inPager))
-                .height(this.storeReaderPaneFontSize(inPager))
-                .objectFit(ImageFit.Contain)
-                .verticalAlign(ImageSpanAlignment.CENTER)
-              Span(`\u00A0${segment.text}\u00A0\u00A0`)
-                .fontSize(this.storeReaderPaneFontSize(inPager) * 0.85)
-                .fontColor(this.themeCommentPreview(theme).textColor)
-            }
-            .textBackgroundStyle(this.themeCommentPreviewBackground(theme, this.storeReaderPaneFontSize(inPager)))
+            Span('\u00A0')
+            this.commentBubbleSpan(theme, segment.text, this.storeReaderPaneFontSize(inPager) * 0.85,
+              this.activeVariant(theme).reader.contentTone === 'dark')
           } else if (!segment.emphasis) {
             Span(segment.text)
           } else if (this.themeHasRegexBubbleCap(theme)) {
@@ -1256,19 +1325,7 @@ struct ThemeSettingsPage {
         .maxLines(1)
 
         Text() {
-          ContainerSpan() {
-            Span('\u00A0')
-              .fontSize(AppFontSize.CAPTION)
-            ImageSpan(ThemeAssetRegistry.commentBubbleIcon(this.themeCommentPreview(theme).bubbleStyleId))
-              .width(15)
-              .height(15)
-              .objectFit(ImageFit.Contain)
-              .verticalAlign(ImageSpanAlignment.CENTER)
-            Span('\u00A0段评\u00A0\u00A0')
-              .fontSize(AppFontSize.CAPTION)
-              .fontColor(this.themeCommentPreview(theme).textColor)
-          }
-          .textBackgroundStyle(this.themeCommentPreviewBackground(theme, AppFontSize.BODY))
+          this.commentBubbleSpan(theme, '段评', AppFontSize.CAPTION, this.appDarkMode)
         }
         .maxLines(1)
 
@@ -1327,7 +1384,7 @@ struct ThemeSettingsPage {
           .borderRadius(this.storeButtonRadius(theme))
           .height(40)
           .fontSize(AppFontSize.BODY)
-          .fontColor(ThemeRuntime.onAccentColor())
+          .fontColor(ThemeRuntime.onAccentColor(this.activeVariant(theme).colors.buttonColor))
           .backgroundColor(this.activeVariant(theme).colors.buttonColor)
           .layoutWeight(1)
           .enabled(!this.isSelected(theme, customSchemeId))
@@ -1353,14 +1410,16 @@ struct ThemeSettingsPage {
         .width('100%')
         .height(40)
         .fontSize(AppFontSize.BODY)
-        .fontColor(ThemeRuntime.onAccentColor())
+        .fontColor(ThemeRuntime.onAccentColor(this.activeVariant(theme).colors.buttonColor))
         .backgroundColor(this.activeVariant(theme).colors.buttonColor)
         .onClick(() => {
           this.selectTheme(theme.id);
         })
     } else {
       Row({ space: AppSpacing.MD }) {
-        this.storeTrialButton(theme)
+        if (theme.id !== ThemeIds.OBSIDIAN_ARCHIVE) {
+          this.storeTrialButton(theme)
+        }
         this.storeAcquireButton(theme)
       }
       .width('100%')
@@ -1391,7 +1450,7 @@ struct ThemeSettingsPage {
       .borderRadius(this.storeButtonRadius(theme))
       .height(40)
       .fontSize(AppFontSize.BODY)
-      .fontColor(ThemeRuntime.onAccentColor())
+      .fontColor(ThemeRuntime.onAccentColor(this.activeVariant(theme).colors.buttonColor))
       .backgroundColor(this.activeVariant(theme).colors.buttonColor)
       .layoutWeight(1)
       .enabled(this.acquireButtonEnabled(theme.id))
@@ -1408,7 +1467,7 @@ struct ThemeSettingsPage {
     } else if (this.isTrialTheme(theme.id) || this.isSelected(theme, customSchemeId)) {
       Text(this.isTrialTheme(theme.id) ? '试用中' : '使用中')
         .fontSize(AppFontSize.MICRO)
-        .fontColor(ThemeRuntime.onAccentColor())
+        .fontColor(ThemeRuntime.onAccentColor(this.activeVariant(theme).colors.accentColor))
         .padding({ left: AppSpacing.SM, right: AppSpacing.SM, top: AppSpacing.XXS, bottom: AppSpacing.XXS })
         .borderRadius(10)
         .backgroundColor(this.activeVariant(theme).colors.accentColor)
@@ -1728,7 +1787,7 @@ struct ThemeSettingsPage {
             .height(42)
             .borderRadius(ThemeRuntime.buttonRadius())
             .backgroundColor(this.accentColor())
-            .fontColor(ThemeRuntime.onAccentColor())
+            .fontColor(ThemeRuntime.onAccentColor(this.accentColor()))
             .enabled(!!this.renameCustomThemeName.trim())
             .onClick(() => this.renameCustomTheme())
         }
@@ -1784,7 +1843,7 @@ struct ThemeSettingsPage {
             .height(42)
             .borderRadius(ThemeRuntime.buttonRadius())
             .backgroundColor(ThemeRuntime.dangerColor(this.appDarkMode))
-            .fontColor(ThemeRuntime.onAccentColor())
+            .fontColor(ThemeRuntime.onAccentColor(ThemeRuntime.dangerColor(this.appDarkMode)))
             .onClick(() => this.confirmDeleteCustomTheme())
         }
         .width('100%')
@@ -1883,7 +1942,7 @@ struct ThemeSettingsPage {
             .height(42)
             .borderRadius(ThemeRuntime.buttonRadius())
             .backgroundColor(this.accentColor())
-            .fontColor(ThemeRuntime.onAccentColor())
+            .fontColor(ThemeRuntime.onAccentColor(this.accentColor()))
             .onClick(() => this.saveStartupText())
         }
         .width('100%')
@@ -1923,6 +1982,7 @@ struct ThemeSettingsPage {
         if (this.applyDialogHasCover) {
           this.themeApplyToggleRow('cover')
         }
+        this.themeApplyToggleRow('icon')
         Row({ space: AppSpacing.LG }) {
           Button('取消', { type: ButtonType.Normal })
             .layoutWeight(1)
@@ -1936,7 +1996,7 @@ struct ThemeSettingsPage {
             .height(42)
             .borderRadius(ThemeRuntime.buttonRadius())
             .backgroundColor(this.accentColor())
-            .fontColor(ThemeRuntime.onAccentColor())
+            .fontColor(ThemeRuntime.onAccentColor(this.accentColor()))
             .onClick(() => this.confirmThemeApply())
         }
         .width('100%')
@@ -1970,10 +2030,12 @@ struct ThemeSettingsPage {
   themeApplyToggleRow(category: string) {
     Row({ space: AppSpacing.LG }) {
       Column({ space: AppSpacing.XXS }) {
-        Text(category === 'layout' ? '应用主题排版' : '应用主题封面')
+        Text(category === 'layout' ? '应用主题排版' : category === 'cover' ? '应用主题封面' : '应用主题图标')
           .fontSize(AppFontSize.BODY_LARGE)
           .fontColor(this.primaryTextColor())
-        Text(category === 'layout' ? this.applyDialogLayoutHint : '书架使用主题封面与配套书籍边框')
+        Text(category === 'layout' ? this.applyDialogLayoutHint : category === 'cover' ?
+          '书架使用主题封面与配套书籍边框' : AppIconManager.isSupported() ?
+          '桌面图标同步更换为主题图标' : AppIconManager.UNSUPPORTED_MESSAGE)
           .fontSize(AppFontSize.CAPTION)
           .fontColor(this.subTextColor())
       }
@@ -1981,12 +2043,15 @@ struct ThemeSettingsPage {
       .alignItems(HorizontalAlign.Start)
 
       AdaptiveSwitch({
-        isOn: category === 'layout' ? this.applyDialogApplyLayout : this.applyDialogApplyCover,
+        isOn: category === 'layout' ? this.applyDialogApplyLayout :
+          category === 'cover' ? this.applyDialogApplyCover : this.applyDialogApplyIcon,
         onChange: (enabled: boolean) => {
           if (category === 'layout') {
             this.applyDialogApplyLayout = enabled;
-          } else {
+          } else if (category === 'cover') {
             this.applyDialogApplyCover = enabled;
+          } else {
+            this.applyDialogApplyIcon = enabled;
           }
         }
       })
@@ -2196,12 +2261,13 @@ struct ThemeSettingsPage {
   themeCard(theme: ThemePack, customSchemeId: string = '') {
     Column({ space: AppSpacing.LG }) {
       Row({ space: AppSpacing.MD }) {
-        Image(ThemeAssetRegistry.themeLogo(theme.id))
-          .width(42)
-          .height(42)
-          .borderRadius(theme.radius.medium)
-          .objectFit(ImageFit.Contain)
+        Image(AppIconManager.optionById(this.appIconId).preview)
+          .width(52)
+          .height(52)
+          .borderRadius(13)
+          .objectFit(ImageFit.Cover)
           .draggable(false)
+          .accessibilityText('当前桌面图标')
 
         Column({ space: AppSpacing.XXS }) {
           Text(theme.name)
@@ -2221,14 +2287,14 @@ struct ThemeSettingsPage {
         if (this.isTrialTheme(theme.id)) {
           Text('试用中')
             .fontSize(AppFontSize.CAPTION)
-            .fontColor(ThemeRuntime.onAccentColor())
+            .fontColor(ThemeRuntime.onAccentColor(this.activeVariant(theme).colors.accentColor))
             .padding({ left: AppSpacing.MD, right: AppSpacing.MD, top: AppSpacing.XS, bottom: AppSpacing.XS })
             .borderRadius(12)
             .backgroundColor(this.activeVariant(theme).colors.accentColor)
         } else if (this.isSelected(theme, customSchemeId)) {
           Text('已启用')
             .fontSize(AppFontSize.CAPTION)
-            .fontColor(ThemeRuntime.onAccentColor())
+            .fontColor(ThemeRuntime.onAccentColor(this.activeVariant(theme).colors.accentColor))
             .padding({ left: AppSpacing.MD, right: AppSpacing.MD, top: AppSpacing.XS, bottom: AppSpacing.XS })
             .borderRadius(12)
             .backgroundColor(this.activeVariant(theme).colors.accentColor)
@@ -2268,7 +2334,7 @@ struct ThemeSettingsPage {
           Button('编辑主题')
             .height(32)
             .fontSize(AppFontSize.CAPTION)
-            .fontColor(ThemeRuntime.onAccentColor())
+            .fontColor(ThemeRuntime.onAccentColor(this.activeVariant(theme).colors.buttonColor))
             .backgroundColor(this.activeVariant(theme).colors.buttonColor)
             .onClick(() => {
               router.pushUrl({
@@ -2298,7 +2364,7 @@ struct ThemeSettingsPage {
           Button(this.acquireButtonLabel(theme.id, '获取主题'))
             .height(34)
             .fontSize(AppFontSize.CAPTION)
-            .fontColor(ThemeRuntime.onAccentColor())
+            .fontColor(ThemeRuntime.onAccentColor(this.activeVariant(theme).colors.buttonColor))
             .backgroundColor(this.activeVariant(theme).colors.buttonColor)
             .layoutWeight(1)
             .enabled(this.acquireButtonEnabled(theme.id))
@@ -2330,12 +2396,19 @@ struct ThemeSettingsPage {
   }
 
   hasThemeAccess(themeId: string): boolean {
+    if (themeId === ThemeIds.OBSIDIAN_ARCHIVE) return AccountSessionStore.hasOwnedEntitlement(themeId);
     return BuiltinThemeRegistry.isFree(themeId) ||
       (themeId === this.appThemeId && !this.isTrialTheme(themeId)) ||
       AccountSessionStore.hasValidEntitlement(themeId);
   }
 
   unavailableCustomStartupTheme(settings: AppThemeSettings): string {
+    const usesExclusive = settings.customBaseThemeId === ThemeIds.OBSIDIAN_ARCHIVE ||
+      (JSON.stringify(settings.customLightSources) || '').includes(ThemeIds.OBSIDIAN_ARCHIVE) ||
+      (JSON.stringify(settings.customDarkSources) || '').includes(ThemeIds.OBSIDIAN_ARCHIVE);
+    if (usesExclusive && !AccountSessionStore.hasOwnedEntitlement(ThemeIds.OBSIDIAN_ARCHIVE)) {
+      return BuiltinThemeRegistry.findById(ThemeIds.OBSIDIAN_ARCHIVE).name;
+    }
     const lightThemeId = settings.customLightSources.startupThemeId;
     if (!BuiltinThemeRegistry.isFree(lightThemeId) &&
       !AccountSessionStore.hasValidEntitlement(lightThemeId)) {
@@ -2355,7 +2428,7 @@ struct ThemeSettingsPage {
   }
 
   isThemeTrialCandidate(themeId: string): boolean {
-    return themeId !== ThemeIds.CUSTOM && !BuiltinThemeRegistry.isFree(themeId) &&
+    return themeId !== ThemeIds.CUSTOM && themeId !== ThemeIds.OBSIDIAN_ARCHIVE && !BuiltinThemeRegistry.isFree(themeId) &&
       !AccountSessionStore.hasValidEntitlement(themeId);
   }
 
@@ -2547,6 +2620,7 @@ struct ThemeSettingsPage {
 
   /** Price text for a paid theme; never a guessed price while the catalog is missing. */
   storeThemePriceLabel(themeId: string): string {
+    if (themeId === ThemeIds.OBSIDIAN_ARCHIVE) return '终身超级会员专属';
     const offer = this.themeOffer(themeId);
     if (offer) return `${offer.pricePoints}点`;
     if (this.themeCatalogLoaded) return '暂未上架';
@@ -2554,6 +2628,10 @@ struct ThemeSettingsPage {
   }
 
   acquireButtonLabel(themeId: string, action: string): string {
+    if (themeId === ThemeIds.OBSIDIAN_ARCHIVE) {
+      return AccountSessionStore.hasOwnedEntitlement(themeId) ? '已领取 · 应用主题' :
+        (AccountSessionStore.activeMembershipSku() === 'SUPER_LIFETIME' ? '领取一年' : '终身超级会员专属');
+    }
     const offer = this.themeOffer(themeId);
     if (offer) return `${action} · ${offer.pricePoints}点`;
     if (this.themeCatalogLoaded) return '暂未上架';
@@ -2562,11 +2640,12 @@ struct ThemeSettingsPage {
 
   /** Greyed out until the price is known; after a failed load the button becomes the retry. */
   acquireButtonEnabled(themeId: string): boolean {
+    if (themeId === ThemeIds.OBSIDIAN_ARCHIVE) return !this.applyingThemeId;
     return this.themeCatalogLoaded ? !!this.themeOffer(themeId) : this.themeCatalogFailed;
   }
 
   onAcquireButtonTap(themeId: string): void {
-    if (this.themeCatalogLoaded) {
+    if (themeId === ThemeIds.OBSIDIAN_ARCHIVE || this.themeCatalogLoaded) {
       this.acquireTheme(themeId);
     } else {
       this.refreshThemeCatalog();
@@ -2574,6 +2653,11 @@ struct ThemeSettingsPage {
   }
 
   storeThemeCaption(theme: ThemePack): string {
+    if (theme.id === ThemeIds.OBSIDIAN_ARCHIVE) {
+      const owned = AccountSessionStore.entitlement(theme.id);
+      return AccountSessionStore.hasOwnedEntitlement(theme.id) && owned ?
+        `已领取 · 有效至 ${this.formatDate(owned.expiresAt)}` : '终身超级会员手动领取 · 每次一年 · 不售卖';
+    }
     if (theme.id === ThemeIds.CUSTOM) {
       return '自定义方案';
     }
@@ -2581,6 +2665,7 @@ struct ThemeSettingsPage {
       return '免费使用';
     }
     const entitlement = AccountSessionStore.entitlement(theme.id);
+    if (AccountSessionStore.hasMemberThemeAccess(theme.id)) return '会员免费使用';
     if (entitlement && entitlement.expiresAt > Date.now()) {
       return `有效至 ${this.formatDate(entitlement.expiresAt)}`;
     }
@@ -2596,6 +2681,10 @@ struct ThemeSettingsPage {
   }
 
   themeAccessLabel(themeId: string): string {
+    if (themeId === ThemeIds.OBSIDIAN_ARCHIVE && !AccountSessionStore.hasOwnedEntitlement(themeId)) {
+      return '终身超级会员专属 · 领取一年';
+    }
+    if (AccountSessionStore.hasMemberThemeAccess(themeId)) return '会员免费';
     if (BuiltinThemeRegistry.isFree(themeId)) {
       return '免费';
     }
@@ -2647,20 +2736,35 @@ struct ThemeSettingsPage {
       this.themeEmphasisContext(theme, ThemeRegexEmphasisModes.BUBBLE), false);
   }
 
-  /** Same fill as the reader's pill: the bubble colour at 60% of its opacity, with the theme's bubble radius. */
-  themeCommentPreviewBackground(theme: ThemePack, fontSize: number): TextBackgroundStyle {
-    return {
-      color: this.scaleAlpha(this.themeCommentPreview(theme).backgroundColor, 0.6),
-      radius: Math.min(theme.radius.bubble, fontSize * 0.6)
-    };
+  /** The reader's comment bubble with its label baked in, cached per look, label and size. */
+  commentBubbleImage(theme: ThemePack, label: string, fontSizeVp: number, dark: boolean): ReaderCommentBubbleImage | null {
+    const style = ReaderCommentBubbleStyles.resolve(this.themeCommentPreview(theme).bubbleStyleId, dark);
+    const pxPerVp = this.getUIContext().vp2px(1);
+    const key = `${style.identity()}_${label}_${fontSizeVp}_${pxPerVp}`;
+    const cached = this.commentBubbleImages.get(key);
+    if (cached !== undefined) return cached;
+    const rendered = ReaderCommentBubblePainter.renderLabel(style, label, fontSizeVp * pxPerVp);
+    this.commentBubbleImages.set(key, rendered);
+    return rendered;
   }
 
-  scaleAlpha(color: string, factor: number): string {
-    const hex = (color || '').trim().replace('#', '');
-    const argb = hex.length === 6 ? `FF${hex}` : hex;
-    if (!/^[0-9A-Fa-f]{8}$/.test(argb)) return color;
-    const alpha = Math.round(Number.parseInt(argb.substring(0, 2), 16) * factor);
-    return `#${alpha.toString(16).padStart(2, '0').toUpperCase()}${argb.substring(2)}`;
+  commentBubbleImageWidth(image: ReaderCommentBubbleImage | null): number {
+    return image ? this.getUIContext().px2vp(image.width) : 0;
+  }
+
+  commentBubbleImageHeight(image: ReaderCommentBubbleImage | null): number {
+    return image ? this.getUIContext().px2vp(image.height) : 0;
+  }
+
+  @Builder
+  commentBubbleSpan(theme: ThemePack, label: string, fontSizeVp: number, dark: boolean) {
+    if (this.commentBubbleImage(theme, label, fontSizeVp, dark)) {
+      ImageSpan((this.commentBubbleImage(theme, label, fontSizeVp, dark) as ReaderCommentBubbleImage).pixelMap)
+        .width(this.commentBubbleImageWidth(this.commentBubbleImage(theme, label, fontSizeVp, dark)))
+        .height(this.commentBubbleImageHeight(this.commentBubbleImage(theme, label, fontSizeVp, dark)))
+        .objectFit(ImageFit.Contain)
+        .verticalAlign(ImageSpanAlignment.CENTER)
+    }
   }
 
   themeEmphasisContext(theme: ThemePack, mode: string): ReaderRegexEmphasisContext {

@@ -181,7 +181,7 @@ export class CustomThemeSchemeStore {
     await store.flush();
     const revision = (AppStorage.get<number>(CustomThemeSchemeStore.STORAGE_REVISION) || 0) + 1;
     AppStorage.setOrCreate(CustomThemeSchemeStore.STORAGE_REVISION, revision);
-    CloudSyncChangeTracker.markApplicationPreferenceChanged();
+    CloudSyncChangeTracker.markPreferenceChanged();
     return true;
   }
 
@@ -209,7 +209,7 @@ export class CustomThemeSchemeStore {
     await store.flush();
     const revision = (AppStorage.get<number>(CustomThemeSchemeStore.STORAGE_REVISION) || 0) + 1;
     AppStorage.setOrCreate(CustomThemeSchemeStore.STORAGE_REVISION, revision);
-    CloudSyncChangeTracker.markApplicationPreferenceChanged();
+    CloudSyncChangeTracker.markPreferenceChanged();
   }
 
   static async replaceFromSync(
@@ -225,6 +225,8 @@ export class CustomThemeSchemeStore {
       }
       const incomingSettings = AppThemeSettingsStore.cloneSettings(item.settings || new AppThemeSettings());
       const localScheme = CustomThemeSchemeStore.find(localSchemes, item.id);
+      incomingSettings.themeApplyLayoutEnabled = localScheme ?
+        localScheme.settings.themeApplyLayoutEnabled : false;
       // 启动封面图片是设备本地资源，云端只同步方案设置，不覆盖本机文件绑定。
       incomingSettings.customLightStartupImagePath = localScheme ?
         localScheme.settings.customLightStartupImagePath : '';

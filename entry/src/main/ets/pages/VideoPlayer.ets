@@ -4,6 +4,7 @@ import { AppDatabase } from '../model/data/AppDatabase';
 import { ReadBookEngine } from '../core/book/ReadBookEngine';
 import { WebBookService } from '../core/book/WebBookService';
 import { HdsFeedback } from '../utils/HdsFeedback';
+import { ReaderTtsFloatingSession } from '../utils/ReaderTtsFloatingSession';
 import { syncSystemBars } from '../utils/SystemBars';
 import { AppFontSize } from '../theme/AppFontSize';
 import { AppSpacing } from '../theme/AppSpacing';
@@ -12,6 +13,7 @@ import { ThemeRuntime } from '../theme/ThemeRuntime';
 interface VideoPlayerParams {
   bookUrl?: string;
   chapterIndex?: string;
+  shelfBookOpening?: string;
 }
 
 /** 选集列表的数据源：集数可能上千，用懒加载避免一次创建全部条目。 */
@@ -95,24 +97,41 @@ struct VideoPlayerPage {
   private resumeSec: number = 0;
   private retried: boolean = false;
   private lastSavedSec: number = -1;
+  private playerPageVisible: boolean = false;
+  private orientationSerial: number = 0;
+  // 从书架带开书动画进来时，书架那层“正在打开书籍”要等这里通知才会收起，否则返回后一直转圈。
+  private openedWithShelfAnimation: boolean = false;
+  private openedBookUrl: string = '';
 
   aboutToAppear(): void {
     const params = router.getParams() as VideoPlayerParams;
     const bookUrl = params && params.bookUrl ? params.bookUrl : '';
     const requestedIndex = params && params.chapterIndex !== undefined && params.chapterIndex !== '' ?
       Number(params.chapterIndex) : -1;
-    this.enterImmersive();
+    this.openedWithShelfAnimation = !!params && params.shelfBookOpening === 'true';
+    this.openedBookUrl = bookUrl;
     this.loadBook(bookUrl, requestedIndex);
   }
 
   aboutToDisappear(): void {
+    this.playerPageVisible = false;
+    this.orientationSerial++;
     this.loadSerial++;
     this.clearHideTimer();
     this.saveProgress(true);
     this.leaveImmersive();
+    this.requestShelfCloseAnimation();
+  }
+
+  onPageShow(): void {
+    this.playerPageVisible = true;
+    this.enterImmersive();
+    this.applyPreferredOrientation(window.Orientation.AUTO_ROTATION_RESTRICTED);
   }
 
   onPageHide(): void {
+    this.playerPageVisible = false;
+    this.orientationSerial++;
     this.controller.pause();
     this.saveProgress(true);
   }
@@ -126,11 +145,22 @@ struct VideoPlayerPage {
       this.setLandscape(false);
       return true;
     }
+    this.requestShelfCloseAnimation();
     return false;
+  }
+
+  private requestShelfCloseAnimation(): void {
+    if (!this.openedWithShelfAnimation) {
+      return;
+    }
+    this.openedWithShelfAnimation = false;
+    AppStorage.setOrCreate('shelfBookCloseAnimationUrl', this.openedBookUrl);
+    AppStorage.setOrCreate('shelfBookCloseAnimationNonce', Date.now());
   }
 
   private enterImmersive(): void {
     window.getLastWindow(getContext(this)).then((mainWindow: window.Window): void => {
+      if (!this.playerPageVisible) return;
       mainWindow.setWindowLayoutFullScreen(true);
       mainWindow.setWindowSystemBarEnable([]);
       mainWindow.setWindowKeepScreenOn(true);
@@ -142,8 +172,11 @@ struct VideoPlayerPage {
   private leaveImmersive(): void {
     const dark = this.appDarkMode;
     window.getLastWindow(getContext(this)).then((mainWindow: window.Window): void => {
+      if (this.playerPageVisible) return;
       mainWindow.setWindowKeepScreenOn(false);
-      mainWindow.setPreferredOrientation(window.Orientation.UNSPECIFIED);
+      mainWindow.setPreferredOrientation(window.Orientation.AUTO_ROTATION_RESTRICTED).catch((error: Error): void => {
+        console.warn('[VideoPlayer] restore orientation failed:', error.message);
+      });
       syncSystemBars(getContext(this), dark, ThemeRuntime.pageColor(dark));
     }).catch((error: Error): void => {
       console.warn('[VideoPlayer] leave immersive failed:', error.message);
@@ -151,14 +184,20 @@ struct VideoPlayerPage {
   }
 
   private setLandscape(enabled: boolean): void {
-    this.landscape = enabled;
-    window.getLastWindow(getContext(this)).then((mainWindow: window.Window): void => {
-      mainWindow.setPreferredOrientation(enabled ? window.Orientation.AUTO_ROTATION_LANDSCAPE :
-        window.Orientation.UNSPECIFIED);
+    // 手动切换立即生效，之后仍可跟随系统旋转，不能把窗口永久限制在横屏或竖屏。
+    this.applyPreferredOrientation(enabled ? window.Orientation.USER_ROTATION_LANDSCAPE :
+      window.Orientation.USER_ROTATION_PORTRAIT);
+    this.scheduleHideControls();
+  }
+
+  private applyPreferredOrientation(preferred: window.Orientation): void {
+    const serial = ++this.orientationSerial;
+    window.getLastWindow(getContext(this)).then((mainWindow: window.Window) => {
+      if (!this.playerPageVisible || serial !== this.orientationSerial) return;
+      return mainWindow.setPreferredOrientation(preferred);
     }).catch((error: Error): void => {
       console.warn('[VideoPlayer] rotate failed:', error.message);
     });
-    this.scheduleHideControls();
   }
 
   private async loadBook(bookUrl: string, requestedIndex: number): Promise<void> {
@@ -344,8 +383,12 @@ struct VideoPlayerPage {
         .width(40)
         .height(40)
         .onClick(() => {
-          if (this.landscape) this.setLandscape(false);
-          else router.back();
+          if (this.landscape) {
+            this.setLandscape(false);
+          } else {
+            this.requestShelfCloseAnimation();
+            router.back();
+          }
         })
       Column() {
         Text(this.bookName)
@@ -511,6 +554,10 @@ struct VideoPlayerPage {
             this.onVideoPrepared(event.duration);
           })
           .onStart(() => {
+            // 同一应用内的音频流系统不会互相打断，朗读/听书要自己停下，免得和视频声音叠在一起。
+            ReaderTtsFloatingSession.pause().catch((error: Error) => {
+              console.warn('[VideoPlayer] pause tts failed:', error.message);
+            });
             this.isPlaying = true;
             this.statusText = '';
             this.scheduleHideControls();
@@ -566,5 +613,10 @@ struct VideoPlayerPage {
     .height('100%')
     .backgroundColor(Color.Black)
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .onSizeChange((_oldValue: SizeOptions, newValue: SizeOptions) => {
+      const width = Number(newValue.width);
+      const height = Number(newValue.height);
+      if (width > 0 && height > 0) this.landscape = width > height;
+    })
   }
 }

@@ -3,6 +3,7 @@ import { syncSystemBars } from '../utils/SystemBars';
 import { ReaderSettings, ReaderSettingsStore } from '../utils/ReaderSettingsStore';
 import { ReaderFontHelper, ReaderFontItem } from '../utils/ReaderFontHelper';
 import { ReaderSystemFontHelper } from '../utils/ReaderSystemFontHelper';
+import { ReaderFontBootstrap } from '../utils/ReaderFontBootstrap';
 import { AdaptiveColorPicker } from '../components/AdaptiveColorPicker';
 import { AdaptiveIconButton } from '../components/AdaptiveIconButton';
 import { AdaptiveSwitch } from '../components/AdaptiveSwitch';
@@ -15,12 +16,15 @@ import {
   ReaderResolvedRegexEmphasis
 } from '../model/reader/ReaderRegexFontRule';
 import { ThemeRuntime } from '../theme/ThemeRuntime';
+import { HdsFeedback } from '../utils/HdsFeedback';
 import { ThemeAssetRegistry } from '../theme/ThemeAssetRegistry';
 import { ThemeAccessPolicy } from '../account/ThemeAccessPolicy';
 import { ImmersiveMaterialRuntime } from '../utils/ImmersiveMaterialRuntime';
 import { AppFontSize } from '../theme/AppFontSize';
 import { AppSpacing } from '../theme/AppSpacing';
 import { PageScaffold } from '../components/common/PageScaffold';
+import { CloudAutoSync, CloudRemoteFont } from '../account/CloudAutoSync';
+import { CloudFontMenu } from '../account/CloudFontMenu';
 
 class ReaderCustomFontItem {
   familyName: string = '';
@@ -56,6 +60,7 @@ struct ReaderFontSettingsPage {
   @StorageLink('appDarkAccentColor') appDarkAccentColor: string = '#4E9BFF';
   @StorageLink('themeRevision') themeRevision: number = 0;
   @StorageLink('accountEntitlementsRevision') accountEntitlementsRevision: number = 0;
+  @StorageLink('readerFontWeight') readerFontWeight: number = 400;
   @State readerFontSize: number = 20;
   @State readerBodyFontMode: string = 'global';
   @State readerBodyFontFamily: string = '';
@@ -71,7 +76,10 @@ struct ReaderFontSettingsPage {
   @State readerRegexFontRulesRaw: string = '';
   @StorageLink('readerFontFamily') readerFontFamily: string = '';
   @StorageLink('readerSystemFontFamily') readerSystemFontFamily: string = '';
+  @StorageLink('readerFontMode') readerFontMode: string = 'device';
   @StorageLink('readerCustomFontsRaw') readerCustomFontsRaw: string = '';
+  @StorageLink('cloudRemoteFontsRaw') cloudRemoteFontsRaw: string = '';
+  private downloadingRemoteFont: boolean = false;
   @State regexRules: ReaderRegexFontRule[] = [];
   @State regexHighlightRefreshKey: number = 0;
   @State activeRegexInputKey: string = '';
@@ -133,6 +141,7 @@ struct ReaderFontSettingsPage {
     try {
       const settings = await ReaderSettingsStore.load(getContext(this));
       this.readerFontSize = settings.fontSize;
+      this.readerFontWeight = settings.fontWeight;
       this.readerBodyFontMode = settings.bodyFontMode;
       this.readerBodyFontFamily = settings.bodyFontFamily;
       this.readerTitleFontMode = settings.titleFontMode;
@@ -387,8 +396,37 @@ struct ReaderFontSettingsPage {
     for (const item of this.customFonts()) {
       options.push({ value: item.sourceName || item.familyName || '自定义字体' });
     }
+    for (const font of this.remoteFonts()) {
+      options.push({ value: CloudFontMenu.label(font) });
+    }
     return options;
   }
+
+  /** 云端有、本机未下载的字体（终身超级会员字体云同步），排在本机字体之后。 */
+  remoteFonts(): CloudRemoteFont[] {
+    return CloudAutoSync.parseRemoteFonts(this.cloudRemoteFontsRaw);
+  }
+
+  remoteFontStart(): number {
+    return 2 + this.customFonts().length;
+  }
+
+  /** 选中云端字体：静默下载导入，完成后按本机字体应用。 */
+  async selectRemoteFont(remoteIndex: number, apply: (customIndex: number) => void): Promise<void> {
+    const font = this.remoteFonts()[remoteIndex];
+    if (!font || this.downloadingRemoteFont) return;
+    this.downloadingRemoteFont = true;
+    try {
+      const filePath = await CloudAutoSync.ensureFontDownloaded(getContext(this), font);
+      const index = this.customFonts().findIndex((item: ReaderCustomFontItem) => item.filePath === filePath);
+      if (index >= 0) apply(index);
+    } catch (e) {
+      HdsFeedback.showToast(e instanceof Error && e.message ? e.message : '云端字体下载失败，请稍后重试');
+    } finally {
+      this.downloadingRemoteFont = false;
+    }
+  }
+
 
   selectedFontIndex(mode: string, family: string): number {
     if (mode === 'system') {
@@ -426,7 +464,7 @@ struct ReaderFontSettingsPage {
       const source = Array.isArray(parsed) ? parsed as ReaderCustomFontItem[] : ((parsed as ReaderCustomFontData).fonts || []);
       const result: ReaderCustomFontItem[] = [];
       for (const item of source) {
-        if (!item || !item.familyName) {
+        if (!item || !item.familyName || !ReaderFontHelper.fontFileExists(item.filePath)) {
           continue;
         }
         const font = new ReaderCustomFontItem();
@@ -450,7 +488,12 @@ struct ReaderFontSettingsPage {
       const fonts = this.customFonts();
       const fontIndex = index - 2;
       if (fontIndex >= 0 && fontIndex < fonts.length) {
-        return ['custom', this.registerCustomFont(fonts[fontIndex]) || fonts[fontIndex].familyName];
+        const family = this.registerCustomFont(fonts[fontIndex]);
+        if (!family) {
+          HdsFeedback.showToast('字体注册失败，请更换字体文件');
+          return [];
+        }
+        return ['custom', family];
       }
     }
     return ['global', ''];
@@ -458,14 +501,14 @@ struct ReaderFontSettingsPage {
 
   registerCustomFont(font: ReaderCustomFontItem): string {
     if (!font || !font.filePath) {
-      return font ? font.familyName : '';
+      return '';
     }
     const item = new ReaderFontItem();
     item.familyName = font.familyName || ReaderFontHelper.normalizeFontFamily(font.filePath);
     item.filePath = font.filePath;
     item.sourceName = ReaderFontHelper.resolveDisplayName(font.sourceName, font.filePath);
     const result = ReaderFontHelper.registerFont(this.getUIContext(), item);
-    return result.registered ? result.familyName : item.familyName;
+    return result.registered ? result.familyName : '';
   }
 
   resolveCustomFontFamily(family: string): string {
@@ -554,8 +597,15 @@ struct ReaderFontSettingsPage {
         .menuBackgroundBlurStyle(BlurStyle.NONE)
         .attributeModifier(ImmersiveMaterialRuntime.selectMenuModifier())
         .onSelect((index: number) => {
+          if (index >= this.remoteFontStart()) {
+            this.selectRemoteFont(index - this.remoteFontStart(), (customIndex: number) => {
+              const downloaded = this.modeAndFamilyByIndex(customIndex + 2);
+              if (downloaded.length === 2) onChange(downloaded[0], downloaded[1]);
+            });
+            return;
+          }
           const result = this.modeAndFamilyByIndex(index);
-          onChange(result[0], result[1]);
+          if (result.length === 2) onChange(result[0], result[1]);
         })
     }
     .width('calc(100% - 32vp)')
@@ -797,6 +847,7 @@ struct ReaderFontSettingsPage {
         .width('100%')
       Text('这是一段阅读正文预览，文字会跟随当前正文字体设置显示。')
         .fontSize(this.readerFontSize)
+        .fontWeight(this.readerFontWeight)
         .fontFamily(this.bodyPreviewFontFamily())
         .fontColor(this.primaryTextColor())
         .width('100%')
@@ -839,7 +890,8 @@ struct ReaderFontSettingsPage {
     if (mode === 'custom' && family) {
       return this.resolveCustomFontFamily(family);
     }
-    return this.readerFontFamily || ThemeRuntime.fontFamily() || this.systemPreviewFontFamily();
+    return this.readerFontFamily ||
+      ReaderFontBootstrap.defaultFontFamily(this.readerFontMode, this.systemPreviewFontFamily());
   }
 
   bodyPreviewFontFamily(): string {
@@ -1074,6 +1126,7 @@ struct ReaderFontSettingsPage {
           .verticalAlign(ImageSpanAlignment.CENTER)
         Span(slice.text)
           .fontSize(this.regexRuleAt(index).fontSize)
+          .fontWeight(this.readerFontWeight)
           .fontFamily(this.previewFontFamily(this.regexRuleAt(index).fontMode, this.regexRuleAt(index).fontFamily))
           .fontColor(this.regexPreviewTextColor(true, index))
           .textShadow(this.regexPreviewTextShadow(true, index))
@@ -1089,6 +1142,7 @@ struct ReaderFontSettingsPage {
     } else {
       Span(slice.text)
         .fontSize(slice.highlighted ? this.regexRuleAt(index).fontSize : this.readerFontSize)
+        .fontWeight(this.readerFontWeight)
         .fontFamily(slice.highlighted ?
           this.previewFontFamily(this.regexRuleAt(index).fontMode, this.regexRuleAt(index).fontFamily) :
           this.previewFontFamily(this.readerBodyFontMode, this.readerBodyFontFamily))
@@ -1186,6 +1240,7 @@ struct ReaderFontSettingsPage {
     this.appendAccessibleBubbleStyle(options, 'mecha-comm', '通讯频道', revision);
     this.appendAccessibleBubbleStyle(options, 'starwish-ribbon', '星愿丝带', revision);
     this.appendAccessibleBubbleStyle(options, 'pencil-mark', '铅笔划线', revision);
+    this.appendAccessibleBubbleStyle(options, 'gilded-orbit', '曜金藏签', revision);
     return options;
   }
 
@@ -1410,8 +1465,15 @@ struct ReaderFontSettingsPage {
         .menuBackgroundBlurStyle(BlurStyle.NONE)
         .attributeModifier(ImmersiveMaterialRuntime.selectMenuModifier())
         .onSelect((index: number) => {
+          if (index >= this.remoteFontStart()) {
+            this.selectRemoteFont(index - this.remoteFontStart(), (customIndex: number) => {
+              const downloaded = this.modeAndFamilyByIndex(customIndex + 2);
+              if (downloaded.length === 2) onChange(downloaded[0], downloaded[1]);
+            });
+            return;
+          }
           const result = this.modeAndFamilyByIndex(index);
-          onChange(result[0], result[1]);
+          if (result.length === 2) onChange(result[0], result[1]);
         })
     }
     .width('100%')

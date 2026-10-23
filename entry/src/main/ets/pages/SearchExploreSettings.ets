@@ -10,6 +10,7 @@ import { AppSpacing } from '../theme/AppSpacing';
 @Component
 struct SearchExploreSettingsPage {
   @StorageLink('searchExploreShowResultCover') searchExploreShowResultCover: boolean = true;
+  @StorageLink('searchExploreShowResultCoverBackground') searchExploreShowResultCoverBackground: boolean = true;
   @StorageLink('searchExploreUseBookshelfCoverGallery') searchExploreUseBookshelfCoverGallery: boolean = false;
   @StorageLink('searchExploreShowResultTags') searchExploreShowResultTags: boolean = true;
   @StorageLink('searchExploreAggregateResults') searchExploreAggregateResults: boolean = true;
@@ -68,6 +69,15 @@ struct SearchExploreSettingsPage {
           }
         })
       }
+      SettingSwitchRow({
+        title: '封面模糊背景',
+        description: '在搜索和发现结果列表中显示封面模糊背景',
+        isOn: this.searchExploreShowResultCoverBackground,
+        onChange: (value: boolean) => {
+          this.searchExploreShowResultCoverBackground = value;
+          this.onSettingChanged();
+        }
+      })
       SettingSwitchRow({
         title: '显示结果标签',
         description: '在搜索和发现结果中显示标签',
@@ -158,6 +168,7 @@ struct SearchExploreSettingsPage {
     try {
       const settings = await SearchExploreSettingsStore.load(getContext(this));
       this.searchExploreShowResultCover = settings.showResultCover;
+      this.searchExploreShowResultCoverBackground = settings.showResultCoverBackground;
       this.searchExploreUseBookshelfCoverGallery = settings.useBookshelfCoverGallery;
       this.searchExploreShowResultTags = settings.showResultTags;
       this.searchExploreAggregateResults = settings.aggregateSearchResults;
@@ -179,6 +190,7 @@ struct SearchExploreSettingsPage {
   onSettingChanged(): void {
     SearchExploreSettingsStore.load(getContext(this)).then((settings: SearchExploreSettings) => {
       settings.showResultCover = this.searchExploreShowResultCover;
+      settings.showResultCoverBackground = this.searchExploreShowResultCoverBackground;
       settings.useBookshelfCoverGallery = this.searchExploreUseBookshelfCoverGallery;
       settings.showResultTags = this.searchExploreShowResultTags;
       settings.aggregateSearchResults = this.searchExploreAggregateResults;

@@ -18,6 +18,7 @@ import { SystemDialogSession } from '../utils/SystemDialogSession';
 import { AdaptiveSwitch } from '../components/AdaptiveSwitch';
 import { AppFontSize } from '../theme/AppFontSize';
 import { AppSpacing } from '../theme/AppSpacing';
+import { CollapsingHeader } from '../utils/CollapsingHeader';
 
 class VoiceEditFormDraft {
   editingVoiceId: string = '';
@@ -39,6 +40,7 @@ const CUSTOM_TTS_IMPORT_FILE_LIMIT_BYTES: number = 2 * 1024 * 1024;
 @Entry
 @Component
 struct CustomTtsVoiceManagerPage {
+  @State headerCollapse: number = 0;
   @StorageLink('ttsCustomVoiceId') ttsCustomVoiceId: string = '';
   @StorageLink('ttsCustomVoices') ttsCustomVoices: string = '';
   @StorageLink('ttsPerson') ttsPerson: number = 0;
@@ -120,7 +122,15 @@ struct CustomTtsVoiceManagerPage {
   build() {
     Stack({ alignContent: Alignment.BottomEnd }) {
       Column() {
-        this.titleBar()
+        // 顶栏随列表上滑跟手收起、下滑展开，与其他二级页面一致。
+        Column() {
+          this.titleBar()
+        }
+        .width('100%')
+        .height(56 + this.statusBarHeight - this.headerCollapse)
+        .clip(true)
+        .opacity(CollapsingHeader.contentOpacity(this.headerCollapse))
+        .hitTestBehavior(CollapsingHeader.acceptsTouch(this.headerCollapse) ? HitTestMode.Default : HitTestMode.None)
         this.searchBar()
         if (this.selectionMode) {
           this.selectionHeader()
@@ -189,6 +199,18 @@ struct CustomTtsVoiceManagerPage {
           .onAreaChange((_oldValue: Area, area: Area) => {
             this.voiceSelectionViewportTop = Number(area.globalPosition.y);
             this.voiceSelectionViewportBottom = this.voiceSelectionViewportTop + Number(area.height);
+          })
+          .onDidScroll((yOffset: number) => {
+            this.headerCollapse = CollapsingHeader.next(this.headerCollapse, yOffset,
+              this.voiceListScroller.currentOffset().yOffset);
+          })
+          .onScrollStop(() => {
+            const target = CollapsingHeader.settle(this.headerCollapse, this.voiceListScroller.currentOffset().yOffset);
+            if (target !== this.headerCollapse) {
+              animateTo({ duration: 200, curve: Curve.FastOutSlowIn }, () => {
+                this.headerCollapse = target;
+              });
+            }
           })
         }
 
@@ -982,8 +1004,6 @@ struct CustomTtsVoiceManagerPage {
     .width('100%')
     .height(56 + this.statusBarHeight)
     .padding({ right: AppSpacing.XL, top: this.statusBarHeight })
-    .backgroundColor(ThemeRuntime.topBarColor(this.appDarkMode))
-    .backdropBlur(ThemeRuntime.topBarBlur())
     .alignItems(VerticalAlign.Center)
   }
 

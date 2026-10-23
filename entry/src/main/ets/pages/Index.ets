@@ -1,8 +1,8 @@
-import { window } from '@kit.ArkUI';
+import { router, window } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { webview } from '@kit.ArkWeb';
 import { WebRuntimeAvailability } from '../utils/WebRuntimeAvailability';
-import { HdsTabs } from '@kit.UIDesignKit';
+import { HdsTabs, HdsTabsController } from '@kit.UIDesignKit';
 import { Book, BookChapter, BookSourceStageWebRuntime } from '@legado/sourceengine';
 import { AppDatabase } from '../model/data/AppDatabase';
 import { WebBookFetchRuntimeHost } from '../components/WebBookFetchRuntimeHost';
@@ -10,6 +10,7 @@ import { syncSystemSafeAreas } from '../utils/SystemBars';
 import { ImmersiveMaterialRuntime } from '../utils/ImmersiveMaterialRuntime';
 import { HdsFeedback } from '../utils/HdsFeedback';
 import { RecentReadShortcut } from '../utils/RecentReadShortcut';
+import { ReaderOpenTrace } from '../utils/ReaderOpenTrace';
 import { ThemeAssetRegistry } from '../theme/ThemeAssetRegistry';
 import { ThemeRuntime } from '../theme/ThemeRuntime';
 import { CloudSyncCoordinator } from '../account/CloudSyncCoordinator';
@@ -27,6 +28,9 @@ import { AppSpacing } from '../theme/AppSpacing';
 @Entry
 @Component
 struct Index {
+  /** 底部页签切换时新页面滑入的距离和时长。 */
+  static readonly TAB_ENTER_DISTANCE: number = 32;
+  static readonly TAB_ENTER_DURATION: number = 260;
   private stageRuntimeController: webview.WebviewController = new webview.WebviewController();
   @State stageRuntimeMounted: boolean = true;
   private stageRuntimeResetScheduled: boolean = false;
@@ -34,10 +38,19 @@ struct Index {
   private stageRuntimeAttachRetryId: number = -1;
   private shortcutRoutingActive: boolean = false;
   private cloudSyncDebounceTimer: number = -1;
-  @State currentIndex: number = 0;
+  @State @Watch('onCurrentIndexChanged') currentIndex: number = 0;
+  /** 发现页第一次打开后常驻，切走只停用不销毁，回来时直接显示已加载的分类和列表。 */
+  @State exploreTabMounted: boolean = false;
+  /** 新页签从哪一侧滑入：往右边的页签切换时从右侧进入，反之从左侧。 */
+  @State homeTabEnterOffset: number = Index.TAB_ENTER_DISTANCE;
   @State hdsMaterialRenderBranch: boolean = false;
   @State bookshelfMultiSelectActive: boolean = false;
   @State bookshelfActiveGroupId: number = 0;
+  private immersiveTabsController: HdsTabsController = new HdsTabsController();
+  private compatTabsController: TabsController = new TabsController();
+  // 每页单独保存进度，常驻的搜索/发现页不能改变当前页的底栏。
+  private tabHeaderCollapseProgress: number[] = [0, 0, 0, 0];
+  @State bottomBarCollapseProgress: number = 0;
   @StorageLink('themeRevision') @Watch('onThemeRevisionChanged') themeRevision: number = 0;
   @StorageProp('statusBarHeight') statusBarHeight: number = 0;
   @StorageProp('navBarHeight') navBarHeight: number = 0;
@@ -64,6 +77,7 @@ struct Index {
   @StorageLink('globalTtsChapterTitle') globalTtsChapterTitle: string = '';
   @StorageLink('globalTtsMode') globalTtsMode: string = '';
   @StorageLink('globalTtsChapterProgress') globalTtsChapterProgress: string = '';
+  @StorageLink('globalTtsBusy') globalTtsBusy: boolean = false;
   @State showGlobalTtsPanel: boolean = false;
   @State showGlobalTtsCatalog: boolean = false;
   @StorageLink('globalTtsAudioCatalogReverseOrder') @Watch('onGlobalTtsCatalogOrderChanged')
@@ -90,6 +104,9 @@ struct Index {
 
   onPageShow(): void {
     this.shortcutRoutingActive = true;
+    // 从后台被桌面卡片/快捷方式唤起时，onNewWant 先于 onPageShow 写入 launchShortcutNonce，
+    // 那时页面仍处于隐藏状态，@Watch 会把请求忽略掉，所以页面重新可见时要再检查一次。
+    this.openPendingShortcut();
     hilog.info(0x0000, 'testTag', 'StartupTrace Index onPageShow %{public}d', Date.now());
     this.syncHomeSystemBars();
     // ReadBook is pushed over the retained Index route. Its final progress notification can arrive while the
@@ -188,6 +205,40 @@ struct Index {
     this.syncHomeSystemBars();
   }
 
+  onCurrentIndexChanged(): void {
+    if (this.currentIndex === 1) {
+      this.exploreTabMounted = true;
+    }
+    // 书架和“我的”在切走后销毁，重新进入时标题和底栏都从展开状态开始。
+    if (this.currentIndex === 0 || this.currentIndex === 3) {
+      this.tabHeaderCollapseProgress[this.currentIndex] = 0;
+    }
+    this.syncBottomBarCollapse();
+  }
+
+  onTabHeaderCollapseChange(index: number, progress: number): void {
+    if (!Number.isFinite(progress)) return;
+    this.tabHeaderCollapseProgress[index] = Math.max(0, Math.min(1, progress));
+    if (index === this.currentIndex) {
+      this.syncBottomBarCollapse();
+    }
+  }
+
+  syncBottomBarCollapse(): void {
+    this.bottomBarCollapseProgress = this.tabHeaderCollapseProgress[this.currentIndex] || 0;
+    // 只移动导航栏，不改变内容区高度，避免列表在收起/展开时跳动。
+    if (this.supportsImmersiveTabs()) {
+      this.immersiveTabsController.setTabBarTranslate({
+        y: (56 + this.floatingBarBottomMargin() + 16) * this.bottomBarCollapseProgress
+      });
+    } else {
+      this.compatTabsController.setTabBarTranslate({
+        y: (56 + this.compatTabSafeHeight()) * this.bottomBarCollapseProgress
+      });
+      this.compatTabsController.setTabBarOpacity(1 - this.bottomBarCollapseProgress);
+    }
+  }
+
   onBookSourceExploreRefreshRequested(): void {
     if (this.bookSourceExploreRefreshNonce <= 0) return;
     this.bookshelfMultiSelectActive = false;
@@ -228,6 +279,12 @@ struct Index {
       this.closeGlobalTtsPanel();
       return true;
     }
+    // 书架搜索栏开着时，返回键先清空关键词并收起它。
+    if (this.currentIndex === 0 && AppStorage.get<boolean>('bookshelfSearchActive')) {
+      AppStorage.setOrCreate('bookshelfSearchKeyword', '');
+      AppStorage.setOrCreate('bookshelfSearchActive', false);
+      return true;
+    }
     if (this.currentIndex !== 0) {
       this.bookshelfMultiSelectActive = false;
       this.currentIndex = 0;
@@ -251,6 +308,34 @@ struct Index {
     this.showGlobalTtsCatalog = false;
     animateTo({ duration: 190, curve: Curve.EaseIn }, () => {
       this.showGlobalTtsPanel = false;
+    });
+  }
+
+  /**
+   * 后台朗读的阅读页已离开路由栈，这里按书架直接打开的方式重新进入正文；
+   * 新阅读页会作为镜像接上正在进行的朗读。
+   */
+  openGlobalTtsReader(): void {
+    const bookUrl = AppStorage.get<string>('globalTtsBookUrl') || '';
+    if (!bookUrl) {
+      HdsFeedback.showToast('暂未获取到朗读中的书籍');
+      return;
+    }
+    this.closeGlobalTtsPanel();
+    ReaderOpenTrace.begin(bookUrl);
+    AppStorage.setOrCreate<boolean>('shelfReaderDirectTransition', true);
+    ReaderOpenTrace.mark(bookUrl, 'direct-open');
+    ReaderOpenTrace.mark(bookUrl, 'route-requested');
+    router.pushUrl({
+      url: 'pages/ReadBook',
+      params: {
+        bookUrl: bookUrl,
+        shelfBookOpening: 'false'
+      }
+    }).catch((error: Error) => {
+      AppStorage.setOrCreate<boolean>('shelfReaderDirectTransition', false);
+      console.error('从朗读面板回到正文失败:', error);
+      ReaderOpenTrace.cancel(bookUrl, 'route-failed');
     });
   }
 
@@ -421,7 +506,9 @@ struct Index {
           bottomInset: this.navBarHeight,
           viewportHeight: this.globalTtsViewportHeight,
           onClose: () => this.closeGlobalTtsPanel(),
-          onOpenCatalog: () => this.openGlobalTtsCatalog()
+          onOpenCatalog: () => this.openGlobalTtsCatalog(),
+          showOpenReader: this.globalTtsMode !== 'audio',
+          onOpenReader: () => this.openGlobalTtsReader()
         })
       }
       if (this.globalTtsActive && this.showGlobalTtsPanel && this.showGlobalTtsCatalog) {
@@ -468,7 +555,8 @@ struct Index {
             .fontColor(['#FFFFFF'])
         }
         Column({ space: 1 }) {
-          Text(this.globalTtsPaused ? '已暂停' : (this.globalTtsMode === 'audio' ? '听书中' : '朗读中'))
+          Text(this.globalTtsBusy ? '加载中' :
+            (this.globalTtsPaused ? '已暂停' : (this.globalTtsMode === 'audio' ? '听书中' : '朗读中')))
             .fontSize(AppFontSize.CAPTION)
             .fontWeight(FontWeight.Medium)
             .fontColor(ThemeRuntime.primaryTextColor(this.appDarkMode))
@@ -592,6 +680,16 @@ struct Index {
     return ReaderTtsFloatingSession.catalogCachedFlag(this.globalTtsCatalogCanonicalIndex(displayIndex));
   }
 
+  /** 页签内容的进入转场：淡入并从切换方向一侧轻微滑入；离开时直接隐藏。 */
+  homeTabEnterTransition(): TransitionEffect {
+    return TransitionEffect.asymmetric(
+      TransitionEffect.opacity(0)
+        .combine(TransitionEffect.translate({ x: this.homeTabEnterOffset }))
+        .animation({ duration: Index.TAB_ENTER_DURATION, curve: Curve.Friction }),
+      TransitionEffect.IDENTITY
+    );
+  }
+
   supportsImmersiveTabs(): boolean {
     return ImmersiveMaterialRuntime.supportsHdsTabs();
   }
@@ -603,15 +701,17 @@ struct Index {
 
   @Builder
   immersiveTabs() {
-    HdsTabs({ barPosition: BarPosition.End, index: this.currentIndex }) {
+    HdsTabs({ barPosition: BarPosition.End, index: this.currentIndex, controller: this.immersiveTabsController }) {
       TabContent() {
         if (this.currentIndex === 0) {
           BookshelfPage({
             statusBarHeight: this.statusBarHeight,
             navBarHeight: this.navBarHeight,
             isBookMultiSelect: $bookshelfMultiSelectActive,
-            activeShelfGroupId: $bookshelfActiveGroupId
+            activeShelfGroupId: $bookshelfActiveGroupId,
+            onHeaderCollapseChange: (progress: number) => this.onTabHeaderCollapseChange(0, progress)
           })
+            .transition(this.homeTabEnterTransition())
         } else {
           BlankTabPage()
         }
@@ -621,12 +721,18 @@ struct Index {
       .tabBar(this.bottomTabBar(this.navigationIcon('bookshelf'), '书架'))
 
       TabContent() {
-        if (this.currentIndex === 1) {
+        if (this.exploreTabMounted) {
           ExplorePage({
             statusBarHeight: this.statusBarHeight,
             navBarHeight: this.navBarHeight,
-            isActive: true
+            isActive: this.currentIndex === 1,
+            onHeaderCollapseChange: (progress: number) => this.onTabHeaderCollapseChange(1, progress)
           })
+            .transition(this.homeTabEnterTransition())
+            // 常驻后切回来不会再触发出现转场，与搜索页一样用隐式动画做进入效果。
+            .opacity(this.currentIndex === 1 ? 1 : 0)
+            .translate({ x: this.currentIndex === 1 ? 0 : this.homeTabEnterOffset })
+            .animation({ duration: Index.TAB_ENTER_DURATION, curve: Curve.Friction })
         } else {
           BlankTabPage()
         }
@@ -639,8 +745,13 @@ struct Index {
         SearchPage({
           statusBarHeight: this.statusBarHeight,
           navBarHeight: this.navBarHeight,
-          isActive: this.currentIndex === 2
+          isActive: this.currentIndex === 2,
+          onHeaderCollapseChange: (progress: number) => this.onTabHeaderCollapseChange(2, progress)
         })
+          // 搜索页常驻不重建，没有出现转场，用透明度和位移的隐式动画做同样的进入效果。
+          .opacity(this.currentIndex === 2 ? 1 : 0)
+          .translate({ x: this.currentIndex === 2 ? 0 : this.homeTabEnterOffset })
+          .animation({ duration: Index.TAB_ENTER_DURATION, curve: Curve.Friction })
       }
       .height('100%')
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
@@ -648,7 +759,12 @@ struct Index {
 
       TabContent() {
         if (this.currentIndex === 3) {
-          SettingsPage({ statusBarHeight: this.statusBarHeight, navBarHeight: this.navBarHeight })
+          SettingsPage({
+            statusBarHeight: this.statusBarHeight,
+            navBarHeight: this.navBarHeight,
+            onHeaderCollapseChange: (progress: number) => this.onTabHeaderCollapseChange(3, progress)
+          })
+            .transition(this.homeTabEnterTransition())
         } else {
           BlankTabPage()
         }
@@ -677,10 +793,12 @@ struct Index {
       },
       adaptToHandedness: true,
       thermoCtrl: true,
-      barOpacity: this.bookshelfMultiSelectActive ? 0 : 1
+      barOpacity: this.bookshelfMultiSelectActive ? 0 : 1 - this.bottomBarCollapseProgress
     })
     .scrollable(false)
+    .onAppear(() => this.syncBottomBarCollapse())
     .onChange((index: number) => {
+      this.homeTabEnterOffset = index >= this.currentIndex ? Index.TAB_ENTER_DISTANCE : -Index.TAB_ENTER_DISTANCE;
       this.currentIndex = index;
       this.syncHomeSystemBars();
     })
@@ -692,15 +810,17 @@ struct Index {
 
   @Builder
   compatTabs() {
-    Tabs({ barPosition: BarPosition.End, index: this.currentIndex }) {
+    Tabs({ barPosition: BarPosition.End, index: this.currentIndex, controller: this.compatTabsController }) {
       TabContent() {
         if (this.currentIndex === 0) {
           BookshelfPage({
             statusBarHeight: this.statusBarHeight,
             navBarHeight: this.navBarHeight,
             isBookMultiSelect: $bookshelfMultiSelectActive,
-            activeShelfGroupId: $bookshelfActiveGroupId
+            activeShelfGroupId: $bookshelfActiveGroupId,
+            onHeaderCollapseChange: (progress: number) => this.onTabHeaderCollapseChange(0, progress)
           })
+            .transition(this.homeTabEnterTransition())
         } else {
           BlankTabPage()
         }
@@ -710,12 +830,18 @@ struct Index {
       .tabBar(this.compatTabBar(this.navigationIcon('bookshelf'), '书架', 0))
 
       TabContent() {
-        if (this.currentIndex === 1) {
+        if (this.exploreTabMounted) {
           ExplorePage({
             statusBarHeight: this.statusBarHeight,
             navBarHeight: this.navBarHeight,
-            isActive: true
+            isActive: this.currentIndex === 1,
+            onHeaderCollapseChange: (progress: number) => this.onTabHeaderCollapseChange(1, progress)
           })
+            .transition(this.homeTabEnterTransition())
+            // 常驻后切回来不会再触发出现转场，与搜索页一样用隐式动画做进入效果。
+            .opacity(this.currentIndex === 1 ? 1 : 0)
+            .translate({ x: this.currentIndex === 1 ? 0 : this.homeTabEnterOffset })
+            .animation({ duration: Index.TAB_ENTER_DURATION, curve: Curve.Friction })
         } else {
           BlankTabPage()
         }
@@ -728,8 +854,13 @@ struct Index {
         SearchPage({
           statusBarHeight: this.statusBarHeight,
           navBarHeight: this.navBarHeight,
-          isActive: this.currentIndex === 2
+          isActive: this.currentIndex === 2,
+          onHeaderCollapseChange: (progress: number) => this.onTabHeaderCollapseChange(2, progress)
         })
+          // 搜索页常驻不重建，没有出现转场，用透明度和位移的隐式动画做同样的进入效果。
+          .opacity(this.currentIndex === 2 ? 1 : 0)
+          .translate({ x: this.currentIndex === 2 ? 0 : this.homeTabEnterOffset })
+          .animation({ duration: Index.TAB_ENTER_DURATION, curve: Curve.Friction })
       }
       .height('100%')
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
@@ -737,7 +868,12 @@ struct Index {
 
       TabContent() {
         if (this.currentIndex === 3) {
-          SettingsPage({ statusBarHeight: this.statusBarHeight, navBarHeight: this.navBarHeight })
+          SettingsPage({
+            statusBarHeight: this.statusBarHeight,
+            navBarHeight: this.navBarHeight,
+            onHeaderCollapseChange: (progress: number) => this.onTabHeaderCollapseChange(3, progress)
+          })
+            .transition(this.homeTabEnterTransition())
         } else {
           BlankTabPage()
         }
@@ -751,7 +887,9 @@ struct Index {
     .barHeight(this.bookshelfMultiSelectActive ? 0 : 56 + this.compatTabSafeHeight())
     .barBackgroundColor(ThemeRuntime.cardColor(this.appDarkMode))
     .scrollable(false)
+    .onAppear(() => this.syncBottomBarCollapse())
     .onChange((index: number) => {
+      this.homeTabEnterOffset = index >= this.currentIndex ? Index.TAB_ENTER_DISTANCE : -Index.TAB_ENTER_DISTANCE;
       this.currentIndex = index;
       this.syncHomeSystemBars();
     })

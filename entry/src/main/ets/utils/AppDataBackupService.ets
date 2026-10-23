@@ -13,6 +13,7 @@ import { BookSourceGroupStore } from './BookSourceGroupStore';
 import { ReaderReplaceRule, ReaderReplaceRuleStore } from './ReaderReplaceRuleStore';
 import { TtsSettingsStore } from './TtsSettingsStore';
 import { BookshelfStateStore } from './BookshelfStateStore';
+import { ReaderSettingsStore } from './ReaderSettingsStore';
 
 export class AppDataBackupSelection {
   sources: boolean = true;
@@ -1343,7 +1344,7 @@ export class AppDataBackupService {
     const fontFamily = AppDataBackupService.preferenceString(local, 'readerFontFamily', '');
     const fontFilePath = AppDataBackupService.preferenceString(local, 'readerFontFilePath', '');
     const fontSourceName = AppDataBackupService.preferenceString(local, 'readerFontSourceName', '系统默认');
-    const fontMode = AppDataBackupService.preferenceString(local, 'readerFontMode', 'system');
+    const fontMode = AppDataBackupService.preferenceString(local, 'readerFontMode', ReaderSettingsStore.FONT_MODE_DEVICE);
     const systemFontFamily = AppDataBackupService.preferenceString(local, 'readerSystemFontFamily', '');
     const customFontsRaw = AppDataBackupService.preferenceString(local, 'readerCustomFontsRaw', '');
 

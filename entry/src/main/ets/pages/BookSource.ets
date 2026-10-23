@@ -1,10 +1,12 @@
+import { BookSourceExport } from '../utils/BookSourceExport';
 import { NativeSourceService, NativeSourceSpec, BookSource, SearchBook, BookListRule, SearchRule, ExploreRule, BookInfoRule, TocRule, ContentRule, HttpClient, HttpResponse, RawHttpTextClient, VerificationSupport, CookieStore, TlsTrustStore, BookSourceLoginItem, BookSourceScriptRunner, BookSourceLoginCrypto, BookSourceExecutionJournal, BookSourceRuntimeRouter, SourceRuntimeDecision, SourceRuntimeStage, AnalyzeUrl } from '@legado/sourceengine';
-import { router, promptAction, uiMaterial } from '@kit.ArkUI';
-import { AppDatabase } from '../model/data/AppDatabase';
+import { router, promptAction } from '@kit.ArkUI';
+import { AppDatabase, BookSourcePositionUpdate } from '../model/data/AppDatabase';
 import { SearchCoordinator, SearchProgress, SearchSourceResult } from '../core/book/SearchCoordinator';
 import { syncSystemBars } from '../utils/SystemBars';
 import { SearchExploreSettingsStore } from '../utils/SearchExploreSettingsStore';
 import { ImmersiveBackButton } from '../components/ImmersiveBackButton';
+import { ImmersiveMaterialSurface } from '../components/ImmersiveMaterialSurface';
 import { BookSourceStageRuntimeHost } from '../components/BookSourceStageRuntimeHost';
 import { WebBookFetchRuntimeHost } from '../components/WebBookFetchRuntimeHost';
 import picker from '@ohos.file.picker';
@@ -36,8 +38,10 @@ import { HdsFeedback } from '../utils/HdsFeedback';
 import { AdaptiveSwitch } from '../components/AdaptiveSwitch';
 import { AppFontSize } from '../theme/AppFontSize';
 import { AppSpacing } from '../theme/AppSpacing';
+import { CollapsingHeader } from '../utils/CollapsingHeader';
 
 const BOOK_SOURCE_IMPORT_FILE_LIMIT_BYTES = 25 * 1024 * 1024;
+const BOOK_SOURCE_IMPORT_MAX_FILES = 50;
 const BOOK_SOURCE_IMPORT_TIMEOUT_MS = 20000;
 const BOOK_SOURCE_IMPORT_URL_RETRY_COUNT = 3;
 const BOOK_SOURCE_WEB_IMPORT_RETRY_COUNT = 3;
@@ -76,9 +80,18 @@ class BookSourceCheckUiUpdate {
   detail: string = '';
 }
 
+class BookSourceImportParseResult {
+  sources: BookSource[] = [];
+  nativeProblem: string = '';
+}
+
 // 头部里类型分段和兼容书源提示条的高度，列表顶部避让按它们计算。
-const SOURCE_FORMAT_BAR_HEIGHT: number = 36;
+const SOURCE_FORMAT_BAR_HEIGHT: number = 44;
+const SOURCE_FORMAT_BAR_PADDING: number = 6;
+const SOURCE_FORMAT_INDICATOR_WIDTH: number = 18;
 const COMPAT_SOURCE_NOTICE_HEIGHT: number = 44;
+const SOURCE_SEARCH_ROW_HEIGHT: number = 40 + AppSpacing.MD * 2;
+const SOURCE_GROUP_ROW_HEIGHT: number = 34 + AppSpacing.MD;
 
 @Entry
 @Component
@@ -104,6 +117,7 @@ struct BookSourcePage {
   @State sourceVisibleItemCount: number = 1;
   @State sourceScrollbarDragging: boolean = false;
   @State sourceScrollbarDragOffset: number = 0;
+  @State sourceHeaderCollapse: number = 0;
   @State sourceGroups: string[] = [];
   @State isLoading: boolean = false;
   @State searchText: string = '';
@@ -118,6 +132,7 @@ struct BookSourcePage {
   private deleteSelectedSourceGroupsDialogSession: SystemDialogSession = new SystemDialogSession();
   @State @Watch('onSystemDialogFlagChanged') showSourceFilterDialog: boolean = false;
   @State sourceFormatFilter: string = 'all';
+  @State sourceFormatBarWidth: number = 0;
   @StorageLink('compatSourceNoticeDismissed') compatSourceNoticeDismissed: boolean = false;
   @State sourceEnabledFilter: string = 'all';
   @State sourceExplorePageFilter: string = 'all';
@@ -125,6 +140,7 @@ struct BookSourcePage {
   @State sourceLoginFilter: string = 'all';
   @State sourceValidationFilter: string = 'all';
   @State sourceSortMode: string = 'custom';
+  @State bottomSourceUrls: string[] = [];
   @State showAddDialog: boolean = false;
   @State showImportUrlDialog: boolean = false;
   @State @Watch('onSystemDialogFlagChanged') showImportSourceSelectionDialog: boolean = false;
@@ -313,6 +329,7 @@ struct BookSourcePage {
       const db = AppDatabase.getInstance();
       await db.initWithContext(getContext(this));
       this.allSources = await db.getBookSourceSummaries();
+      this.bottomSourceUrls = await db.getBottomBookSourceUrls();
       this.sourceGroups = await BookSourceGroupStore.load(getContext(this), this.sourceGroupsFromSources());
       this.ensureActiveSourceGroup();
       this.applySourceFilters();
@@ -361,9 +378,15 @@ struct BookSourcePage {
           }
           .width('100%')
           .padding({ left: AppSpacing.XL, right: AppSpacing.XL, top: AppSpacing.MD, bottom: AppSpacing.MD })
+          .opacity(this.sourceHeaderRowOpacity(56, SOURCE_SEARCH_ROW_HEIGHT))
+          .hitTestBehavior(this.sourceHeaderRowHitTest(56, SOURCE_SEARCH_ROW_HEIGHT))
 
           if (!this.selectionMode) {
-            this.sourceFormatBar()
+            // 类型切换栏独立悬浮，这里仅保留展开时的占位，避免列表随收起跳动。
+            Row()
+              .width('100%')
+              .height(SOURCE_FORMAT_BAR_HEIGHT + AppSpacing.MD)
+              .hitTestBehavior(HitTestMode.None)
             if (this.showCompatSourceNotice()) {
               this.compatSourceNoticeBar()
             }
@@ -406,8 +429,7 @@ struct BookSourcePage {
           }
         }
         .width('100%')
-        .backgroundColor(ThemeRuntime.topBarColor(this.appDarkMode))
-        .backdropBlur(ThemeRuntime.topBarBlur())
+        .translate({ y: -this.sourceHeaderCollapseValue() })
         .zIndex(2)
 
         if (this.isLoading) {
@@ -476,86 +498,7 @@ struct BookSourcePage {
                     .accessibilityText(`长按拖动排序：${source.bookSourceName}`)
                   }
 
-                  Column() {
-                    Row() {
-                      Text(source.bookSourceName)
-                        .fontSize(AppFontSize.BODY_LARGE)
-                        .fontWeight(FontWeight.Bold)
-                        .fontColor(this.primaryTextColor())
-                        .maxLines(1)
-                        .textOverflow({ overflow: TextOverflow.Ellipsis })
-                        .layoutWeight(1)
-
-                      this.sourceFormatBadge(source)
-                      if (source.isPinned) {
-                        this.sourceStatusIcon($r('sys.symbol.pin'), this.accentColor(), '已置顶')
-                      }
-                      if (this.isSourceAtBottom(source)) {
-                        this.sourceOrderStatusBadge('尾', '已置尾')
-                      }
-
-                      if (source.bookSourceGroup) {
-                        Text(source.bookSourceGroup)
-                          .fontSize(AppFontSize.CAPTION)
-                          .fontColor(this.accentColor())
-                          .maxLines(1)
-                          .textOverflow({ overflow: TextOverflow.Ellipsis })
-                          .constraintSize({ maxWidth: 72 })
-                          .padding({ left: AppSpacing.SM, right: AppSpacing.SM, top: AppSpacing.XXS, bottom: AppSpacing.XXS })
-                          .backgroundColor(this.inputColor())
-                          .borderRadius(ThemeRuntime.smallRadius())
-                          .margin({ left: AppSpacing.SM })
-                      }
-
-                      if (this.sourceNeedsLogin(source)) {
-                        this.sourceLoginStatusBadge(
-                          this.sourceLoggedIn(source) ? ThemeRuntime.successColor(this.appDarkMode) : ThemeRuntime.dangerColor(this.appDarkMode),
-                          this.sourceLoggedIn(source) ? '已登录' : '未登录')
-                      }
-                      if (source.isLocked) {
-                        this.sourceStatusIcon($r('sys.symbol.lock'), this.accentColor(), '已锁定')
-                      }
-                    }
-                    .width('100%')
-                    .alignItems(VerticalAlign.Center)
-
-                    Row({ space: AppSpacing.SM }) {
-                      this.sourceValidationStatusBadge(source.validationStatus)
-                      Text(source.bookSourceUrl)
-                        .fontSize(AppFontSize.CAPTION)
-                        .fontColor(this.subTextColor())
-                        .maxLines(1)
-                        .textOverflow({ overflow: TextOverflow.Ellipsis })
-                        .layoutWeight(1)
-                    }
-                    .width('100%')
-                    .margin({ top: AppSpacing.XS })
-                    .alignItems(VerticalAlign.Center)
-
-                  }
-                  .layoutWeight(1)
-                  .alignItems(HorizontalAlign.Start)
-                  .gesture(
-                    LongPressGesture({ repeat: false })
-                      .onAction((event: GestureEvent) => {
-                        if (!this.selectionMode && !this.isBatchOperating) {
-                          this.openSourceActions(source, event);
-                        }
-                      })
-                  )
-
-                  if (this.selectionMode) {
-                    Column() {
-                      Text(source.enabled ? '已启用' : '已禁用')
-                        .fontSize(AppFontSize.CAPTION)
-                        .fontColor(source.enabled ? ThemeRuntime.successColor(this.appDarkMode) : this.subTextColor())
-                      Text(source.enabledExplore ? '发现已启用' : '发现已禁用')
-                        .fontSize(AppFontSize.CAPTION)
-                        .fontColor(source.enabledExplore ? ThemeRuntime.successColor(this.appDarkMode) : this.subTextColor())
-                        .margin({ top: AppSpacing.XS })
-                    }
-                    .alignItems(HorizontalAlign.End)
-                  }
+                  this.sourceSummary(source)
                 }
                 .width('100%')
                 .padding(AppSpacing.LG)
@@ -612,6 +555,12 @@ struct BookSourcePage {
             .scrollBar(BarState.Off)
             .cachedCount(8)
             .clip(true)
+            .onDidScroll((delta: number) => {
+              this.onSourceListScroll(delta);
+            })
+            .onScrollStop(() => {
+              this.onSourceListScrollStop();
+            })
             .onScrollIndex((start: number, end: number) => {
               // 顶部 spacer 按列数占满一整行，源条目索引 = ListItem 索引 - 列数（单列时退化为 -1）。
               this.sourceFirstVisibleIndex = Math.max(0, start - this.sourceListLaneCount());
@@ -700,6 +649,16 @@ struct BookSourcePage {
       .height('100%')
       .padding({ top: 56 + this.statusBarHeight })
       .backgroundColor(this.pageColor())
+
+      if (!this.selectionMode) {
+        Column() {
+          this.sourceFormatBar()
+        }
+        .width('100%')
+        .position({ x: 0, y: this.sourceFormatBarTop() })
+        // 与页面内容同级，按声明顺序悬浮；后续菜单和遮罩必须覆盖分类栏。
+        .zIndex(0)
+      }
 
       this.bookSourceTitleBar()
 
@@ -1327,10 +1286,11 @@ struct BookSourcePage {
     .width('100%')
     .height(56 + this.statusBarHeight)
     .padding({ right: AppSpacing.XL, top: this.statusBarHeight })
-    .backgroundColor(ThemeRuntime.topBarColor(this.appDarkMode))
-    .backdropBlur(ThemeRuntime.topBarBlur())
     .alignItems(VerticalAlign.Center)
     .position({ x: 0, y: 0 })
+    .translate({ y: -Math.min(56, this.sourceHeaderCollapseValue()) })
+    .opacity(this.sourceHeaderRowOpacity(0, 56))
+    .hitTestBehavior(this.sourceHeaderRowHitTest(0, 56))
   }
 
   @Builder
@@ -1348,6 +1308,9 @@ struct BookSourcePage {
     .border({ width: ThemeRuntime.glassBorderWidth('button'), color: ThemeRuntime.glassBorderColor(this.appDarkMode, 'button') })
     .shadow({ radius: ThemeRuntime.glassShadowRadius('button'), color: ThemeRuntime.glassShadowColor(this.appDarkMode, 'button'), offsetX: ThemeRuntime.glassShadowOffsetX('button'), offsetY: ThemeRuntime.glassShadowOffsetY('button') })
     .accessibilityText('新增书源')
+    .translate({ y: (52 + this.navBarHeight + 38) * this.sourceChromeCollapseProgress() })
+    .opacity(1 - this.sourceChromeCollapseProgress())
+    .hitTestBehavior(this.sourceChromeCollapseProgress() < 0.5 ? HitTestMode.Default : HitTestMode.None)
     .onClick(() => {
       this.showAddDialog = true;
     })
@@ -1810,8 +1773,8 @@ struct BookSourcePage {
         }
         this.contextActionItem($r('sys.symbol.pin'), this.actionSourcePinned() ? '取消置顶' : '置顶',
           this.primaryTextColor(), () => this.toggleActionSourcePinned())
-        this.contextActionItem($r('sys.symbol.chevron_down'), '置底', this.primaryTextColor(),
-          () => this.moveActionSourceToBottom())
+        this.contextActionItem($r('sys.symbol.chevron_down'), this.actionSourceAtBottom() ? '取消置底' : '置底',
+          this.primaryTextColor(), () => this.toggleActionSourceBottom())
         this.contextActionItem($r('sys.symbol.lock'), this.actionSourceLocked() ? '解锁' : '锁定',
           this.primaryTextColor(), () => this.toggleActionSourceLocked())
         if (!this.actionSourceLocked()) {
@@ -2038,19 +2001,82 @@ struct BookSourcePage {
     .onClick(action)
   }
 
+  /** 名称独占主行；次要信息允许换行，不再从右侧挤占名称宽度。 */
   @Builder
-  sourceOrderStatusBadge(label: string, accessibilityLabel: string) {
+  sourceSummary(source: BookSource) {
+    Column({ space: AppSpacing.XS }) {
+      Row() {
+        Text(source.bookSourceName)
+          .fontSize(AppFontSize.BODY_LARGE)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.primaryTextColor())
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1)
+        if (source.isPinned) {
+          this.sourceStatusIcon($r('sys.symbol.pin'), this.accentColor(), '已置顶')
+        }
+        if (source.isLocked) {
+          this.sourceStatusIcon($r('sys.symbol.lock'), this.subTextColor(), '已锁定')
+        }
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+
+      Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
+        if (this.sourceFormatFilter === 'all') {
+          this.sourceMetadataText(source.sourceFormat === 'native' ? '原生' : '兼容', this.subTextColor())
+        }
+        if (source.bookSourceGroup && source.bookSourceGroup !== this.activeSourceGroup) {
+          Text(source.bookSourceGroup)
+            .fontSize(AppFontSize.CAPTION)
+            .fontColor(this.secondaryTextColor())
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .constraintSize({ maxWidth: 120 })
+            .margin({ right: AppSpacing.MD, bottom: AppSpacing.XXS })
+            .accessibilityText('分组：' + source.bookSourceGroup)
+        }
+        this.sourceMetadataText(this.sourceValidationStatusLabel(source.validationStatus),
+          this.sourceValidationStatusColor(source.validationStatus))
+        if (this.sourceNeedsLogin(source)) {
+          this.sourceMetadataText(this.sourceLoggedIn(source) ? '已登录' : '待登录',
+            this.sourceLoggedIn(source) ? this.subTextColor() : ThemeRuntime.dangerColor(this.appDarkMode))
+        }
+        // 默认启用状态不再反复占位，关闭的能力仍明确显示。
+        if (!source.enabled) {
+          this.sourceMetadataText('已禁用', ThemeRuntime.dangerColor(this.appDarkMode))
+        }
+        if (!source.enabledExplore) {
+          this.sourceMetadataText('发现关闭', this.subTextColor())
+        }
+        if (this.isSourceAtBottom(source)) {
+          this.sourceMetadataText('已置底', this.subTextColor())
+        }
+      }
+      .width('100%')
+
+      Text(source.bookSourceUrl)
+        .fontSize(AppFontSize.CAPTION)
+        .fontColor(this.subTextColor())
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .width('100%')
+    }
+    .layoutWeight(1)
+    .alignItems(HorizontalAlign.Start)
+    .gesture(LongPressGesture({ repeat: false }).onAction((event: GestureEvent) => {
+      if (!this.selectionMode && !this.isBatchOperating) this.openSourceActions(source, event);
+    }))
+  }
+
+  @Builder
+  sourceMetadataText(label: string, color: string) {
     Text(label)
-      .fontSize(AppFontSize.MICRO)
-      .fontWeight(FontWeight.Medium)
-      .fontColor(this.accentColor())
-      .width(24)
-      .height(24)
-      .textAlign(TextAlign.Center)
-      .backgroundColor(this.inputColor())
-      .borderRadius(12)
-      .margin({ left: AppSpacing.SM })
-      .accessibilityText(accessibilityLabel)
+      .fontSize(AppFontSize.CAPTION)
+      .fontColor(color)
+      .maxLines(1)
+      .margin({ right: AppSpacing.MD, bottom: AppSpacing.XXS })
   }
 
   @Builder
@@ -2066,34 +2092,6 @@ struct BookSourcePage {
     .backgroundColor(this.inputColor())
     .margin({ left: AppSpacing.SM })
     .accessibilityText(accessibilityLabel)
-  }
-
-  @Builder
-  sourceLoginStatusBadge(color: string, accessibilityLabel: string) {
-    Text('登')
-      .fontSize(AppFontSize.MICRO)
-      .fontWeight(FontWeight.Medium)
-      .fontColor(color)
-      .width(24)
-      .height(24)
-      .textAlign(TextAlign.Center)
-      .backgroundColor(this.inputColor())
-      .borderRadius(12)
-      .margin({ left: AppSpacing.SM })
-      .accessibilityText(accessibilityLabel)
-  }
-
-  @Builder
-  sourceValidationStatusBadge(validationStatus: number) {
-    Text(this.sourceValidationStatusLabel(validationStatus))
-      .fontSize(AppFontSize.MICRO)
-      .fontWeight(FontWeight.Medium)
-      .fontColor(this.sourceValidationStatusColor(validationStatus))
-      .padding({ left: AppSpacing.SM, right: AppSpacing.SM, top: AppSpacing.XXS, bottom: AppSpacing.XXS })
-      .backgroundColor(this.inputColor())
-      .borderRadius(ThemeRuntime.smallRadius())
-      .maxLines(1)
-      .accessibilityText(this.sourceValidationStatusLabel(validationStatus))
   }
 
   sourceValidationStatusLabel(validationStatus: number): string {
@@ -2152,44 +2150,7 @@ struct BookSourcePage {
         .hitTestBehavior(HitTestMode.Transparent)
         .accessibilityText(`长按拖动排序：${source.bookSourceName}`)
       }
-      Column() {
-        Row() {
-          Text(source.bookSourceName)
-            .fontSize(AppFontSize.BODY_LARGE).fontWeight(FontWeight.Bold)
-            .fontColor(this.primaryTextColor())
-            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-            .layoutWeight(1)
-          this.sourceFormatBadge(source)
-          if (source.isPinned) this.sourceStatusIcon($r('sys.symbol.pin'), this.accentColor(), '已置顶')
-          if (source.isLocked) this.sourceStatusIcon($r('sys.symbol.lock'), this.accentColor(), '已锁定')
-          if (source.bookSourceGroup) {
-            Text(source.bookSourceGroup).fontSize(AppFontSize.CAPTION).fontColor(this.accentColor())
-              .constraintSize({ maxWidth: 72 }).padding({ left: AppSpacing.SM, right: AppSpacing.SM, top: AppSpacing.XXS, bottom: AppSpacing.XXS })
-              .backgroundColor(this.inputColor()).borderRadius(ThemeRuntime.smallRadius()).margin({ left: AppSpacing.SM })
-          }
-          if (this.sourceNeedsLogin(source)) {
-            this.sourceLoginStatusBadge(this.sourceLoggedIn(source) ? ThemeRuntime.successColor(this.appDarkMode) : ThemeRuntime.dangerColor(this.appDarkMode), this.sourceLoggedIn(source) ? '已登录' : '未登录')
-          }
-        }.width('100%')
-        Row({ space: AppSpacing.SM }) {
-          this.sourceValidationStatusBadge(source.validationStatus)
-          Text(source.bookSourceUrl)
-            .fontSize(AppFontSize.CAPTION).fontColor(this.subTextColor())
-            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-            .layoutWeight(1)
-        }.width('100%').margin({ top: AppSpacing.XS })
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
-      .gesture(LongPressGesture({ repeat: false }).onAction((event: GestureEvent) => {
-        if (!this.selectionMode && !this.isBatchOperating) this.openSourceActions(source, event)
-      }))
-      Column() {
-        Text(source.enabled ? '已启用' : '已禁用').fontSize(AppFontSize.CAPTION)
-          .fontColor(source.enabled ? ThemeRuntime.successColor(this.appDarkMode) : this.subTextColor())
-        Text(source.enabledExplore ? '发现已启用' : '发现已禁用').fontSize(AppFontSize.CAPTION)
-          .fontColor(source.enabledExplore ? ThemeRuntime.successColor(this.appDarkMode) : this.subTextColor()).margin({ top: AppSpacing.XS })
-      }.alignItems(HorizontalAlign.End)
+      this.sourceSummary(source)
     }
     .width('100%')
     .padding(AppSpacing.LG)
@@ -2340,7 +2301,7 @@ struct BookSourcePage {
       }
       .width(24)
       .height(this.sourceScrollbarViewportHeight())
-      .translate({ y: this.sourceListTopInset() })
+      .translate({ y: this.sourceListTopInset() - this.sourceHeaderCollapseValue() })
       .zIndex(10)
       .gesture(
         GestureGroup(GestureMode.Exclusive,
@@ -2360,7 +2321,7 @@ struct BookSourcePage {
   }
 
   sourceScrollbarViewportHeight(): number {
-    return Math.max(0, this.sourceListViewportHeight - this.sourceListTopInset());
+    return Math.max(0, this.sourceListViewportHeight - this.sourceListTopInset() + this.sourceHeaderCollapseValue());
   }
 
   sourceScrollbarThumbLength(): number {
@@ -2448,13 +2409,64 @@ struct BookSourcePage {
   }
 
   sourceListTopInset(): number {
+    // 列表留白和头部占位保持展开时的尺寸；仅平移悬浮控件，避免滚动时列表跳动。
     // 头部在搜索框和分组栏之外，非多选时还有类型分段，「兼容」分段下可能再多一行提示条。
     let extra = 0;
     if (!this.selectionMode) {
       extra += SOURCE_FORMAT_BAR_HEIGHT + AppSpacing.MD;
       if (this.showCompatSourceNotice()) extra += COMPAT_SOURCE_NOTICE_HEIGHT + AppSpacing.MD;
     }
-    return 56 + this.statusBarHeight + 98 + extra;
+    return 56 + this.statusBarHeight + SOURCE_SEARCH_ROW_HEIGHT + SOURCE_GROUP_ROW_HEIGHT + extra;
+  }
+
+  sourceHeaderCollapsibleHeight(): number {
+    // 沉浸类型栏始终可见，收起距离只包含标题、搜索框、提示和分组栏。
+    const pinnedHeight = this.selectionMode ? 0 : SOURCE_FORMAT_BAR_HEIGHT + AppSpacing.MD;
+    return this.sourceListTopInset() - this.statusBarHeight - pinnedHeight;
+  }
+
+  sourceFormatBarTop(): number {
+    return this.statusBarHeight + Math.max(0, 56 + SOURCE_SEARCH_ROW_HEIGHT - this.sourceHeaderCollapseValue());
+  }
+
+  sourceHeaderCollapseValue(): number {
+    return !this.isLoading && this.sources.length > 0 && !this.selectionMode ?
+      Math.min(this.sourceHeaderCollapse, this.sourceHeaderCollapsibleHeight()) : 0;
+  }
+
+  sourceChromeCollapseProgress(): number {
+    return this.sourceHeaderCollapseValue() / this.sourceHeaderCollapsibleHeight();
+  }
+
+  sourceHeaderRowOpacity(top: number, height: number): number {
+    return CollapsingHeader.rowOpacity(this.sourceHeaderCollapseValue(), top, height);
+  }
+
+  sourceHeaderRowHitTest(top: number, height: number): HitTestMode {
+    return this.sourceHeaderRowOpacity(top, height) > 0.5 ? HitTestMode.Default : HitTestMode.None;
+  }
+
+  sourceGroupRowTop(): number {
+    // 分组经过固定类型栏底部时淡出，避免从半透明材质后面穿过。
+    return 56 + SOURCE_SEARCH_ROW_HEIGHT +
+      (this.showCompatSourceNotice() ? COMPAT_SOURCE_NOTICE_HEIGHT + AppSpacing.MD : 0);
+  }
+
+  onSourceListScroll(delta: number): void {
+    if (this.selectionMode || this.isLoading) return;
+    this.sourceHeaderCollapse = CollapsingHeader.next(this.sourceHeaderCollapseValue(), delta,
+      this.sourceListScroller.currentOffset().yOffset, this.sourceHeaderCollapsibleHeight());
+  }
+
+  onSourceListScrollStop(): void {
+    if (this.selectionMode || this.isLoading) return;
+    const target = CollapsingHeader.settle(this.sourceHeaderCollapseValue(),
+      this.sourceListScroller.currentOffset().yOffset, this.sourceHeaderCollapsibleHeight());
+    if (target !== this.sourceHeaderCollapse) {
+      animateTo({ duration: 200, curve: Curve.FastOutSlowIn }, () => {
+        this.sourceHeaderCollapse = target;
+      });
+    }
   }
 
   // 列表底部避让：右下角悬浮新增按钮（52 高，底边距 navBarHeight+22）必须完整让出，
@@ -2580,67 +2592,68 @@ struct BookSourcePage {
   @Builder
   sourceFormatBar() {
     Row() {
-      ForEach(['all', 'native', 'compat'], (format: string) => {
-        Stack() {
-          if (this.sourceFormatFilter === format) {
-            // systemMaterial 仅 API 26 起存在，低版本构建时调用会失败，因此分支处理。
-            if (ImmersiveMaterialRuntime.supportsHds()) {
-              Row()
-                .width('100%')
-                .height('100%')
-                .borderRadius(15)
-                .border({ width: 1.5, color: this.accentColor() })
-                .systemMaterial(this.sourceFormatSelectedMaterial())
-            } else {
-              Row()
-                .width('100%')
-                .height('100%')
-                .borderRadius(15)
-                .border({ width: 1.5, color: this.accentColor() })
-                .backgroundColor(this.sourceFormatSelectedFill())
+      if (this.sourceFormatBarWidth > 0) {
+        ImmersiveMaterialSurface({
+          surfaceWidth: this.sourceFormatBarWidth,
+          surfaceHeight: SOURCE_FORMAT_BAR_HEIGHT,
+          darkMode: this.appDarkMode,
+          fallbackColor: this.cardColor(),
+          glowColor: `#40${this.accentColor().substring(1)}`
+        }) {
+          Stack({ alignContent: Alignment.BottomStart }) {
+            Row() {
+              ForEach(['all', 'native', 'compat'], (format: string) => {
+                Text(format === 'all' ? '全部' : (format === 'native' ? '原生' : '兼容'))
+                  .fontSize(AppFontSize.BODY_LARGE)
+                  .fontWeight(this.sourceFormatFilter === format ? FontWeight.Medium : FontWeight.Regular)
+                  .fontColor(this.sourceFormatFilter === format ? this.accentColor() : this.secondaryTextColor())
+                  .animation({ duration: 180, curve: Curve.Friction })
+                  .textAlign(TextAlign.Center)
+                  .layoutWeight(1)
+                  .height('100%')
+                  .accessibilityGroup(true)
+                  .accessibilityText(format === 'all' ? '全部书源' : (format === 'native' ? '原生书源' : '兼容书源'))
+                  .accessibilitySelected(this.sourceFormatFilter === format)
+                  .onClick(() => {
+                    if (this.sourceFormatFilter === format) return;
+                    this.sourceFormatFilter = format;
+                    this.applySourceFilters();
+                  })
+              }, (format: string) => format)
             }
+            .width('100%')
+            .height('100%')
+            .padding({ left: SOURCE_FORMAT_BAR_PADDING, right: SOURCE_FORMAT_BAR_PADDING })
+
+            Row()
+              .width(SOURCE_FORMAT_INDICATOR_WIDTH)
+              .height(3)
+              .borderRadius(1.5)
+              .backgroundColor(this.accentColor())
+              .translate({ x: this.sourceFormatIndicatorX(), y: -5 })
+              .animation({ duration: 280, curve: Curve.Friction })
+              .hitTestBehavior(HitTestMode.None)
           }
-
-          Text(format === 'all' ? '全部' : (format === 'native' ? '原生' : '兼容'))
-            .fontSize(AppFontSize.BODY)
-            .fontWeight(this.sourceFormatFilter === format ? FontWeight.Medium : FontWeight.Normal)
-            .fontColor(this.sourceFormatFilter === format ? this.accentColor() : this.secondaryTextColor())
-            .textAlign(TextAlign.Center)
+          .width('100%')
+          .height('100%')
         }
-        .layoutWeight(1)
-        .height(30)
-        .accessibilityGroup(true)
-        .accessibilityText(format === 'all' ? '全部书源' : (format === 'native' ? '原生书源' : '兼容书源'))
-        .accessibilitySelected(this.sourceFormatFilter === format)
-        .onClick(() => {
-          if (this.sourceFormatFilter === format) return;
-          this.sourceFormatFilter = format;
-          this.applySourceFilters();
-        })
-      }, (format: string) => format)
+      }
     }
+    .width(`calc(100% - ${AppSpacing.XL * 2}vp)`)
     .height(SOURCE_FORMAT_BAR_HEIGHT)
-    .padding(3)
-    .borderRadius(18)
-    .backgroundColor(this.glassInputColor())
     .margin({ left: AppSpacing.XL, right: AppSpacing.XL, bottom: AppSpacing.MD })
+    .onAreaChange((_oldValue: Area, newValue: Area) => {
+      const width = Math.floor(Number(newValue.width));
+      if (Number.isFinite(width) && width > 0 && width !== this.sourceFormatBarWidth) {
+        this.sourceFormatBarWidth = width;
+      }
+    })
   }
 
-  /** 选中分段的底色：主题强调色的浅色调。 */
-  sourceFormatSelectedFill(): string {
-    const accent = this.accentColor();
-    if (!/^#[0-9a-fA-F]{6}$/.test(accent)) return this.glassCardColor();
-    return `#${this.appDarkMode ? '33' : '1F'}${accent.substring(1)}`;
-  }
-
-  private sourceFormatSelectedMaterial(): uiMaterial.ImmersiveMaterial {
-    return new uiMaterial.ImmersiveMaterial({
-      style: ImmersiveMaterialRuntime.materialStyle(),
-      materialColor: this.sourceFormatSelectedFill(),
-      applyShadow: true,
-      interactive: ImmersiveMaterialRuntime.configuredLightLevel() !== 'weak',
-      lightEffect: ImmersiveMaterialRuntime.lightEffect()
-    });
+  sourceFormatIndicatorX(): number {
+    const index = Math.max(0, ['all', 'native', 'compat'].indexOf(this.sourceFormatFilter));
+    const itemWidth = (this.sourceFormatBarWidth - SOURCE_FORMAT_BAR_PADDING * 2) / 3;
+    return SOURCE_FORMAT_BAR_PADDING + itemWidth * index + (itemWidth - SOURCE_FORMAT_INDICATOR_WIDTH) / 2;
   }
 
   /** 只在「兼容」分段下提示，用户关掉后不再出现。 */
@@ -2680,18 +2693,10 @@ struct BookSourcePage {
     .borderRadius(ThemeRuntime.smallRadius())
     .backgroundColor(this.glassInputColor())
     .margin({ left: AppSpacing.XL, right: AppSpacing.XL, bottom: AppSpacing.MD })
-  }
-
-  @Builder
-  sourceFormatBadge(source: BookSource) {
-    Text(source.sourceFormat === 'native' ? '原生' : '兼容')
-      .fontSize(AppFontSize.CAPTION)
-      .fontColor(source.sourceFormat === 'native' ? this.accentColor() : this.subTextColor())
-      .padding({ left: AppSpacing.SM, right: AppSpacing.SM, top: AppSpacing.XXS, bottom: AppSpacing.XXS })
-      .backgroundColor(this.inputColor())
-      .borderRadius(ThemeRuntime.smallRadius())
-      .margin({ left: AppSpacing.SM })
-      .accessibilityText(source.sourceFormat === 'native' ? '原生书源' : '兼容书源')
+    .opacity(this.sourceHeaderRowOpacity(56 + SOURCE_SEARCH_ROW_HEIGHT,
+      COMPAT_SOURCE_NOTICE_HEIGHT + AppSpacing.MD))
+    .hitTestBehavior(this.sourceHeaderRowHitTest(56 + SOURCE_SEARCH_ROW_HEIGHT,
+      COMPAT_SOURCE_NOTICE_HEIGHT + AppSpacing.MD))
   }
 
   @Builder
@@ -2740,6 +2745,8 @@ struct BookSourcePage {
     .width('100%')
     .scrollable(ScrollDirection.Horizontal)
     .scrollBar(BarState.Off)
+    .opacity(this.sourceHeaderRowOpacity(this.sourceGroupRowTop(), SOURCE_GROUP_ROW_HEIGHT))
+    .hitTestBehavior(this.sourceHeaderRowHitTest(this.sourceGroupRowTop(), SOURCE_GROUP_ROW_HEIGHT))
     .zIndex(2)
   }
 
@@ -3691,14 +3698,36 @@ struct BookSourcePage {
         nextAllSources[index] = reordered[orderedIndex++];
       }
     }
-    await this.applyAndPersistSourceOrder(nextAllSources, '排序已保存');
+    // 手动拖离底部组时解除置底，避免拖动成功后又被排序规则拉回。
+    const leavesBottomGroup = this.isSourceAtBottom(moved) &&
+      targetIndex < this.sources.filter((source: BookSource) => !this.isSourceAtBottom(source)).length;
+    await this.applyAndPersistSourceOrder(nextAllSources, '排序已保存', leavesBottomGroup ? {
+      bookSourceUrl: moved.bookSourceUrl, isPinned: false, isBottom: false
+    } : undefined);
   }
 
-  async applyAndPersistSourceOrder(nextSources: BookSource[], successMessage: string = ''): Promise<void> {
+  async applyAndPersistSourceOrder(nextSources: BookSource[], successMessage: string = '',
+    position?: BookSourcePositionUpdate): Promise<void> {
     if (this.isBatchOperating || this.sourceOrderSaving || nextSources.length === 0) return;
-    const orderedSources = nextSources.filter((source: BookSource) => source.isPinned)
-      .concat(nextSources.filter((source: BookSource) => !source.isPinned));
     const previousSources = this.allSources.slice();
+    const previousOrders = previousSources.map((source: BookSource) => source.customOrder);
+    const previousBottomUrls = this.bottomSourceUrls;
+    if (position) {
+      this.bottomSourceUrls = previousBottomUrls.filter((url: string) => url !== position.bookSourceUrl);
+      if (position.isBottom && !position.isPinned) {
+        this.bottomSourceUrls = this.bottomSourceUrls.concat([position.bookSourceUrl]);
+      }
+      nextSources = nextSources.map((source: BookSource): BookSource => {
+        if (source.bookSourceUrl !== position.bookSourceUrl) return source;
+        const copy = this.copyBookSourceRuntime(source);
+        copy.sourceFormat = source.sourceFormat;
+        copy.isPinned = position.isPinned;
+        return copy;
+      });
+    }
+    const orderedSources = nextSources.filter((source: BookSource) => source.isPinned)
+      .concat(nextSources.filter((source: BookSource) => !source.isPinned && !this.isSourceAtBottom(source)))
+      .concat(nextSources.filter((source: BookSource) => this.isSourceAtBottom(source)));
     const restoreFirstIndex = this.sourceFirstVisibleIndex;
     const restoreVisibleCount = this.sourceVisibleItemCount;
     for (let index = 0; index < orderedSources.length; index++) {
@@ -3712,7 +3741,7 @@ struct BookSourcePage {
     this.sourceOrderSaving = true;
     try {
       await AppDatabase.getInstance().updateBookSourceOrders(
-        orderedSources.map((source: BookSource) => source.bookSourceUrl));
+        orderedSources.map((source: BookSource) => source.bookSourceUrl), position);
       const revision = AppStorage.get<number>('bookSourceOrderRevision') || 0;
       AppStorage.setOrCreate('bookSourceOrderRevision', revision + 1);
       if (successMessage) HdsFeedback.showToast(successMessage);
@@ -3720,8 +3749,9 @@ struct BookSourcePage {
       console.error('保存书源排序失败:', e);
       HdsFeedback.showToast('保存排序失败');
       for (let index = 0; index < previousSources.length; index++) {
-        previousSources[index].customOrder = index;
+        previousSources[index].customOrder = previousOrders[index];
       }
+      this.bottomSourceUrls = previousBottomUrls;
       this.allSources = [...previousSources];
       this.applySourceFilters();
       this.restoreSourceListViewport(restoreFirstIndex, restoreVisibleCount);
@@ -3809,11 +3839,11 @@ struct BookSourcePage {
   }
 
   isSourceAtBottom(source: BookSource): boolean {
-    return this.allSources.length > 1 &&
-      this.allSources[this.allSources.length - 1].bookSourceUrl === source.bookSourceUrl;
+    return !source.isPinned && this.bottomSourceUrls.includes(source.bookSourceUrl);
   }
 
   applySourceFilters(): void {
+    this.sourceHeaderCollapse = 0;
     const keyword = this.searchText.trim().toLowerCase();
     let filtered: BookSource[] = this.allSources;
     if (this.activeSourceGroup === '__ungrouped__') {
@@ -3861,13 +3891,12 @@ struct BookSourcePage {
   }
 
   sortFilteredSources(filtered: BookSource[]): BookSource[] {
-    if (this.sourceSortMode === 'custom') return filtered.slice();
-    const bottomUrl = this.allSources.length > 0 ?
-      this.allSources[this.allSources.length - 1].bookSourceUrl : '';
     return filtered.slice().sort((left: BookSource, right: BookSource): number => {
       if (left.isPinned !== right.isPinned) return left.isPinned ? -1 : 1;
-      if (!left.isPinned && left.bookSourceUrl === bottomUrl) return 1;
-      if (!right.isPinned && right.bookSourceUrl === bottomUrl) return -1;
+      if (this.isSourceAtBottom(left) !== this.isSourceAtBottom(right)) {
+        return this.isSourceAtBottom(left) ? 1 : -1;
+      }
+      if (this.sourceSortMode === 'custom') return left.customOrder - right.customOrder;
       if (this.sourceSortMode === 'name') {
         return (left.bookSourceName || '').localeCompare(right.bookSourceName || '');
       }
@@ -4065,6 +4094,11 @@ struct BookSourcePage {
     return source ? source.isPinned : false;
   }
 
+  actionSourceAtBottom(): boolean {
+    const source = this.actionSource();
+    return source ? this.isSourceAtBottom(source) : false;
+  }
+
   actionSourceTlsTrusted(): boolean {
     const source = this.actionSource();
     return source ? TlsTrustStore.isTrustedUrl(source.bookSourceUrl) : false;
@@ -4097,7 +4131,7 @@ struct BookSourcePage {
 
   async toggleActionSourcePinned(): Promise<void> {
     const source = this.actionSource();
-    if (!source || this.isBatchOperating) return;
+    if (!source || this.isBatchOperating || this.sourceOrderSaving) return;
     const sourceUrl = source.bookSourceUrl;
     const pinned = !source.isPinned;
     this.closeSourceActions();
@@ -4105,30 +4139,37 @@ struct BookSourcePage {
     if (currentIndex < 0) return;
     const next = this.allSources.slice();
     const moved = next.splice(currentIndex, 1)[0];
-    moved.isPinned = pinned;
-    await AppDatabase.getInstance().setBookSourcePinned(sourceUrl, pinned);
     if (pinned) {
       next.unshift(moved);
     } else {
       const pinnedCount = next.filter((item: BookSource) => item.isPinned).length;
       next.splice(pinnedCount, 0, moved);
     }
-    await this.applyAndPersistSourceOrder(next, pinned ? '书源已置顶' : '已取消置顶');
+    await this.applyAndPersistSourceOrder(next, pinned ? '书源已置顶' : '已取消置顶', {
+      bookSourceUrl: sourceUrl, isPinned: pinned, isBottom: false
+    });
   }
 
-  async moveActionSourceToBottom(): Promise<void> {
+  async toggleActionSourceBottom(): Promise<void> {
     const source = this.actionSource();
-    if (!source || this.isBatchOperating) return;
+    if (!source || this.isBatchOperating || this.sourceOrderSaving) return;
     const sourceUrl = source.bookSourceUrl;
+    const bottom = !this.isSourceAtBottom(source);
     this.closeSourceActions();
     const currentIndex = this.allSources.findIndex((item: BookSource) => item.bookSourceUrl === sourceUrl);
     if (currentIndex < 0) return;
     const next = this.allSources.slice();
     const moved = next.splice(currentIndex, 1)[0];
-    moved.isPinned = false;
-    await AppDatabase.getInstance().setBookSourcePinned(sourceUrl, false);
-    next.push(moved);
-    await this.applyAndPersistSourceOrder(next, '书源已置底');
+    if (bottom) {
+      next.push(moved);
+    } else {
+      // 取消置底后停在普通书源末尾、其余置底书源之前，不跳到列表顶部。
+      const firstBottom = next.findIndex((item: BookSource) => this.isSourceAtBottom(item));
+      next.splice(firstBottom < 0 ? next.length : firstBottom, 0, moved);
+    }
+    await this.applyAndPersistSourceOrder(next, bottom ? '书源已置底' : '已取消置底', {
+      bookSourceUrl: sourceUrl, isPinned: false, isBottom: bottom
+    });
   }
 
   openActionSourceGroup(): void {
@@ -5305,6 +5346,7 @@ struct BookSourcePage {
   }
 
   enterSelectionMode(): void {
+    this.sourceHeaderCollapse = 0;
     this.showAddDialog = false;
     this.selectionMode = true;
     this.selectedSourceUrls = [];
@@ -6299,7 +6341,7 @@ struct BookSourcePage {
   async importFromFile() {
     try {
       const options: picker.DocumentSelectOptions = new picker.DocumentSelectOptions();
-      options.maxSelectNumber = 1;
+      options.maxSelectNumber = BOOK_SOURCE_IMPORT_MAX_FILES;
       options.fileSuffixFilters = ['JSON|.json', '文本|.txt'];
       const pickerResult: Array<string> = await new picker.DocumentViewPicker().select(options);
 
@@ -6308,18 +6350,82 @@ struct BookSourcePage {
       }
 
       this.isImporting = true;
-      const content = await this.readTextFile(pickerResult[0]);
-      if (!content.trim()) {
-        HdsFeedback.showToast('文件内容为空');
+      if (pickerResult.length === 1) {
+        const content = await this.readTextFile(pickerResult[0]);
+        if (!content.trim()) {
+          HdsFeedback.showToast('文件内容为空');
+          return;
+        }
+        await this.importSourcesFromJson(content);
         return;
       }
-      await this.importSourcesFromJson(content);
+      await this.importSourcesFromFiles(pickerResult);
     } catch (e) {
       console.error('从文件导入失败:', e);
       const errMsg = this.importErrorMessage(e as Object);
       HdsFeedback.showToast(`导入失败: ${errMsg}`);
     } finally {
       this.isImporting = false;
+    }
+  }
+
+  // 多个文件合并成一次导入：坏文件只跳过并提示文件名，不影响其余文件。
+  async importSourcesFromFiles(uris: string[]): Promise<void> {
+    const sources: BookSource[] = [];
+    const failedFiles: string[] = [];
+    let nativeProblem = '';
+    for (const uri of uris) {
+      const name = this.importFileDisplayName(uri);
+      try {
+        const content = await this.readTextFile(uri);
+        if (!content.trim()) {
+          failedFiles.push(`${name}（内容为空）`);
+          continue;
+        }
+        const result = this.parseImportSources(content);
+        if (result.nativeProblem) {
+          nativeProblem = result.nativeProblem;
+        }
+        if (result.sources.length === 0 && !result.nativeProblem) {
+          failedFiles.push(`${name}（无有效书源）`);
+          continue;
+        }
+        for (const source of result.sources) {
+          sources.push(source);
+        }
+      } catch (e) {
+        console.error('读取书源文件失败:', name, e);
+        failedFiles.push(`${name}（${this.importErrorMessage(e as Object)}）`);
+      }
+    }
+
+    const notices: string[] = [];
+    if (failedFiles.length > 0) {
+      const shown = failedFiles.slice(0, 3).join('、');
+      const more = failedFiles.length > 3 ? ` 等 ${failedFiles.length} 个文件` : '';
+      notices.push(`已跳过 ${shown}${more}`);
+    }
+    if (nativeProblem) {
+      notices.push(`原生书源未导入，${nativeProblem}`);
+    }
+    if (notices.length > 0) {
+      HdsFeedback.showToast(notices.join('\n'));
+    }
+    if (sources.length === 0) {
+      if (notices.length === 0) {
+        HdsFeedback.showToast('未找到有效的书源');
+      }
+      return;
+    }
+    await this.presentImportedSources(sources);
+  }
+
+  importFileDisplayName(uri: string): string {
+    const segment = uri.split('?')[0].split('/').pop() || uri;
+    try {
+      return decodeURIComponent(segment);
+    } catch (e) {
+      return segment;
     }
   }
 
@@ -6414,57 +6520,7 @@ struct BookSourcePage {
   }
 
   bookSourceExportObject(source: BookSource): Object {
-    if (NativeSourceService.isNative(source)) return NativeSourceService.exportObject(source);
-    let result: Record<string, Object> = {};
-    try {
-      const parsed = JSON.parse(source.rawSourceJson || '{}') as Object;
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        result = parsed as Record<string, Object>;
-      }
-    } catch (_) {}
-    result['bookSourceUrl'] = source.bookSourceUrl;
-    result['bookSourceName'] = source.bookSourceName;
-    result['bookSourceType'] = source.bookSourceType;
-    result['bookSourceGroup'] = source.bookSourceGroup;
-    result['bookSourceComment'] = source.bookSourceComment;
-    result['bookUrlPattern'] = source.bookUrlPattern;
-    result['customOrder'] = source.customOrder;
-    result['enabled'] = source.enabled;
-    result['enabledExplore'] = source.enabledExplore;
-    result['enabledCookieJar'] = source.enabledCookieJar;
-    result['jsLib'] = source.jsLib;
-    result['header'] = source.header;
-    result['loginUrl'] = source.loginUrl;
-    result['loginUi'] = source.loginUi;
-    result['loginCheckJs'] = source.loginCheckJs;
-    result['searchUrl'] = source.searchUrl;
-    result['exploreUrl'] = source.exploreUrl;
-    result['ruleSearch'] = this.mergeRuleForExport(result['ruleSearch'], source.searchRule);
-    result['ruleExplore'] = this.mergeRuleForExport(result['ruleExplore'], source.exploreRule);
-    result['ruleBookInfo'] = this.mergeRuleForExport(result['ruleBookInfo'], source.bookInfoRule);
-    result['ruleToc'] = this.mergeRuleForExport(result['ruleToc'], source.tocRule);
-    result['ruleContent'] = this.mergeRuleForExport(result['ruleContent'], source.contentRule);
-    result['variableComment'] = source.variableComment;
-    result['lastUpdateTime'] = source.lastUpdateTime;
-    result['respondTime'] = source.respondTime;
-    result['weight'] = source.weight;
-    result['concurrentRate'] = source.concurrentRate;
-    result['customButton'] = source.customButton;
-    result['eventListener'] = source.eventListener;
-    if (source.isPinned || result['isPinned'] !== undefined) result['isPinned'] = source.isPinned;
-    if (source.isLocked || result['isLocked'] !== undefined) result['isLocked'] = source.isLocked;
-    return result;
-  }
-
-  mergeRuleForExport(rawRule: Object | undefined, storedRule: Object): Object {
-    const merged: Record<string, Object> = {};
-    if (rawRule && typeof rawRule === 'object' && !Array.isArray(rawRule)) {
-      const rawRecord = rawRule as Record<string, Object>;
-      for (const key of Object.keys(rawRecord)) merged[key] = rawRecord[key];
-    }
-    const stored = JSON.parse(JSON.stringify(storedRule || {})) as Record<string, Object>;
-    for (const key of Object.keys(stored)) merged[key] = stored[key];
-    return merged;
+    return BookSourceExport.toObject(source);
   }
 
   async readTextFile(filePath: string): Promise<string> {
@@ -6839,70 +6895,85 @@ struct BookSourcePage {
 
   async importSourcesFromJson(json: string) {
     try {
-      console.log('开始解析JSON，长度:', json.length);
-      let sources: BookSource[] = [];
-
-      const parsed: Object = JSON.parse(json);
-      console.log('JSON解析成功，类型:', typeof parsed);
-
-      // 处理 {"value": [...]} 结构
-      let items: Record<string, Object>[] = [];
-      if (Array.isArray(parsed)) {
-        items = parsed as Record<string, Object>[];
-      } else if (typeof parsed === 'object') {
-        const obj = parsed as Record<string, Object>;
-        if (Array.isArray(obj['value'])) {
-          items = obj['value'] as Record<string, Object>[];
-        } else if (obj['bookSourceUrl'] || NativeSourceSpec.isDefinitionObject(obj)) {
-          items = [obj];
-        }
+      const result = this.parseImportSources(json);
+      if (result.nativeProblem) {
+        HdsFeedback.showToast(`原生书源未导入，${result.nativeProblem}`);
+        if (result.sources.length === 0) return;
       }
-
-      console.log('待解析书源数量:', items.length);
-
-      let nativeProblem = '';
-      for (const item of items) {
-        if (NativeSourceSpec.isDefinitionObject(item)) {
-          // 原生书源在导入时就完成整份校验，写法有误的直接给出原因，不留到使用时才失败。
-          try {
-            sources.push(NativeSourceService.importObject(item));
-          } catch (e) {
-            nativeProblem = `${String(item['name'] || '原生书源')}：${(e as Error).message || '定义不合法'}`;
-          }
-          continue;
-        }
-        const source = this.parseBookSource(item);
-        if (source.bookSourceUrl) {
-          sources.push(source);
-        }
-      }
-      if (nativeProblem) {
-        HdsFeedback.showToast(`原生书源未导入，${nativeProblem}`);
-        if (sources.length === 0) return;
-      }
-
-      console.log('解析到书源数量:', sources.length);
-
-      if (sources.length === 0) {
-        HdsFeedback.showToast('未找到有效的书源');
-        return;
-      }
-
-      // Multiple sources require an explicit choice so a large import does not
-      // unexpectedly add every source to the local database.
-      if (sources.length > 1) {
-        this.pendingImportSources = sources;
-        this.selectedImportSourceUrls = sources.map((source: BookSource) => source.bookSourceUrl);
-        this.openImportSourceSelectionDialog();
-        return;
-      }
-
-      await this.persistImportedSources(sources);
+      await this.presentImportedSources(result.sources);
     } catch (e) {
       console.error('解析书源失败:', e);
       const errMsg = this.importErrorMessage(e as Object);
       HdsFeedback.showToast(`书源格式错误: ${errMsg}`);
     }
+  }
+
+  // 只解析不落库；JSON 本身不合法时直接抛出，由调用方决定怎么提示。
+  parseImportSources(json: string): BookSourceImportParseResult {
+    console.log('开始解析JSON，长度:', json.length);
+    const result = new BookSourceImportParseResult();
+
+    const parsed: Object = JSON.parse(json);
+    console.log('JSON解析成功，类型:', typeof parsed);
+
+    // 处理 {"value": [...]} 结构
+    let items: Record<string, Object>[] = [];
+    if (Array.isArray(parsed)) {
+      items = parsed as Record<string, Object>[];
+    } else if (typeof parsed === 'object') {
+      const obj = parsed as Record<string, Object>;
+      if (Array.isArray(obj['value'])) {
+        items = obj['value'] as Record<string, Object>[];
+      } else if (obj['bookSourceUrl'] || NativeSourceSpec.isDefinitionObject(obj)) {
+        items = [obj];
+      }
+    }
+
+    console.log('待解析书源数量:', items.length);
+
+    for (const item of items) {
+      if (NativeSourceSpec.isDefinitionObject(item)) {
+        // 原生书源在导入时就完成整份校验，写法有误的直接给出原因，不留到使用时才失败。
+        try {
+          result.sources.push(NativeSourceService.importObject(item));
+        } catch (e) {
+          result.nativeProblem = `${String(item['name'] || '原生书源')}：${(e as Error).message || '定义不合法'}`;
+        }
+        continue;
+      }
+      const source = this.parseBookSource(item);
+      if (source.bookSourceUrl) {
+        result.sources.push(source);
+      }
+    }
+    console.log('解析到书源数量:', result.sources.length);
+    return result;
+  }
+
+  async presentImportedSources(parsedSources: BookSource[]): Promise<void> {
+    // 同地址只保留最后出现的一条，否则选择框按地址勾选时会对不上数量。
+    const byUrl = new Map<string, BookSource>();
+    for (const source of parsedSources) {
+      byUrl.delete(source.bookSourceUrl);
+      byUrl.set(source.bookSourceUrl, source);
+    }
+    const sources = Array.from(byUrl.values());
+
+    if (sources.length === 0) {
+      HdsFeedback.showToast('未找到有效的书源');
+      return;
+    }
+
+    // Multiple sources require an explicit choice so a large import does not
+    // unexpectedly add every source to the local database.
+    if (sources.length > 1) {
+      this.pendingImportSources = sources;
+      this.selectedImportSourceUrls = sources.map((source: BookSource) => source.bookSourceUrl);
+      this.openImportSourceSelectionDialog();
+      return;
+    }
+
+    await this.persistImportedSources(sources);
   }
 
   async persistImportedSources(sources: BookSource[]): Promise<void> {

@@ -1,11 +1,13 @@
 import { router } from '@kit.ArkUI';
-import { Book, BookChapter, BookFieldSanitizer, BookTypeSupport, BookUrlResolver } from '@legado/sourceengine';
+import { Book, SearchBook, BookChapter, BookFieldSanitizer, BookTypeSupport, BookUrlResolver } from '@legado/sourceengine';
 import { AppDatabase } from '../model/data/AppDatabase';
 import { WebBookService } from '../core/book/WebBookService';
 import { syncSystemBars } from '../utils/SystemBars';
 import { BookDisplayHelper } from '../utils/BookDisplayHelper';
+import { GlassTagModifier, ImmersiveMaterialRuntime } from '../utils/ImmersiveMaterialRuntime';
 import { BookIdentity } from '../utils/BookIdentity';
 import { CoverUrlNormalizer } from '../utils/CoverUrlNormalizer';
+import { BookCoverCache } from '../utils/BookCoverCache';
 import { ImmersiveBackButton } from '../components/ImmersiveBackButton';
 import { CoverGallerySettings } from '../utils/CoverGallerySettings';
 import { SearchExplorePendingBook } from '../utils/SearchExplorePendingBook';
@@ -25,6 +27,14 @@ import { AppSpacing } from '../theme/AppSpacing';
 @Entry
 @Component
 struct SearchBookDetailPage {
+  /** 顶栏底色与书名渐显所需的滚动距离。 */
+  static readonly TITLE_FADE_DISTANCE: number = 120;
+  /** 封面氛围背景的高度。 */
+  static readonly AMBIENT_HEIGHT: number = 460;
+  /** 简介收起时显示的行数。 */
+  static readonly INTRO_COLLAPSED_LINES: number = 6;
+  // 加密的书源封面解密完成后递增，读取它的封面会重新取到本地文件地址。
+  @StorageProp('sourceCoverRevision') sourceCoverRevision: number = 0;
   @StorageLink('appDarkMode') appDarkMode: boolean = false;
   @StorageLink('themeRevision') themeRevision: number = 0;
   @StorageLink('appLightAccentColor') appLightAccentColor: string = '#007DFF';
@@ -76,6 +86,12 @@ struct SearchBookDetailPage {
   @State showChangeSourcePanel: boolean = false;
   @State changeSourceTarget: Book | null = null;
   @State showCatalogSheet: boolean = false;
+  /** 正文滚动距离：顶栏底色与书名随之渐显。 */
+  @State detailScrollY: number = 0;
+  @State introExpanded: boolean = false;
+  /** 头部封面已加载完成的地址；氛围背景只对它显示，读系统缓存而不再发第二次网络请求。 */
+  @State readyCoverUrl: string = '';
+  private detailScroller: Scroller = new Scroller();
   private openingCatalogChapter: boolean = false;
   private authorSearchDialogBuilder: CustomBuilder | undefined = undefined;
   private authorSearchDialogId: number = -1;
@@ -144,71 +160,12 @@ struct SearchBookDetailPage {
   build() {
     Stack() {
       WebBookFetchRuntimeHost()
+      this.ambientBackdrop()
+
       Column() {
-        Scroll() {
+        Scroll(this.detailScroller) {
           Column() {
-            Row({ space: AppSpacing.XL }) {
-              this.coverView(this.name, this.displayCoverUrl(), 96, 128)
-
-              Column() {
-                Text(this.name || '未知书名')
-                  .fontSize(AppFontSize.HEADLINE)
-                  .fontWeight(FontWeight.Bold)
-                  .fontColor(this.primaryTextColor())
-                  .maxLines(2)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-
-                if (this.author) {
-                  Row({ space: AppSpacing.XXS }) {
-                    Text(this.author)
-                      .fontSize(AppFontSize.BODY_LARGE)
-                      .fontColor(this.secondaryTextColor())
-                      .maxLines(1)
-                      .textOverflow({ overflow: TextOverflow.Ellipsis })
-
-                    Text('›')
-                      .fontSize(AppFontSize.BODY_LARGE)
-                      .fontColor(this.subTextColor())
-                  }
-                  .alignItems(VerticalAlign.Center)
-                  .margin({ top: AppSpacing.MD })
-                  .onClick(() => {
-                    this.showAuthorSearchPrompt();
-                  })
-                } else {
-                  Text('作者未知')
-                    .fontSize(AppFontSize.BODY_LARGE)
-                    .fontColor(this.secondaryTextColor())
-                    .margin({ top: AppSpacing.MD })
-                }
-
-                if (this.originName || this.origin) {
-                  Row({ space: AppSpacing.XXS }) {
-                    Text(this.originName || this.origin)
-                      .fontSize(AppFontSize.BODY)
-                      .fontColor(this.subTextColor())
-                      .maxLines(1)
-                      .textOverflow({ overflow: TextOverflow.Ellipsis })
-
-                    Text('›')
-                      .fontSize(AppFontSize.BODY)
-                      .fontColor(this.subTextColor())
-                  }
-                  .alignItems(VerticalAlign.Center)
-                  .margin({ top: AppSpacing.MD })
-                  .onClick(() => {
-                    this.showChangeSourcePrompt();
-                  })
-                }
-              }
-              .layoutWeight(1)
-              .alignItems(HorizontalAlign.Start)
-            }
-            .width('100%')
-            .padding({ left: AppSpacing.XL, right: AppSpacing.XL, top: AppSpacing.LG, bottom: AppSpacing.LG })
-            .backgroundColor(this.cardColor())
-            .borderRadius(ThemeRuntime.cardRadius())
-            .alignItems(VerticalAlign.Center)
+            this.detailHero()
 
             Flex({ wrap: FlexWrap.Wrap }) {
               ForEach(this.getTags(), (tag: string, index: number) => {
@@ -220,8 +177,7 @@ struct SearchBookDetailPage {
                   .fontSize(AppFontSize.BODY)
                   .fontColor(this.secondaryTextColor())
                   .padding({ left: AppSpacing.MD, right: AppSpacing.MD, top: AppSpacing.XS, bottom: AppSpacing.XS })
-                  .backgroundColor(this.inputColor())
-                  .borderRadius(ThemeRuntime.buttonRadius())
+                  .attributeModifier(this.neutralTagModifier())
                   .margin({ right: AppSpacing.MD, bottom: AppSpacing.MD })
               }
 
@@ -230,125 +186,66 @@ struct SearchBookDetailPage {
                   .fontSize(AppFontSize.BODY)
                   .fontColor(this.secondaryTextColor())
                   .padding({ left: AppSpacing.MD, right: AppSpacing.MD, top: AppSpacing.XS, bottom: AppSpacing.XS })
-                  .backgroundColor(this.inputColor())
-                  .borderRadius(ThemeRuntime.buttonRadius())
-                  .margin({ right: AppSpacing.MD, bottom: AppSpacing.MD })
-              }
-
-              if (this.isInShelf) {
-                Text('已在书架')
-                  .fontSize(AppFontSize.BODY)
-                  .fontColor(this.appDarkMode ? '#7DD89B' : '#0A7D36')
-                  .padding({ left: AppSpacing.MD, right: AppSpacing.MD, top: AppSpacing.XS, bottom: AppSpacing.XS })
-                  .backgroundColor(this.appDarkMode ? '#173B24' : '#E8F5E9')
-                  .borderRadius(ThemeRuntime.buttonRadius())
+                  .attributeModifier(this.neutralTagModifier())
                   .margin({ right: AppSpacing.MD, bottom: AppSpacing.MD })
               }
             }
             .width('100%')
-            .padding({ left: AppSpacing.XL, right: AppSpacing.XL, top: AppSpacing.XL })
+            .margin({ top: AppSpacing.XL })
 
-            // The catalog is the only entry point to the chapter list, so this card must stay
-            // visible even when the source returned no latest-chapter title.
-            Column() {
-              Row() {
-                Text(BookTypeSupport.isVideo(this.detailTypeProbe()) ? '选集' : '目录')
-                  .fontSize(AppFontSize.BODY_LARGE)
-                  .fontWeight(FontWeight.Bold)
-                  .fontColor(this.primaryTextColor())
-                  .layoutWeight(1)
+            Divider()
+              .strokeWidth(0.5)
+              .color(ThemeRuntime.hairlineColor(this.appDarkMode))
+              .margin({ top: AppSpacing.XS })
 
-                if (this.totalChapterNum > 0) {
-                  Text(`共 ${this.totalChapterNum} ${BookTypeSupport.isVideo(this.detailTypeProbe()) ||
-                    BookTypeSupport.isAudio(this.detailTypeProbe()) ? '集' : '章'}`)
-                    .fontSize(AppFontSize.BODY)
-                    .fontColor(this.subTextColor())
-                }
-
-                Text('›')
-                  .fontSize(AppFontSize.SUBTITLE)
-                  .fontColor(this.subTextColor())
-                  .margin({ left: AppSpacing.SM })
-              }
-              .width('100%')
-
-              Text(this.latestChapterTitle || '点击查看该书源的完整章节列表')
-                .fontSize(AppFontSize.BODY)
-                .fontColor(this.secondaryTextColor())
-                .width('100%')
-                .maxLines(2)
-                .textOverflow({ overflow: TextOverflow.Ellipsis })
-                .margin({ top: AppSpacing.MD })
+            Row() {
+              this.detailShelfAction()
+              this.detailActionItem($r('sys.symbol.list_bullet'),
+                BookTypeSupport.isVideo(this.detailTypeProbe()) ? '选集' : '目录', () => {
+                  this.openChapterList();
+                })
+              this.detailActionItem($r('sys.symbol.arrow_left_arrow_right'), '换源', () => {
+                this.showChangeSourcePrompt();
+              })
+              this.detailActionItem($r('sys.symbol.person'), '同作者', () => {
+                this.showAuthorSearchPrompt();
+              })
             }
             .width('100%')
-            .padding(AppSpacing.XL)
-            .backgroundColor(this.cardColor())
-            .borderRadius(ThemeRuntime.cardRadius())
-            .margin({ top: AppSpacing.LG })
-            .onClick(() => {
-              this.openChapterList();
-            })
+            .padding({ top: AppSpacing.LG, bottom: AppSpacing.LG })
 
-            Column() {
-              Text('简介')
-                .fontSize(AppFontSize.SUBTITLE)
-                .fontWeight(FontWeight.Bold)
-                .fontColor(this.primaryTextColor())
-                .width('100%')
-                .textAlign(TextAlign.Center)
+            Divider()
+              .strokeWidth(0.5)
+              .color(ThemeRuntime.hairlineColor(this.appDarkMode))
 
-              Text(this.intro || (this.isLoadingBookInfo ? '简介加载中...' : '暂无简介'))
-                .fontSize(AppFontSize.BODY_LARGE)
-                .fontColor(this.secondaryTextColor())
-                .lineHeight(26)
-                .copyOption(CopyOptions.LocalDevice)
-                .width('100%')
-                .id(`book_detail_intro_${this.bookInfoRenderVersion}`)
-                .margin({ top: AppSpacing.LG })
-            }
-            .width('100%')
-            .padding({ left: AppSpacing.XXL, right: AppSpacing.XXL, top: AppSpacing.XL, bottom: AppSpacing.XXL })
-            .backgroundColor(this.cardColor())
-            .borderRadius(ThemeRuntime.cardRadius())
-            .margin({ top: AppSpacing.LG })
+            this.detailChapterRow()
+            this.detailIntro()
           }
           .width('100%')
-          .padding({ left: AppSpacing.XL, right: AppSpacing.XL, top: 72 + this.statusBarHeight, bottom: 96 })
+          .padding({ left: AppSpacing.XL, right: AppSpacing.XL, top: 64 + this.statusBarHeight, bottom: 112 })
         }
         .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
         // 内容不足一屏时贴顶，Scroll 默认会把它竖直居中。
         .align(Alignment.Top)
         .width('100%')
         .layoutWeight(1)
-        .backgroundColor(this.pageColor())
+        .scrollBar(BarState.Off)
+        .onDidScroll(() => {
+          // 只在跨过渐显区间时更新，滚动中不逐帧刷新整页。
+          const offset = Math.max(0, Math.min(SearchBookDetailPage.TITLE_FADE_DISTANCE, this.detailScroller.currentOffset().yOffset));
+          if (Math.abs(offset - this.detailScrollY) >= 4 || offset === 0 || offset === SearchBookDetailPage.TITLE_FADE_DISTANCE) {
+            this.detailScrollY = offset;
+          }
+        })
 
-        Row({ space: AppSpacing.MD }) {
-          Button(this.isInShelf ? '已加入书架' : '加入书架')
-            .enabled(!this.isInShelf && !this.isSaving)
-            .height(44)
-            .fontSize(AppFontSize.BODY_LARGE)
-            .layoutWeight(1)
-            .backgroundColor(this.buttonColor())
-            .fontColor(ThemeRuntime.onAccentColor())
-            .onClick(() => {
-              this.addToShelf();
-            })
-
-          Button(BookTypeSupport.isVideo(this.detailTypeProbe()) ? '选集' : '目录')
-            .height(44)
-            .fontSize(AppFontSize.BODY_LARGE)
-            .layoutWeight(1)
-            .backgroundColor(this.buttonColor())
-            .fontColor(ThemeRuntime.onAccentColor())
-            .onClick(() => {
-              this.openChapterList();
-            })
-
+        Row() {
           Button(BookTypeSupport.isVideo(this.detailTypeProbe()) ? '开始观看' :
             (BookTypeSupport.isAudio(this.detailTypeProbe()) ? '开始听书' : '开始阅读'))
-            .height(44)
+            .width('100%')
+            .height(48)
             .fontSize(AppFontSize.BODY_LARGE)
-            .layoutWeight(1)
+            .fontWeight(FontWeight.Medium)
+            .borderRadius(24)
             .backgroundColor(this.buttonColor())
             .fontColor(ThemeRuntime.onAccentColor())
             .onClick(() => {
@@ -356,13 +253,11 @@ struct SearchBookDetailPage {
             })
         }
         .width('100%')
-        .padding({ left: AppSpacing.XL, right: AppSpacing.XL, top: AppSpacing.LG, bottom: 12 + this.navBarHeight })
+        .padding({ left: AppSpacing.XL, right: AppSpacing.XL, top: AppSpacing.MD, bottom: 12 + this.navBarHeight })
         .backgroundColor(ThemeRuntime.topBarColor(this.appDarkMode))
-        .backdropBlur(ThemeRuntime.topBarBlur())
       }
       .width('100%')
       .height('100%')
-      .backgroundColor(this.pageColor())
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
 
       this.titleBar()
@@ -384,17 +279,29 @@ struct SearchBookDetailPage {
     .width('100%')
     .height('100%')
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
-    .bindSheet($$this.showCatalogSheet, this.catalogSheet(), {
+    .bindSheet($$this.showCatalogSheet, this.catalogSheet(), this.catalogSheetOptions())
+  }
+
+  /** 目录弹层：API 26+ 透明背景挂沉浸光感厚材质，旧系统退回厚磨砂加半透明面板色。 */
+  catalogSheetOptions(): SheetOptions {
+    const material = ImmersiveMaterialRuntime.sheetMaterial(this.accentColor());
+    const options: SheetOptions = {
       detents: ['67%', SheetSize.LARGE],
       dragBar: true,
       showClose: false,
       scrollSizeMode: ScrollSizeMode.CONTINUOUS,
-      blurStyle: BlurStyle.COMPONENT_THICK,
-      backgroundColor: ThemeRuntime.glassPanelColor(this.appDarkMode, '', 'panel'),
       onDisappear: () => {
         this.showCatalogSheet = false;
       }
-    })
+    };
+    if (material !== undefined) {
+      options.backgroundColor = Color.Transparent;
+      options.systemMaterial = material;
+    } else {
+      options.blurStyle = BlurStyle.COMPONENT_THICK;
+      options.backgroundColor = ThemeRuntime.glassPanelColor(this.appDarkMode, '', 'panel');
+    }
+    return options;
   }
 
   @Builder
@@ -415,23 +322,277 @@ struct SearchBookDetailPage {
 
   @Builder
   titleBar() {
-    Row() {
-      ImmersiveBackButton({ iconColor: this.primaryTextColor(), darkMode: this.appDarkMode,
-        onBack: () => this.handleBack() })
+    Stack({ alignContent: Alignment.Start }) {
+      Row() {
+        ImmersiveBackButton({ iconColor: this.primaryTextColor(), darkMode: this.appDarkMode,
+          onBack: () => this.handleBack() })
 
-      Text(BookTypeSupport.isVideo(this.detailTypeProbe()) ? '剧集详情' : '书籍详情')
-        .fontSize(AppFontSize.TITLE)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(this.primaryTextColor())
-        .layoutWeight(1)
+        Text(this.titleBarProgress() > 0.6 ? (this.name || this.detailPageTitle()) : this.detailPageTitle())
+          .fontSize(AppFontSize.TITLE)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.primaryTextColor())
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1)
+      }
+      .width('100%')
+      .height('100%')
+      .padding({ right: AppSpacing.XL, top: this.statusBarHeight })
+      .alignItems(VerticalAlign.Center)
     }
     .width('100%')
     .height(56 + this.statusBarHeight)
-    .padding({ right: AppSpacing.XL, top: this.statusBarHeight })
-    .alignItems(VerticalAlign.Center)
-    .backgroundColor(ThemeRuntime.topBarColor(this.appDarkMode))
-    .backdropBlur(ThemeRuntime.topBarBlur())
     .position({ x: 0, y: 0 })
+  }
+
+  titleBarProgress(): number {
+    return Math.min(1, this.detailScrollY / SearchBookDetailPage.TITLE_FADE_DISTANCE);
+  }
+
+  detailPageTitle(): string {
+    return BookTypeSupport.isVideo(this.detailTypeProbe()) ? '剧集详情' : '书籍详情';
+  }
+
+  /**
+   * 封面氛围背景：封面低分辨率模糊铺在顶部，上面盖一层“透明 → 页面底色”的渐变，渐变底部是不透明的页面色、
+   * 正好对齐图片底边，所以图片底部自然消失、没有硬边。页面底色层与渐变层始终不透明，滚动时只淡化图片这一层。
+   * 封面等头部封面加载完成后再显示，读系统缓存，不再发第二次网络请求。
+   */
+  @Builder
+  ambientBackdrop() {
+    Stack({ alignContent: Alignment.Top }) {
+      Column()
+        .width('100%')
+        .height('100%')
+        .backgroundColor(this.pageColor())
+
+      if (this.displayCoverUrl() && this.readyCoverUrl === this.displayCoverUrl()) {
+        Image(this.displayCoverUrl())
+          .width('100%')
+          .height(SearchBookDetailPage.AMBIENT_HEIGHT)
+          .objectFit(ImageFit.Cover)
+          .sourceSize({ width: 96, height: 128 })
+          .blur(48)
+          .opacity((this.appDarkMode ? 0.5 : 0.62) * (1 - this.titleBarProgress() * 0.4))
+      }
+
+      Column()
+        .width('100%')
+        .height(SearchBookDetailPage.AMBIENT_HEIGHT)
+        .linearGradient({
+          direction: GradientDirection.Bottom,
+          colors: [
+            // 顶部也叠一层淡淡的页面色，保证作者、书源等次要文字在封面色上看得清。
+            [`#40${this.pageColor().substring(1)}`, 0],
+            [`#33${this.pageColor().substring(1)}`, 0.3],
+            [`#A6${this.pageColor().substring(1)}`, 0.68],
+            [this.pageColor(), 1]
+          ]
+        })
+    }
+    .width('100%')
+    .height('100%')
+    .clip(true)
+    .hitTestBehavior(HitTestMode.None)
+    .accessibilityLevel('no')
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+  }
+
+  /** 头部：封面、书名、作者与书源直接放在氛围背景上，不再套卡片。 */
+  @Builder
+  detailHero() {
+    Row({ space: AppSpacing.XL }) {
+      Stack() {
+        this.coverView(this.name, this.displayCoverUrl(), 104, 140)
+      }
+      // 投影按外层形状绘制，不给圆角会是直角矩形的影子，在封面四角露出来。
+      .borderRadius(8)
+      .shadow({ radius: 16, color: this.appDarkMode ? '#66000000' : '#33000000', offsetX: 0, offsetY: 6 })
+
+      Column() {
+        Text(this.name || '未知书名')
+          .fontSize(AppFontSize.HEADLINE)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.primaryTextColor())
+          .maxLines(3)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+        Row({ space: AppSpacing.XXS }) {
+          Text(this.author || '作者未知')
+            .fontSize(AppFontSize.BODY_LARGE)
+            .fontColor(this.secondaryTextColor())
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .flexShrink(1)
+          if (this.author) {
+            SymbolGlyph($r('sys.symbol.chevron_right'))
+              .fontSize(14)
+              .fontColor([this.subTextColor()])
+          }
+        }
+        .alignItems(VerticalAlign.Center)
+        .margin({ top: AppSpacing.MD })
+        .onClick(() => {
+          if (this.author) {
+            this.showAuthorSearchPrompt();
+          }
+        })
+
+        if (this.originName || this.origin) {
+          Row({ space: AppSpacing.XS }) {
+            SymbolGlyph($r('sys.symbol.arrow_left_arrow_right'))
+              .fontSize(13)
+              .fontColor([this.subTextColor()])
+            Text(this.originName || this.origin)
+              .fontSize(AppFontSize.BODY)
+              .fontColor(this.subTextColor())
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .flexShrink(1)
+          }
+          .alignItems(VerticalAlign.Center)
+          .margin({ top: AppSpacing.SM })
+          .accessibilityText(`书源${this.originName || this.origin}，换源`)
+          .onClick(() => {
+            this.showChangeSourcePrompt();
+          })
+        }
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+    }
+    .width('100%')
+    .padding({ top: AppSpacing.LG })
+    .alignItems(VerticalAlign.Center)
+  }
+
+  /** 书架操作直接读取 isInShelf，加入或移出后同步刷新按钮。 */
+  @Builder
+  detailShelfAction() {
+    Column({ space: AppSpacing.SM }) {
+      SymbolGlyph(this.isInShelf ? $r('sys.symbol.bookshelf_badge_checkmark_fill') : $r('sys.symbol.bookshelf'))
+        .fontSize(24)
+        .fontColor([this.isInShelf ? this.accentColor() : this.primaryTextColor()])
+      Text(this.isSaving ? (this.isInShelf ? '移出中' : '加入中') : (this.isInShelf ? '移出书架' : '加入书架'))
+        .fontSize(AppFontSize.CAPTION)
+        .fontColor(this.isInShelf ? this.accentColor() : this.secondaryTextColor())
+        .maxLines(1)
+    }
+    .layoutWeight(1)
+    .justifyContent(FlexAlign.Center)
+    .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.96 })
+    .accessibilityText(this.isInShelf ? '移出书架' : '加入书架')
+    .onClick(() => {
+      if (this.isSaving) return;
+      if (this.isInShelf) {
+        this.removeFromShelf();
+      } else {
+        this.addToShelf();
+      }
+    })
+  }
+
+  @Builder
+  detailActionItem(icon: Resource, label: string, onTap: () => void) {
+    Column({ space: AppSpacing.SM }) {
+      SymbolGlyph(icon)
+        .fontSize(24)
+        .fontColor([this.primaryTextColor()])
+      Text(label)
+        .fontSize(AppFontSize.CAPTION)
+        .fontColor(this.secondaryTextColor())
+        .maxLines(1)
+    }
+    .layoutWeight(1)
+    .justifyContent(FlexAlign.Center)
+    .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.96 })
+    .accessibilityText(label)
+    .onClick(() => onTap())
+  }
+
+  /** 目录入口：“最新 · 章节名”，右侧总章数；目录是章节列表的唯一入口，没有最新章节名时也保留。 */
+  @Builder
+  detailChapterRow() {
+    Row({ space: AppSpacing.SM }) {
+      Text() {
+        Span(BookTypeSupport.isVideo(this.detailTypeProbe()) ? '选集' : '最新')
+          .fontColor(this.secondaryTextColor())
+        Span(' · ')
+          .fontColor(this.subTextColor())
+        Span(this.latestChapterTitle || '点击查看完整章节列表')
+          .fontColor(this.primaryTextColor())
+      }
+      .fontSize(AppFontSize.BODY_LARGE)
+      .maxLines(1)
+      .textOverflow({ overflow: TextOverflow.Ellipsis })
+      .layoutWeight(1)
+
+      if (this.totalChapterNum > 0) {
+        Text(`共 ${this.totalChapterNum} ${BookTypeSupport.isVideo(this.detailTypeProbe()) ||
+          BookTypeSupport.isAudio(this.detailTypeProbe()) ? '集' : '章'}`)
+          .fontSize(AppFontSize.BODY)
+          .fontColor(this.subTextColor())
+      }
+      SymbolGlyph($r('sys.symbol.chevron_right'))
+        .fontSize(14)
+        .fontColor([this.subTextColor()])
+    }
+    .width('100%')
+    .height(52)
+    .alignItems(VerticalAlign.Center)
+    .onClick(() => {
+      this.openChapterList();
+    })
+  }
+
+  @Builder
+  detailIntro() {
+    Column({ space: AppSpacing.SM }) {
+      Row({ space: AppSpacing.SM }) {
+        SymbolGlyph($r('sys.symbol.doc_text'))
+          .fontSize(16)
+          .fontColor([this.subTextColor()])
+        Text('简介')
+          .fontSize(AppFontSize.BODY_LARGE)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.primaryTextColor())
+      }
+      .alignItems(VerticalAlign.Center)
+
+      Text(this.intro || (this.isLoadingBookInfo ? '简介加载中...' : '暂无简介'))
+        .fontSize(AppFontSize.BODY_LARGE)
+        .fontColor(this.secondaryTextColor())
+        .lineHeight(26)
+        .maxLines(this.introExpanded ? 1000 : SearchBookDetailPage.INTRO_COLLAPSED_LINES)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .copyOption(CopyOptions.LocalDevice)
+        .width('100%')
+        .id(`book_detail_intro_${this.bookInfoRenderVersion}`)
+        .onClick(() => {
+          if (this.introIsLong()) {
+            this.introExpanded = !this.introExpanded;
+          }
+        })
+
+      if (this.introIsLong()) {
+        Text(this.introExpanded ? '收起' : '展开全部')
+          .fontSize(AppFontSize.BODY)
+          .fontColor(this.accentColor())
+          .padding({ top: AppSpacing.XS, bottom: AppSpacing.XS })
+          .onClick(() => {
+            this.introExpanded = !this.introExpanded;
+          })
+      }
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .padding({ top: AppSpacing.MD })
+  }
+
+  /** 粗略按字数判断简介是否超过收起时的行数，避免为测量文字再做一次布局。 */
+  introIsLong(): boolean {
+    const text = this.intro || '';
+    return text.length > 120 || text.split('\n').length > SearchBookDetailPage.INTRO_COLLAPSED_LINES;
   }
 
   onBackPress(): boolean {
@@ -484,6 +645,27 @@ struct SearchBookDetailPage {
     } catch (e) {
       console.error('检查书架失败:', e);
       this.isInShelf = false;
+    }
+  }
+
+  async removeFromShelf(): Promise<void> {
+    if (this.isSaving || !this.isInShelf) return;
+    this.isSaving = true;
+    try {
+      const book = new SearchBook();
+      book.bookUrl = this.bookUrl;
+      book.origin = this.origin;
+      await SearchBookShelfHelper.removeFromShelf(getContext(this), book);
+      this.isInShelf = false;
+      this.promptAddToShelfAfterRead = false;
+      this.pendingAddToShelfBookUrl = '';
+      this.shelfCheckKey = '';
+      this.shelfCheckVersion = -1;
+    } catch (e) {
+      console.error('移出书架失败:', e);
+      HdsFeedback.showToast('移出书架失败');
+    } finally {
+      this.isSaving = false;
     }
   }
 
@@ -883,8 +1065,9 @@ struct SearchBookDetailPage {
       const existing = await db.getBook(this.bookUrl) || await this.findShelfBookByKey(requestKey, true);
       if (existing) {
         let bookChanged = false;
+        const knownCategory = BookTypeSupport.mediaCategoryOf(this.detailTypeProbe());
         const inferredType = this.bookType || BookTypeSupport.typeFromVariable(this.bookVariable);
-        if (inferredType && existing.type !== inferredType) {
+        if (knownCategory === BookTypeSupport.CATEGORY_NOVEL && inferredType && existing.type !== inferredType) {
           existing.type = inferredType;
           bookChanged = true;
         }
@@ -894,6 +1077,12 @@ struct SearchBookDetailPage {
           bookChanged = true;
         }
         if (this.mergeResolvedDetailIntoBook(existing)) {
+          bookChanged = true;
+        }
+        const typeBefore = existing.type;
+        const variableBefore = existing.variable;
+        this.ensureMediaCategory(existing, knownCategory);
+        if (existing.type !== typeBefore || existing.variable !== variableBefore) {
           bookChanged = true;
         }
         if (bookChanged) {
@@ -916,7 +1105,12 @@ struct SearchBookDetailPage {
       const book = await this.buildBookForShelf();
       const resolvedExisting = await this.findShelfBookByKey(BookIdentity.keyOfBook(book), true);
       if (resolvedExisting) {
-        if (this.mergeResolvedDetailIntoBook(resolvedExisting)) {
+        const resolvedTypeBefore = resolvedExisting.type;
+        const resolvedVariableBefore = resolvedExisting.variable;
+        const resolvedMerged = this.mergeResolvedDetailIntoBook(resolvedExisting);
+        this.ensureMediaCategory(resolvedExisting, BookTypeSupport.mediaCategoryOf(book));
+        if (resolvedMerged || resolvedExisting.type !== resolvedTypeBefore ||
+          resolvedExisting.variable !== resolvedVariableBefore) {
           await db.updateBook(resolvedExisting, true, 'prepare_read_update_resolved');
           AppStorage.setOrCreate('shelfUpdateTime', Date.now());
         }
@@ -1030,7 +1224,35 @@ struct SearchBookDetailPage {
       book.variable = fullBook.variable || book.variable;
       book.type = fullBook.type || book.type;
     }
+    // 类型以书源详情为准；是有声/漫画/视频时在 variable 里写入 tab，阅读页据此转到听书/漫画/播放页。
+    this.ensureMediaCategory(book, BookTypeSupport.mediaCategoryOf(book));
     return book;
+  }
+
+  /**
+   * 让书籍记录与已知类型一致：有声/漫画补类型标记位，并在 variable 里写入 tab
+   * （阅读页按 variable 的 tab 优先定类型）；视频在 variable 里写入 tab=video。小说不做处理。
+   */
+  private ensureMediaCategory(target: Book, category: string): void {
+    let tab = '';
+    let bit = 0;
+    if (category === BookTypeSupport.CATEGORY_AUDIO) {
+      tab = 'audio';
+      bit = BookTypeSupport.AUDIO;
+    } else if (category === BookTypeSupport.CATEGORY_COMIC) {
+      tab = 'comic';
+      bit = BookTypeSupport.IMAGE;
+    } else if (category === BookTypeSupport.CATEGORY_VIDEO) {
+      tab = 'video';
+    }
+    if (!tab) return;
+    if (bit) {
+      target.type = (target.type & ~(BookTypeSupport.TEXT | BookTypeSupport.AUDIO | BookTypeSupport.IMAGE)) | bit;
+    }
+    if (BookTypeSupport.typeFromVariable(target.variable) !== bit || category === BookTypeSupport.CATEGORY_VIDEO) {
+      const merged = SearchBookDetailPage.mergeVariableTab(target.variable, tab);
+      if (merged) target.variable = merged;
+    }
   }
 
   @Builder
@@ -1179,6 +1401,18 @@ struct SearchBookDetailPage {
     this.bookInfoRenderVersion++;
   }
 
+  /** 在 variable 里补上 tab，保留其余字段（目录等规则可能依赖它们）；不是 JSON 对象时返回空串。 */
+  private static mergeVariableTab(variable: string, tab: string): string {
+    try {
+      const record = (variable ? JSON.parse(variable) : {}) as Record<string, Object>;
+      if (record === null || typeof record !== 'object' || Array.isArray(record)) return '';
+      record['tab'] = tab;
+      return JSON.stringify(record);
+    } catch (_) {
+      return '';
+    }
+  }
+
   detailTypeProbe(): Book {
     const book = new Book();
     book.origin = this.origin;
@@ -1265,6 +1499,14 @@ struct SearchBookDetailPage {
       return;
     }
 
+    if (BookTypeSupport.isAudio(this.detailTypeProbe())) {
+      router.pushUrl({
+        url: 'pages/AudioBook',
+        params: { bookUrl: this.bookUrl }
+      });
+      return;
+    }
+
     router.pushUrl({
       url: 'pages/ReadBook',
       params: { bookUrl: this.bookUrl }
@@ -1301,7 +1543,7 @@ struct SearchBookDetailPage {
         return galleryCover;
       }
     }
-    return this.coverUrl;
+    return this.sourceCoverRevision >= 0 ? BookCoverCache.displayCover(getContext(this), this.coverUrl) : this.coverUrl;
   }
 
   bookshelfGalleryCoverUrl(): string {
@@ -1324,42 +1566,54 @@ struct SearchBookDetailPage {
     return BookDisplayHelper.pickCover(covers);
   }
 
+  /** 字数、更新时间这类中性信息标签：同样的沉浸光感胶囊，用输入框底色染色。 */
+  neutralTagModifier(): GlassTagModifier {
+    return new GlassTagModifier(this.appDarkMode);
+  }
+
   @Builder
   tagChip(tag: string, index: number) {
     Text(tag)
       .fontSize(AppFontSize.BODY)
       .fontColor(BookDisplayHelper.getTagTextColor(index, this.appDarkMode))
       .padding({ left: AppSpacing.MD, right: AppSpacing.MD, top: AppSpacing.XS, bottom: AppSpacing.XS })
-      .backgroundColor(BookDisplayHelper.getTagBackgroundColor(index, this.appDarkMode))
-      .borderRadius(ThemeRuntime.buttonRadius())
+      .attributeModifier(BookDisplayHelper.getGlassTagModifier(index, this.appDarkMode))
       .margin({ right: AppSpacing.MD, bottom: AppSpacing.MD })
   }
 
   @Builder
   coverView(name: string, coverUrl: string, width: number, height: number) {
+    // 圆角边缘是抗锯齿的半透明像素：容器底色或占位色垫在封面下面，会在四角透出一圈浅色细边。
+    // 所以容器不设底色，占位色块只在封面没加载好时显示，封面自己也带圆角。
     Stack() {
-      Column() {
-        Text(name ? name.substring(0, 1) : '书')
-          .fontSize(30)
-          .fontColor('#FFFFFF')
+      if (!coverUrl || this.readyCoverUrl !== coverUrl) {
+        Column() {
+          Text(name ? name.substring(0, 1) : '书')
+            .fontSize(30)
+            .fontColor('#FFFFFF')
+        }
+        .width(width)
+        .height(height)
+        .justifyContent(FlexAlign.Center)
+        .backgroundColor(this.accentColor())
       }
-      .width(width)
-      .height(height)
-      .justifyContent(FlexAlign.Center)
-      .backgroundColor(this.accentColor())
 
       if (coverUrl) {
         Image(coverUrl)
           .width(width)
           .height(height)
           .objectFit(ImageFit.Cover)
+          .sourceSize({ width: 360, height: 480 })
+          .borderRadius(8)
+          .onComplete(() => {
+            this.readyCoverUrl = coverUrl;
+          })
       }
     }
     .width(width)
     .height(height)
     .borderRadius(8)
     .clip(true)
-    .backgroundColor(this.inputColor())
   }
 
   pageColor(): string {

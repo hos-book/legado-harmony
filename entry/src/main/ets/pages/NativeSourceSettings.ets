@@ -1,5 +1,6 @@
 import { LengthMetrics, router } from '@kit.ArkUI';
-import { BookSource, HttpClient, VerificationSupport, NativeSourceService, NativeVarItem, NativeActionEntry, NativeLoginFieldSpec } from '@legado/sourceengine';
+import { BookSource, HttpClient, VerificationSupport, NativeSourceService, NativeVarItem, NativeVarOptions, NativeActionEntry,
+  NativeLoginFieldSpec } from '@legado/sourceengine';
 import { AppDatabase } from '../model/data/AppDatabase';
 import { syncSystemBars } from '../utils/SystemBars';
 import { ThemeRuntime } from '../theme/ThemeRuntime';
@@ -33,6 +34,9 @@ struct NativeSourceSettingsPage {
   @State loginStatus: string = '';
   @State canCheckLogin: boolean = false;
   @State actions: NativeActionEntry[] = [];
+  /** 动态选项加载失败的原因，按变量名。 */
+  @State varNotes: Record<string, string> = {};
+  @State runningAction: string = '';
   @State busy: boolean = false;
   @State dirty: boolean = false;
   private bookSourceUrl: string = '';
@@ -75,6 +79,7 @@ struct NativeSourceSettingsPage {
       this.canCheckLogin = !!login && !!login.check;
       this.refreshLoginState();
       this.loadActions();
+      this.loadVarOptions();
     } catch (e) {
       console.error('加载书源设置失败:', e);
       HdsFeedback.showToast('加载书源失败');
@@ -90,6 +95,33 @@ struct NativeSourceSettingsPage {
       console.warn('加载书源动作失败:', (e as Error).message);
       this.actions = [];
     }
+  }
+
+  /** 变量的选项可以由书源脚本给出（例如测速后列出可用线路）；失败时保留写死的选项并显示原因。 */
+  async loadVarOptions(): Promise<void> {
+    if (!this.source) return;
+    let loaded: Record<string, NativeVarOptions> = {};
+    try {
+      loaded = await NativeSourceService.varOptions(this.source, this.http);
+    } catch (e) {
+      console.warn('加载动态选项失败:', (e as Error).message);
+      return;
+    }
+    const keys = Object.keys(loaded);
+    if (keys.length === 0) return;
+    const notes: Record<string, string> = {};
+    this.items = this.items.map((item: NativeVarItem): NativeVarItem => {
+      const result = loaded[item.key];
+      if (!result) return item;
+      if (result.error) {
+        notes[item.key] = `选项获取失败：${result.error}`;
+        return item;
+      }
+      const value = result.options.indexOf(item.value) >= 0 ? item.value : result.options[0];
+      if (value !== item.value) this.dirty = true;
+      return { key: item.key, label: item.label, options: result.options, value: value };
+    });
+    this.varNotes = notes;
   }
 
   refreshLoginState(): void {
@@ -129,6 +161,8 @@ struct NativeSourceSettingsPage {
     const login = NativeSourceService.loginSpec(this.source);
     if (!login || !login.url) return;
     const title = `${this.sourceName || '书源'} 登录`;
+    // 网页登录可能换了账号，登录站点的 Cookie 不参与缓存分区，所以在这里清掉旧的缓存值。
+    NativeSourceService.clearCache(this.source.bookSourceUrl);
     VerificationSupport.requestVerification(login.url, title, this.source);
     router.pushUrl({
       url: 'pages/VerifyWeb',
@@ -226,12 +260,18 @@ struct NativeSourceSettingsPage {
       return;
     }
     this.busy = true;
+    this.runningAction = action.label;
     try {
       HdsFeedback.showToast(await NativeSourceService.runAction(this.source, this.http, action.index));
+      // 脚本按钮可能改了书源变量或登录状态，重新读一遍。
+      if (!this.dirty) this.items = NativeSourceService.varItems(this.source);
+      this.refreshLoginState();
+      this.loadActions();
     } catch (e) {
       HdsFeedback.showToast(`操作失败：${(e as Error).message || '未知错误'}`);
     } finally {
       this.busy = false;
+      this.runningAction = '';
     }
   }
 
@@ -285,7 +325,6 @@ struct NativeSourceSettingsPage {
       .width('100%')
       .height(56 + this.statusBarHeight)
       .padding({ top: this.statusBarHeight })
-      .backgroundColor(ThemeRuntime.topBarColor(this.appDarkMode))
       .alignItems(VerticalAlign.Center)
 
       Scroll() {
@@ -341,7 +380,15 @@ struct NativeSourceSettingsPage {
               .width('100%')
               .padding({ left: AppSpacing.XL, right: AppSpacing.XL, top: AppSpacing.SM, bottom: AppSpacing.SM })
               .alignItems(VerticalAlign.Center)
-            }, (item: NativeVarItem) => `${item.key}_${item.options.length > 0 ? item.value : ''}`)
+
+              if (this.varNotes[item.key]) {
+                Text(this.varNotes[item.key])
+                  .fontSize(AppFontSize.CAPTION)
+                  .fontColor(ThemeRuntime.subTextColor(this.appDarkMode))
+                  .width('100%')
+                  .padding({ left: AppSpacing.XL + 96, right: AppSpacing.XL })
+              }
+            }, (item: NativeVarItem) => `${item.key}_${item.options.join('|')}_${item.options.length > 0 ? item.value : ''}`)
           }
 
           if (this.hasLogin) {
@@ -420,6 +467,14 @@ struct NativeSourceSettingsPage {
             }
             .width('100%')
             .padding({ left: AppSpacing.XL, right: AppSpacing.XL })
+
+            if (this.runningAction) {
+              Text(`正在执行：${this.runningAction}`)
+                .fontSize(AppFontSize.CAPTION)
+                .fontColor(ThemeRuntime.subTextColor(this.appDarkMode))
+                .width('100%')
+                .padding({ left: AppSpacing.XL, right: AppSpacing.XL, top: AppSpacing.SM })
+            }
           }
 
           if (this.items.length === 0 && !this.hasLogin && this.actions.length === 0) {

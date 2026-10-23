@@ -1,6 +1,7 @@
 import deviceInfo from '@ohos.deviceInfo';
 import { uiMaterial } from '@kit.ArkUI';
 import { hdsMaterial } from '@kit.UIDesignKit';
+import { ThemeRuntime } from '../theme/ThemeRuntime';
 
 /**
  * Applies the shared dropdown material to a Select. `menuSystemMaterial` only exists from API 26; calling the
@@ -14,9 +15,97 @@ export class SelectMenuMaterialModifier implements AttributeModifier<SelectAttri
   }
 }
 
+/**
+ * 彩色标签的玻璃胶囊：标签原浅底色上叠一层自上而下的高光渐变、一圈同色系半透明细边，
+ * 再用标签文字色做很淡的柔和投影，让标签像悬浮栏的沉浸材质那样有反光、轮廓和浮起感。
+ * 组件级系统材质放在不透明卡片里没有可透出的内容，几乎看不见，所以这里直接画出这三层，
+ * 各系统版本效果一致。文字颜色由调用处照旧设置，按序号配色的规则不变。
+ */
+export class ImmersiveTagModifier implements AttributeModifier<CommonAttribute> {
+  static readonly CAPSULE_RADIUS: number = 999;
+  private surfaceColor: string;
+  private lightColor: string;
+  private darkMode: boolean;
+
+  /**
+   * @param surfaceColor 标签原本的浅底色
+   * @param lightColor 标签文字色，用于边缘与投影的色调
+   */
+  constructor(surfaceColor: string, lightColor: string, darkMode: boolean) {
+    this.surfaceColor = surfaceColor;
+    this.lightColor = lightColor;
+    this.darkMode = darkMode;
+  }
+
+  applyNormalAttribute(instance: CommonAttribute): void {
+    const surface = ImmersiveTagModifier.isHex(this.surfaceColor) ? this.surfaceColor : '#F0F0F0';
+    // 顶部向白色提亮，模拟玻璃上沿的反光；深色模式提亮幅度小一些。
+    const highlight = ImmersiveTagModifier.mixWithWhite(surface, this.darkMode ? 0.14 : 0.7);
+    instance.linearGradient({
+      direction: GradientDirection.Bottom,
+      colors: [[highlight, 0], [surface, 0.62], [surface, 1]]
+    });
+    if (ImmersiveTagModifier.isHex(this.lightColor)) {
+      const tone = this.lightColor.substring(1);
+      instance.border({ width: 0.75, color: `${this.darkMode ? '#4D' : '#3D'}${tone}` });
+      instance.shadow({
+        radius: 6,
+        color: `${this.darkMode ? '#33' : '#2E'}${tone}`,
+        offsetX: 0,
+        offsetY: 2
+      });
+    }
+    // 胶囊形：圆角超过高度一半时按一半绘制。
+    instance.borderRadius(ImmersiveTagModifier.CAPSULE_RADIUS);
+  }
+
+  private static isHex(color: string): boolean {
+    return /^#[0-9A-Fa-f]{6}$/.test(color);
+  }
+
+  private static mixWithWhite(hex: string, ratio: number): string {
+    const channel = (start: number): string => {
+      const value = parseInt(hex.substring(start, start + 2), 16);
+      const mixed = Math.round(value + (255 - value) * ratio);
+      return mixed.toString(16).padStart(2, '0').toUpperCase();
+    };
+    return `#${channel(1)}${channel(3)}${channel(5)}`;
+  }
+}
+
+/**
+ * 玻璃标签（白玻璃彩字）：放在有图像的背景上（模糊封面行、详情页氛围背景、弹出层）时使用。
+ * 半透明白底自上而下略淡、上沿稍亮，再加白色细边与很浅的投影；
+ * 直接绘制而不用组件级系统材质（后者在真机上几乎不可见），各系统版本效果一致。
+ * 文字颜色由调用处按序号配色设置。
+ */
+export class GlassTagModifier implements AttributeModifier<CommonAttribute> {
+  private darkMode: boolean;
+
+  constructor(darkMode: boolean) {
+    this.darkMode = darkMode;
+  }
+
+  applyNormalAttribute(instance: CommonAttribute): void {
+    // 不做实时背景模糊：列表里几十个标签各开一块离屏缓冲，显存开销过大；背后的封面本身已是模糊图。
+    instance.linearGradient({
+      direction: GradientDirection.Bottom,
+      colors: this.darkMode ?
+        [['#2EFFFFFF', 0], ['#1FFFFFFF', 0.5], ['#1AFFFFFF', 1]] :
+        [['#D9FFFFFF', 0], ['#A6FFFFFF', 0.5], ['#99FFFFFF', 1]]
+    });
+    instance.border({ width: 0.5, color: this.darkMode ? '#26FFFFFF' : '#E6FFFFFF' });
+    instance.shadow({ radius: 4, color: this.darkMode ? '#33000000' : '#1A000000', offsetX: 0, offsetY: 1 });
+    instance.borderRadius(ImmersiveTagModifier.CAPSULE_RADIUS);
+  }
+}
+
 /** Centralizes HDS material probing and compatibility fallback. */
 export class ImmersiveMaterialRuntime {
   static readonly KEY_LIGHT_LEVEL: string = 'immersiveLightLevel';
+  /** 下拉弹出菜单的圆角与内边距；菜单项圆角取两者之差，与弹出层同心。 */
+  static readonly POPUP_MENU_RADIUS: number = 18;
+  static readonly POPUP_MENU_PADDING: number = 4;
   private static resolved: boolean = false;
   private static resolvedType: hdsMaterial.MaterialType = hdsMaterial.MaterialType.ADAPTIVE;
   private static hdsMaterialSupported: boolean | null = null;
@@ -129,6 +218,64 @@ export class ImmersiveMaterialRuntime {
   /** A fresh instance per build pass, so a changed light-sense setting is applied again. */
   static selectMenuModifier(): SelectMenuMaterialModifier {
     return new SelectMenuMaterialModifier();
+  }
+
+  /**
+   * 下拉弹出菜单（bindPopup）的沉浸光感材质：随光感档位的薄材质、带投影，光感取强调色。
+   * API 26 以下返回 undefined，调用方退回磨砂底。
+   */
+  static popupMenuMaterial(accentColor: string): uiMaterial.ImmersiveMaterial | undefined {
+    if (!ImmersiveMaterialRuntime.supportsHds()) return undefined;
+    return new uiMaterial.ImmersiveMaterial({
+      style: ImmersiveMaterialRuntime.materialStyle(),
+      applyShadow: true,
+      interactive: false,
+      lightEffect: { color: accentColor }
+    });
+  }
+
+  /**
+   * 下拉菜单统一用系统弹出层：API 26+ 背景是沉浸光感材质，旧系统退回半透明磨砂；
+   * 点菜单外自动收起，收起时回调让调用方复位开关。builder 用箭头函数传入，保证其中的 this 指向页面。
+   */
+  static popupMenuOptions(builder: CustomBuilder, placement: Placement, darkMode: boolean, accentColor: string,
+    onHidden: () => void, focusable: boolean = true): CustomPopupOptions {
+    const material = ImmersiveMaterialRuntime.popupMenuMaterial(accentColor);
+    const options: CustomPopupOptions = {
+      builder: builder,
+      placement: placement,
+      popupColor: material !== undefined ? Color.Transparent : ThemeRuntime.glassPanelColor(darkMode, '', 'panel'),
+      radius: ImmersiveMaterialRuntime.POPUP_MENU_RADIUS,
+      enableArrow: false,
+      targetSpace: 8,
+      // 跟着输入框弹出的面板传 false，免得抢走焦点收起键盘。
+      focusable: focusable,
+      onStateChange: (event) => {
+        if (!event.isVisible) {
+          onHidden();
+        }
+      }
+    };
+    if (material !== undefined) {
+      options.systemMaterial = material;
+    } else {
+      options.backgroundBlurStyle = BlurStyle.COMPONENT_THICK;
+    }
+    return options;
+  }
+
+  /**
+   * 半模态弹层（目录等）的沉浸光感材质：固定厚材质保证列表文字清晰，带投影，光感取强调色。
+   * API 26 以下返回 undefined，调用方退回厚磨砂。
+   */
+  static sheetMaterial(accentColor: string): uiMaterial.ImmersiveMaterial | undefined {
+    if (deviceInfo.sdkApiVersion < 26) return undefined;
+    return new uiMaterial.ImmersiveMaterial({
+      style: uiMaterial.ImmersiveStyle.THICK,
+      applyShadow: true,
+      interactive: false,
+      lightEffect: { color: accentColor }
+    });
   }
 
   static selectMenuMaterial(): uiMaterial.ImmersiveMaterial | undefined {

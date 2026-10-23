@@ -11,6 +11,7 @@ import { AudioRuleSupport } from '../core/book/AudioRuleSupport';
 import { AudioStartTiming, RemoteAudioPlayback, RemoteAudioPlaybackListener } from '../utils/RemoteAudioPlayback';
 import { ReaderTtsFloatingSession } from '../utils/ReaderTtsFloatingSession';
 import { CoverUrlNormalizer } from '../utils/CoverUrlNormalizer';
+import { BookCoverCache } from '../utils/BookCoverCache';
 import { syncSystemBars } from '../utils/SystemBars';
 import { ThemeAssetRegistry } from '../theme/ThemeAssetRegistry';
 import { ThemeRuntime } from '../theme/ThemeRuntime';
@@ -63,6 +64,8 @@ class AudioBookAvSessionHolder {
 @Entry
 @Component
 struct AudioBookPage {
+  // 加密的书源封面解密完成后递增，读取它的封面会重新取到本地文件地址。
+  @StorageProp('sourceCoverRevision') sourceCoverRevision: number = 0;
   @StorageLink('appDarkMode') appDarkMode: boolean = false;
   @StorageLink('themeRevision') themeRevision: number = 0;
   @StorageLink('appLightAccentColor') appLightAccentColor: string = '#007DFF';
@@ -78,20 +81,24 @@ struct AudioBookPage {
   @State durationMs: number = 0;
   @State playbackState: string = 'idle';
   @State speed: number = 1;
-  @State statusText: string = '正在加载听书信息...';
+  @State statusText: string = '正在加载听书信息…';
+  // 打开页面后读书籍、目录这段时间也算加载中，播放面板据此显示加载状态。
+  @State openingBook: boolean = true;
   @State showChapterList: boolean = false;
   @StorageLink('globalTtsAudioCatalogReverseOrder') @Watch('onChapterOrderChanged')
   chapterReverseOrder: boolean = false;
   private voiceDialogSession: SystemDialogSession = new SystemDialogSession();
   @State @Watch('onSystemDialogFlagChanged') showVoiceDialog: boolean = false;
   @State voiceCodeInput: string = '';
+  @State audioVoiceCode: string = '';
+  @State audioVoiceTitles: string[] = ['默认'];
+  @State audioVoiceIndex: number = 0;
   @State sleepMinutes: number = 0;
   @State sleepRemainingSeconds: number = 0;
   @State audioOptionsPanel: number = 0;
   @State viewportHeight: number = 720;
   private bookUrl: string = '';
-  private source: BookSource | null = null;
-  private voiceListMode: boolean = false;
+  @State source: BookSource | null = null;
   private openedWithShelfAnimation: boolean = false;
   private openedFromShortcut: boolean = false;
   private shortcutReplacedPreviousPage: boolean = false;
@@ -141,6 +148,11 @@ struct AudioBookPage {
     this.openedFromShortcut = params?.['shortcutEntry'] === 'true';
     this.shortcutReplacedPreviousPage = params?.['shortcutReplace'] === 'true';
     this.playback.attach(this.playbackListener);
+    if (this.bookUrl && this.playback.bookUrl === this.bookUrl && this.playback.mediaUrl) {
+      // 从书架胶囊回到正在播放的这本书：沿用播放器状态，不显示加载中。
+      this.playbackState = this.playback.state;
+      this.openingBook = false;
+    }
     this.loadBook();
   }
 
@@ -149,6 +161,7 @@ struct AudioBookPage {
     this.syncBars();
     this.playback.attach(this.playbackListener);
     this.restoreSleepTimerUi();
+    this.refreshVoiceSource();
   }
 
   onPageHide(): void {
@@ -194,9 +207,23 @@ struct AudioBookPage {
         topInset: this.statusBarHeight,
         bottomInset: this.navBarHeight,
         viewportHeight: this.viewportHeight,
+        hostAudioPage: true,
+        hostBookName: this.book?.name || '',
+        hostChapterTitle: this.currentChapter()?.title || '',
+        hostIntro: this.book ? this.displayIntro() : '',
+        hostCover: this.book ? this.panelCover() : '',
+        hostPlaying: this.isPlaying(),
+        hostStatusText: this.panelStatusText(),
+        hostBusy: this.isPanelBusy(),
+        hostVoiceTitles: this.audioVoiceTitles,
+        hostVoiceIndex: this.audioVoiceIndex,
+        onSelectHostVoice: (index: number) => this.selectVoice(index),
         onClose: () => this.closePage(),
         onOpenVoice: () => this.openVoiceDialog(),
-        onOpenCatalog: () => this.openChapterList()
+        onOpenCatalog: () => this.openChapterList(),
+        onTogglePlayback: () => {
+          this.togglePlayback();
+        }
       })
 
       if (this.showChapterList) {
@@ -381,10 +408,7 @@ struct AudioBookPage {
 
   openVoiceCodeDialog(): void {
     this.showVoiceDialog = true;
-    // 先定好用哪一个弹窗内容，构建函数里不再做分支。
-    const content: CustomBuilder = this.voiceListMode ? (): void => {
-      this.voiceListDialogContent();
-    } : (): void => {
+    const content: CustomBuilder = (): void => {
       this.voiceCodeDialogContent();
     };
     this.voiceDialogSession.open(this.getUIContext(), content, {
@@ -411,55 +435,6 @@ struct AudioBookPage {
         .onClick(() => this.openChapterList())
     }
     .width('100%')
-  }
-
-  /** 书源声明了音色列表时用列表选择，不需要用户记数字代码。 */
-  @Builder
-  voiceListDialogContent() {
-    Column({ space: AppSpacing.LG }) {
-      Text('听书音色')
-        .fontSize(AppFontSize.SUBTITLE)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(this.primaryTextColor())
-      Text('选择后从本章开头重新加载')
-        .fontSize(AppFontSize.BODY)
-        .fontColor(this.subTextColor())
-      List() {
-        ForEach(this.voiceChoices(), (voice: NativeVoiceOption) => {
-          ListItem() {
-            Row() {
-              Text(voice.name)
-                .fontSize(AppFontSize.BODY_LARGE)
-                .fontColor(voice.id === this.voiceCodeInput ? this.accentColor() : this.primaryTextColor())
-                .layoutWeight(1)
-              if (voice.id === this.voiceCodeInput) {
-                Text('当前')
-                  .fontSize(AppFontSize.CAPTION)
-                  .fontColor(this.accentColor())
-              }
-            }
-            .width('100%')
-            .height(46)
-            .padding({ left: AppSpacing.LG, right: AppSpacing.LG })
-            .onClick(() => {
-              this.voiceCodeInput = voice.id;
-              this.saveVoiceCode();
-            })
-          }
-        }, (voice: NativeVoiceOption): string => voice.id || '__default__')
-      }
-      .width('100%')
-      .height(Math.min(368, this.voiceChoices().length * 46))
-      .scrollBar(BarState.Auto)
-      Button('取消')
-        .width('100%')
-        .backgroundColor(this.inputColor())
-        .fontColor(this.primaryTextColor())
-        .onClick(() => {
-          this.showVoiceDialog = false;
-        })
-    }
-    .padding(AppSpacing.XXL)
   }
 
   @Builder
@@ -707,6 +682,8 @@ struct AudioBookPage {
   async loadBook(): Promise<void> {
     const serial = ++this.loadingSerial;
     if (!this.bookUrl) {
+      this.openingBook = false;
+      this.playbackState = 'error';
       this.statusText = '书籍地址为空';
       return;
     }
@@ -715,7 +692,10 @@ struct AudioBookPage {
       await db.initWithContext(getContext(this));
       let storedBook = await db.getBook(this.bookUrl);
       if (!storedBook || serial !== this.loadingSerial) {
-        if (!storedBook) this.statusText = '书籍不存在，请重新从搜索结果打开';
+        if (!storedBook) {
+          this.playbackState = 'error';
+          this.statusText = '书籍不存在，请重新从搜索结果打开';
+        }
         return;
       }
       this.source = storedBook.origin ? await db.getBookSource(storedBook.origin) : null;
@@ -729,6 +709,8 @@ struct AudioBookPage {
       BookTypeSupport.applyBookType(storedBook, this.source);
       storedBook.type = storedBook.type || BookTypeSupport.AUDIO;
       this.book = storedBook;
+      this.audioVoiceCode = storedBook.getVariable('custom') || '';
+      this.refreshVoiceOptions();
       this.speed = this.savedSpeed(storedBook);
       const engine = ReadBookEngine.get();
       const requestedBookUrl = storedBook.bookUrl;
@@ -744,6 +726,7 @@ struct AudioBookPage {
       this.chapterIndex = this.clampChapterIndex(this.book.durChapterIndex);
       await db.updateBook(this.book, false);
       if (this.chapters.length === 0) {
+        this.playbackState = 'error';
         this.statusText = '未获取到听书目录';
         return;
       }
@@ -761,8 +744,11 @@ struct AudioBookPage {
       }
       this.applyPendingPanelAction();
     } catch (error) {
+      this.playbackState = 'error';
       this.statusText = `打开听书失败：${this.errorMessage(error)}`;
       console.error('打开听书失败:', error);
+    } finally {
+      this.openingBook = false;
     }
   }
 
@@ -771,6 +757,8 @@ struct AudioBookPage {
     if (!book) return;
     const value = (this.voiceCodeInput || '').trim();
     book.putVariable('custom', value);
+    this.audioVoiceCode = value;
+    this.refreshVoiceOptions();
     if (book.intro && value) {
       book.intro = book.intro.replace(/(音色配置\s*[：:]\s*)[^\s\n]+/, `$1${value}`);
     }
@@ -804,8 +792,9 @@ struct AudioBookPage {
       this.durationMs = 0;
     }
     this.playbackRetryCount = forceRefresh ? this.playbackRetryCount : 0;
-    this.statusText = forceRefresh ? '正在刷新音频地址...' : '正在获取音频地址...';
+    this.statusText = forceRefresh ? '正在刷新音频地址…' : '正在获取音频地址…';
     this.playbackState = 'loading';
+    this.syncFloatingStatus();
     try {
       // 上一章若还在缓冲，立即作废，免得它在新章节地址就绪前先响起来。
       await this.playback.abortPendingLoad();
@@ -951,6 +940,7 @@ struct AudioBookPage {
   onPlaybackStateChanged(state: string): void {
     this.playbackState = state;
     this.statusText = this.stateLabel(state);
+    this.syncFloatingStatus();
     if (state === 'playing') {
       this.publishFloatingSession();
       this.startAudioBackground().catch((error: Error) => {
@@ -1013,6 +1003,7 @@ struct AudioBookPage {
     }
     this.playbackState = 'error';
     this.statusText = `播放失败：${message}`;
+    this.syncFloatingStatus();
     HdsFeedback.showToast(this.statusText);
   }
 
@@ -1108,17 +1099,24 @@ struct AudioBookPage {
 
   async openVoiceDialog(): Promise<void> {
     this.voiceCodeInput = this.book?.getVariable('custom') || '';
+    await this.refreshVoiceSource();
+    this.openVoiceCodeDialog();
+  }
+
+  async refreshVoiceSource(): Promise<void> {
     // 听书会话可能在书源更新之前就已经打开（后台一直在播），这里重新读一次书源，
     // 否则拿到的还是旧定义，看不到新声明的音色列表。
     try {
       const origin = this.book?.origin || '';
       const latest = origin ? await AppDatabase.getInstance().getBookSource(origin) : null;
-      if (latest) this.source = latest;
+      if (latest && this.book?.origin === origin) {
+        this.source = latest;
+        this.refreshVoiceOptions();
+        this.publishVoiceChoices();
+      }
     } catch (e) {
       console.warn('刷新书源失败:', e);
     }
-    this.voiceListMode = this.sourceVoices().length > 0;
-    this.openVoiceCodeDialog();
   }
 
   sourceVoices(): NativeVoiceOption[] {
@@ -1128,7 +1126,45 @@ struct AudioBookPage {
   /** 音色列表，最前面加一项「默认」（不指定音色）。 */
   voiceChoices(): NativeVoiceOption[] {
     const choices: NativeVoiceOption[] = [{ id: '', name: '默认' }];
-    return choices.concat(this.sourceVoices());
+    const voices = choices.concat(this.sourceVoices());
+    if (this.audioVoiceCode && !voices.some((voice: NativeVoiceOption): boolean => voice.id === this.audioVoiceCode)) {
+      voices.push({ id: this.audioVoiceCode, name: this.audioVoiceCode });
+    }
+    return voices;
+  }
+
+  currentVoiceIndex(): number {
+    return Math.max(0, this.voiceChoices().findIndex((voice: NativeVoiceOption): boolean =>
+      voice.id === this.audioVoiceCode));
+  }
+
+  selectVoice(index: number): void {
+    const voice = this.voiceChoices()[index];
+    if (!voice || voice.id === this.audioVoiceCode) return;
+    this.voiceCodeInput = voice.id;
+    this.saveVoiceCode().catch((error: Error) => {
+      console.warn('切换听书音色失败:', error);
+      HdsFeedback.showToast('切换音色失败，请重试');
+    });
+  }
+
+  publishVoiceChoices(): void {
+    ReaderTtsFloatingSession.configureTtsVoices(
+      this.floatingSessionOwnerId,
+      this.voiceChoices().map((voice: NativeVoiceOption): string => voice.name),
+      this.currentVoiceIndex(),
+      (index: number) => this.selectVoice(index)
+    );
+  }
+
+  refreshVoiceOptions(): void {
+    const titles = this.voiceChoices().map((voice: NativeVoiceOption): string => voice.name);
+    // 与 TTS 一样，仅在音色变化时更新选项，播放进度刷新不向 Select 反复传入新数组。
+    if (titles.length !== this.audioVoiceTitles.length ||
+      titles.some((title: string, index: number): boolean => title !== this.audioVoiceTitles[index])) {
+      this.audioVoiceTitles = titles;
+    }
+    this.audioVoiceIndex = this.currentVoiceIndex();
   }
 
   currentVoiceCode(): string {
@@ -1181,6 +1217,7 @@ struct AudioBookPage {
         this.scheduleProgressSave();
       }
     );
+    this.publishVoiceChoices();
     ReaderTtsFloatingSession.configureCatalog(
       this.floatingSessionOwnerId,
       this.chapters.map((chapter: BookChapter) => chapter.title),
@@ -1212,6 +1249,23 @@ struct AudioBookPage {
     ReaderTtsFloatingSession.updateAudioProgress(
       this.floatingSessionOwnerId, this.latestPositionMs, this.latestDurationMs);
     ReaderTtsFloatingSession.updateCatalogIndex(this.floatingSessionOwnerId, this.chapterIndex);
+    this.syncFloatingStatus();
+  }
+
+  /** 读书籍目录、取音频地址、播放器缓冲都算加载中。 */
+  isPanelBusy(): boolean {
+    return this.openingBook || this.playbackState === 'loading' || this.playbackState === 'initialized' ||
+      this.playbackState === 'prepared';
+  }
+
+  /** 播放面板上的提示：加载中显示进行到哪一步，失败时显示原因，正常播放或暂停时不显示。 */
+  panelStatusText(): string {
+    return this.isPanelBusy() || this.playbackState === 'error' ? this.statusText : '';
+  }
+
+  /** 共享会话已发布时（如切章缓冲），书架上的播放面板和胶囊也显示同样的加载状态。 */
+  syncFloatingStatus(): void {
+    ReaderTtsFloatingSession.updateStatus(this.floatingSessionOwnerId, this.panelStatusText(), this.isPanelBusy());
   }
 
   openFloatingPanel(action: string): void {
@@ -1347,6 +1401,11 @@ struct AudioBookPage {
   }
 
   invalidAudioAddressMessage(raw: string): string {
+    // 取正文失败时内容为空，原因记在书源阶段错误里（例如接口返回的 code/message、书源给的说明）。
+    if (!(raw || '').trim()) {
+      const stageError = (AppStorage.get<string>('bookSourceStageLastError') || '').trim();
+      if (stageError) return stageError;
+    }
     try {
       const root = JSON.parse(raw || '{}') as Record<string, Object>;
       let data: Record<string, Object> = root;
@@ -1447,7 +1506,8 @@ struct AudioBookPage {
   }
 
   displayCover(): string {
-    return this.book ? CoverUrlNormalizer.normalize(this.book.getDisplayCover()) : '';
+    const raw = this.book ? CoverUrlNormalizer.normalize(this.book.getDisplayCover()) : '';
+    return this.sourceCoverRevision >= 0 ? BookCoverCache.displayCover(getContext(this), raw) : raw;
   }
 
   onThemeBookCoverChanged(): void {
@@ -1492,7 +1552,7 @@ struct AudioBookPage {
   stateLabel(state: string): string {
     if (state === 'playing') return '正在播放';
     if (state === 'paused' || state === 'stopped') return '已暂停';
-    if (state === 'loading' || state === 'initialized' || state === 'prepared') return '正在加载音频...';
+    if (state === 'loading' || state === 'initialized' || state === 'prepared') return '正在缓冲音频…';
     if (state === 'completed') return '本章播放完成';
     if (state === 'error') return '播放失败，可点击播放重试';
     return '准备播放';

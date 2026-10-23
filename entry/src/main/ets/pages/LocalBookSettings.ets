@@ -7,10 +7,14 @@ import { HdsFeedback } from '../utils/HdsFeedback';
 import { AppFontSize } from '../theme/AppFontSize';
 import { AppSpacing } from '../theme/AppSpacing';
 import { PageScaffold } from '../components/common/PageScaffold';
+import { CollapsingHeader } from '../utils/CollapsingHeader';
+import { CloudAutoSync } from '../account/CloudAutoSync';
 
 @Entry
 @Component
 struct LocalBookSettingsPage {
+  @State headerCollapse: number = 0;
+  private headerScroller: Scroller = new Scroller();
   @StorageLink('appDarkMode') appDarkMode: boolean = false;
   @StorageLink('themeRevision') themeRevision: number = 0;
   @StorageLink('appLightButtonColor') appLightButtonColor: string = '#007DFF';
@@ -32,7 +36,7 @@ struct LocalBookSettingsPage {
 
   build() {
     Stack() {
-      PageScaffold({ title: '添加书籍', scrollable: false, content: () => {
+      PageScaffold({ title: '添加书籍', scrollable: false, externalCollapse: this.headerCollapse, content: () => {
         this.pageContent()
       } })
     }
@@ -67,7 +71,7 @@ struct LocalBookSettingsPage {
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)
       } else {
-        List({ space: AppSpacing.MD }) {
+        List({ scroller: this.headerScroller, space: AppSpacing.MD }) {
           ForEach(this.books, (book: Book) => {
             ListItem() {
               this.bookItem(book)
@@ -78,6 +82,18 @@ struct LocalBookSettingsPage {
         .width('100%')
         .layoutWeight(1)
         .clip(true)
+        .onDidScroll((yOffset: number) => {
+          this.headerCollapse = CollapsingHeader.next(this.headerCollapse, yOffset,
+            this.headerScroller.currentOffset().yOffset);
+        })
+        .onScrollStop(() => {
+          const target = CollapsingHeader.settle(this.headerCollapse, this.headerScroller.currentOffset().yOffset);
+          if (target !== this.headerCollapse) {
+            animateTo({ duration: 200, curve: Curve.FastOutSlowIn }, () => {
+              this.headerCollapse = target;
+            });
+          }
+        })
       }
 
       Text('选择 TXT 或 EPUB 文件导入书架')
@@ -156,6 +172,7 @@ struct LocalBookSettingsPage {
       this.statusText = `正在导入${selected.length}本书...`;
       const result = await LocalBookService.importSelectedFiles(getContext(this), selected);
       this.finishImport(result);
+      CloudAutoSync.schedule(getContext(this));
       await this.loadBooks();
     } catch (e) {
       console.error('添加本地书籍失败:', e);

@@ -17,6 +17,7 @@ export class ThemeIds {
   static readonly AZURE_MECHA: string = 'azure-mecha';
   static readonly STARWISH_MAGIC: string = 'starwish-magic';
   static readonly LETTERPRESS_PAGE: string = 'letterpress-page';
+  static readonly OBSIDIAN_ARCHIVE: string = 'obsidian-archive';
 }
 
 export class ThemeComponentSourceIds {
@@ -65,6 +66,7 @@ export class ThemeBubbleStyles {
   static readonly MECHA_COMM: string = 'mecha-comm';
   static readonly STARWISH_RIBBON: string = 'starwish-ribbon';
   static readonly PENCIL_MARK: string = 'pencil-mark';
+  static readonly GILDED_ORBIT: string = 'gilded-orbit';
 }
 
 export class ThemeColorTokens {

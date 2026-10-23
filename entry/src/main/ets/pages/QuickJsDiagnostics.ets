@@ -56,6 +56,16 @@ struct QuickJsDiagnosticsPage {
         .onClick((): void => {
           router.pushUrl({ url: 'pages/QuickJsRegression' });
         })
+      Button('后台脚本线程验证')
+        .type(ButtonType.Capsule)
+        .fontSize(AppFontSize.BODY)
+        .fontColor(this.primaryTextColor())
+        .backgroundColor(this.cardColor())
+        .width('calc(100% - 24vp)')
+        .height(46)
+        .onClick((): void => {
+          router.pushUrl({ url: 'pages/ScriptThreadProbe' });
+        })
       Button('清除迁移统计')
         .type(ButtonType.Capsule)
         .fontSize(AppFontSize.BODY)

@@ -17,6 +17,7 @@ const {
   calculateNextSyncQuota,
   ensureSyncQuota,
   normalizeOperation,
+  MAX_SUPER_BOOK_SOURCE_PAYLOAD_BYTES,
   SyncApiError
 } = await import('./sync.js');
 
@@ -91,6 +92,25 @@ test('book source payloads cannot exceed 512KB', () => {
     error instanceof SyncApiError &&
     error.statusCode === 413 &&
     error.code === 'SYNC_PAYLOAD_TOO_LARGE');
+});
+
+test('the super-member book source ceiling is explicit and bounded', () => {
+  const large = { opId: OP_ID, entityType: 'book_source', entityId: 'source_test', operation: 'upsert' as const,
+    baseRevision: 0, payload: { rules: 'x'.repeat(900 * 1024) } };
+  assert.equal(normalizeOperation(large, MAX_SUPER_BOOK_SOURCE_PAYLOAD_BYTES).payloadBytes > 512 * 1024, true);
+  assert.throws(() => normalizeOperation({ ...large, payload: { rules: 'x'.repeat(961 * 1024) } },
+    MAX_SUPER_BOOK_SOURCE_PAYLOAD_BYTES), (error: unknown) =>
+    error instanceof SyncApiError && error.code === 'SYNC_PAYLOAD_TOO_LARGE');
+});
+
+test('deferring the account-specific source limit preserves validation of other sync entities', () => {
+  const source = { opId: OP_ID, entityType: 'book_source', entityId: 'source_test', operation: 'upsert' as const,
+    baseRevision: 0, payload: { rules: 'x'.repeat(1000 * 1024) } };
+  assert.equal(normalizeOperation(source, null).payloadBytes, Buffer.byteLength(JSON.stringify(source.payload)));
+  assert.throws(() => normalizeOperation({ ...source, entityType: 'reader_settings' }, null),
+    { code: 'SYNC_PAYLOAD_TOO_LARGE', message: '单项同步数据不能超过 64KB' });
+  assert.throws(() => normalizeOperation({ ...source, opId: 'invalid' }, null),
+    { code: 'INVALID_OPERATION_ID' });
 });
 
 test('sync quotas reject unbounded daily writes and storage growth', () => {

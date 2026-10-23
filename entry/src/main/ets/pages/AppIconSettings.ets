@@ -16,7 +16,7 @@ struct AppIconSettingsPage {
   @StorageLink('themeRevision') themeRevision: number = 0;
   @StorageLink('appIconId') appIconId: string = AppIconSettingsStore.DEFAULT_ICON_ID;
   @State configuredIconIds: string[] = [];
-  @State loadedDynamicIcons: boolean = false;
+  @State loadedAlternateIcons: boolean = false;
   @State applyingIconId: string = '';
 
   aboutToAppear(): void {
@@ -26,11 +26,11 @@ struct AppIconSettingsPage {
     }).catch(() => {
       AppStorage.setOrCreate(AppIconSettingsStore.KEY_ICON_ID, AppIconSettingsStore.DEFAULT_ICON_ID);
     });
-    this.refreshDynamicIcons();
   }
 
   onPageShow(): void {
     this.syncBars();
+    this.refreshAlternateIcons();
   }
 
   build() {
@@ -89,24 +89,31 @@ struct AppIconSettingsPage {
     syncSystemBars(getContext(this), this.appDarkMode, this.pageColor());
   }
 
-  refreshDynamicIcons(): void {
-    AppIconManager.queryConfiguredIconIds().then((ids: string[]) => {
+  refreshAlternateIcons(): void {
+    if (!AppIconManager.isSupported()) {
+      return;
+    }
+    AppIconManager.syncCurrentIcon(getContext(this)).then((ids: string[]) => {
       this.configuredIconIds = ids;
-      this.loadedDynamicIcons = true;
+      this.loadedAlternateIcons = true;
     }).catch(() => {
       this.configuredIconIds = [];
-      this.loadedDynamicIcons = false;
+      this.loadedAlternateIcons = false;
     });
   }
 
   isConfigured(option: AppIconOption): boolean {
-    if (!option.dynamicIconId) {
+    if (!option.alternateIconName) {
       return true;
     }
-    return this.configuredIconIds.includes(option.dynamicIconId);
+    return this.configuredIconIds.includes(option.alternateIconName);
   }
 
   async selectIcon(option: AppIconOption): Promise<void> {
+    if (!AppIconManager.isSupported()) {
+      this.showToastSafely(AppIconManager.UNSUPPORTED_MESSAGE);
+      return;
+    }
     if (this.applyingIconId) {
       return;
     }
@@ -116,17 +123,13 @@ struct AppIconSettingsPage {
     }
     this.applyingIconId = option.id;
     try {
-      await AppIconManager.applyIcon(option);
-      const settings = new AppIconSettings();
-      settings.iconId = option.id;
-      AppIconSettingsStore.applyToStorage(settings);
-      await AppIconSettingsStore.save(getContext(this), settings);
+      await AppIconManager.applyIcon(getContext(this), option);
       this.showToastSafely(`已切换为${option.title}`);
     } catch (e) {
       hilog.warn(0x0000, 'appIcon', 'Switch app icon failed option=%{public}s err=%{public}s',
         option.id, JSON.stringify(e));
       this.showToastSafely(this.switchErrorMessage(e));
-      this.refreshDynamicIcons();
+      this.refreshAlternateIcons();
     } finally {
       this.applyingIconId = '';
     }
@@ -189,7 +192,7 @@ struct AppIconSettingsPage {
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .margin({ top: AppSpacing.XXS })
 
-      if (this.loadedDynamicIcons && !this.isConfigured(option)) {
+      if (this.loadedAlternateIcons && !this.isConfigured(option)) {
         Text('未生效')
           .fontSize(AppFontSize.MICRO)
           .fontColor('#B46A00')
@@ -221,9 +224,9 @@ struct AppIconSettingsPage {
   switchErrorMessage(error: Object): string {
     const code = this.errorCode(error);
     if (!code) {
-      return '桌面图标切换失败，请检查图标管理服务、审核状态和图标 ID';
+      return '桌面图标切换失败，请稍后重试';
     }
-    return `桌面图标切换失败(${code})，请检查图标管理服务、审核状态和图标 ID`;
+    return `桌面图标切换失败(${code})，请稍后重试`;
   }
 
   errorCode(error: Object): string {

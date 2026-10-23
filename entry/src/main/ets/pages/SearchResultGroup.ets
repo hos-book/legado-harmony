@@ -16,6 +16,7 @@ struct SearchResultGroupPage {
   @StorageLink('appDarkMode') appDarkMode: boolean = false;
   @StorageLink('themeRevision') themeRevision: number = 0;
   @StorageLink('searchExploreShowResultCover') showResultCover: boolean = true;
+  @StorageLink('searchExploreShowResultCoverBackground') showResultCoverBackground: boolean = true;
   @StorageLink('searchExploreUseBookshelfCoverGallery') useBookshelfCoverGallery: boolean = false;
   @StorageLink('searchExploreShowResultTags') showResultTags: boolean = true;
   @StorageLink('searchExplorePromptAddToShelfOnBack') promptAddToShelfOnBack: boolean = true;
@@ -52,6 +53,7 @@ struct SearchResultGroupPage {
           shelfBookKeys: this.shelfBookKeys,
           busyBookKeys: this.busyBookKeys,
           showResultCover: this.showResultCover,
+          showResultCoverBackground: this.showResultCoverBackground,
           useBookshelfCoverGallery: this.useBookshelfCoverGallery,
           showResultTags: this.showResultTags,
           pageColor: this.pageColor(),
@@ -112,8 +114,6 @@ struct SearchResultGroupPage {
       .height(56 + this.statusBarHeight)
       .padding({ left: AppSpacing.XS, right: AppSpacing.XL, top: this.statusBarHeight })
       .alignItems(VerticalAlign.Center)
-      .backgroundColor(ThemeRuntime.topBarColor(this.appDarkMode))
-      .backdropBlur(ThemeRuntime.topBarBlur())
       .zIndex(2)
     }
     .width('100%')

@@ -7,10 +7,13 @@ import { AdaptiveSwitch } from '../components/AdaptiveSwitch';
 import { AppFontSize } from '../theme/AppFontSize';
 import { AppSpacing } from '../theme/AppSpacing';
 import { PageScaffold } from '../components/common/PageScaffold';
+import { CollapsingHeader } from '../utils/CollapsingHeader';
 
 @Entry
 @Component
 struct GlassSettingsPage {
+  @State headerCollapse: number = 0;
+  private headerScroller: Scroller = new Scroller();
   @StorageLink('appDarkMode') appDarkMode: boolean = false;
   @StorageLink('themeRevision') themeRevision: number = 0;
   @StorageProp('navBarHeight') navBarHeight: number = 0;
@@ -36,7 +39,7 @@ struct GlassSettingsPage {
 
   build() {
     Stack() {
-      PageScaffold({ title: '磨砂玻璃', scrollable: false, content: () => {
+      PageScaffold({ title: '磨砂玻璃', scrollable: false, externalCollapse: this.headerCollapse, content: () => {
         this.pageContent()
       } })
     }
@@ -49,7 +52,7 @@ struct GlassSettingsPage {
   @Builder
   pageContent() {
     this.floatingPreview()
-    Scroll() {
+    Scroll(this.headerScroller) {
       Column({ space: AppSpacing.LG }) {
         this.glassEnabledSwitch()
         Column({ space: AppSpacing.LG }) {
@@ -83,6 +86,18 @@ struct GlassSettingsPage {
     .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
     .layoutWeight(1)
     .align(Alignment.TopStart)
+    .onDidScroll((_xOffset: number, yOffset: number) => {
+      this.headerCollapse = CollapsingHeader.next(this.headerCollapse, yOffset,
+        this.headerScroller.currentOffset().yOffset);
+    })
+    .onScrollStop(() => {
+      const target = CollapsingHeader.settle(this.headerCollapse, this.headerScroller.currentOffset().yOffset);
+      if (target !== this.headerCollapse) {
+        animateTo({ duration: 200, curve: Curve.FastOutSlowIn }, () => {
+          this.headerCollapse = target;
+        });
+      }
+    })
   }
 
   async loadSettings(): Promise<void> {

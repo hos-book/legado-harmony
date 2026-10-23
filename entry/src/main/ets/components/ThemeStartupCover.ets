@@ -59,14 +59,14 @@ export struct ThemeStartupCover {
           .width('100%')
           .height('100%')
           .objectFit(ImageFit.Cover)
-          .opacity(this.contentOpacity * (this.darkMode ? 0.62 : 1))
+          .opacity(this.contentOpacity * (this.isObsidianArtwork() ? 1 : (this.darkMode ? 0.62 : 1)))
           .scale({ x: this.artScale, y: this.artScale })
           .draggable(false)
 
         Row()
           .width('100%')
           .height('100%')
-          .backgroundColor(this.darkMode ? '#42000000' : '#0AFFFFFF')
+          .backgroundColor(this.isObsidianArtwork() ? '#00000000' : (this.darkMode ? '#42000000' : '#0AFFFFFF'))
           .opacity(this.contentOpacity)
 
         // Keep the fade attached to the current viewport bottom. A percentage
@@ -101,7 +101,7 @@ export struct ThemeStartupCover {
                   .fontSize(this.compact ? 11 : 21)
                   .fontWeight(FontWeight.Medium)
                   .fontFamily(this.theme().typography.appFontFamily)
-                  .fontColor('#FFFFFF')
+                  .fontColor(this.isObsidianArtwork() ? '#E4CCA0' : '#FFFFFF')
                   .letterSpacing(this.compact ? 1.2 : 4)
                   .textAlign(TextAlign.Center)
                   .opacity(this.contentOpacity * 0.94)
@@ -110,7 +110,7 @@ export struct ThemeStartupCover {
                 Text(this.coverSubtitle())
                   .fontSize(this.compact ? 7 : 12)
                   .fontFamily(this.theme().typography.appFontFamily)
-                  .fontColor('#D9FFFFFF')
+                  .fontColor(this.isObsidianArtwork() ? '#C8BAA1' : '#D9FFFFFF')
                   .letterSpacing(this.compact ? 0.3 : 1.2)
                   .textAlign(TextAlign.Center)
                   .margin({ top: this.compact ? 2 : 8 })
@@ -170,6 +170,10 @@ export struct ThemeStartupCover {
 
   isDefaultTheme(): boolean {
     return this.resolvedThemeId() === ThemeIds.PLAIN_DEFAULT;
+  }
+
+  isObsidianArtwork(): boolean {
+    return !this.customImagePath && this.resolvedThemeId() === ThemeIds.OBSIDIAN_ARCHIVE;
   }
 
   usesBusinessCover(): boolean {

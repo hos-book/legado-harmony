@@ -10,6 +10,17 @@
 
 `Resource`、背景图片、封面和图标由 `ThemeAssetRegistry` 按 ID 解析，不写入 Preferences。
 
+桌面图标由 `AppIconManager` 单独管理，使用 API 26 的 `bundleManager.getAlternateIcons()` /
+`setAlternateIcon()`，资源位于 `AppScope/resources/base/media`，并在 `app.json5` 的
+`alternateIcons` 中声明。新增主题时必须同时添加同名图标选项；现有图标 ID 保持稳定。
+应用主题弹窗的“应用主题图标”默认选中（自定义方案使用“自定义主题”图标），关闭则保留当前桌面图标。
+低于 API 26 的设备尝试切换时提示“该能力需要鸿蒙7及以上”，其余主题内容仍正常应用。
+主题详情显示配套图标预览，当前使用卡片显示系统实际启用的桌面图标。
+新增的 12 套主题桌面图标（含自定义主题）已使用即梦重绘为 1024×1024 PNG，直接注册到 `alternateIcons`，预览和桌面共用同一资源。
+星愿魔法来自 `dreamina` CLI，其余 11 套来自画布 CLI；模型、提示词、任务与资源标识、裁切和校验摘要记录在 `docs/theme-icon-generation.json`。
+`node scripts/generate-theme-desktop-icons.mjs` 仅生成缺少 PNG 的矢量回退资源；脚本会跳过已有 PNG 的主题，避免覆盖已重绘素材。
+运行 `node scripts/app-icon-check.mjs` 检查图标注册、主题覆盖、版本门控和切换状态。
+
 ## 目录与职责
 
 ```text
@@ -164,11 +175,11 @@ BuiltinThemeRegistry.register(theme);
 | 阅读背景装饰 | `reader_decor_<id>_light.svg` / `_dark.svg` | `viewBox="0 0 480 480"`，透明底 | `readerBackgroundDecoration()` |
 | 阅读背景右下角装饰 | `reader_decor_<id>_trailing_light.svg` / `_dark.svg` | `viewBox="0 0 480 480"`，透明底，图案贴右下角 | `readerBackgroundTrailingDecoration()` |
 | 朗读/有声书面板背景 | `tts_panel_<id>_light.svg` / `_dark.svg` | `viewBox="0 0 720 520"`，透明底 | `TtsPanelThemeStyles.resolve()` |
-| 主题封面 | `theme_cover_<id>_NN` | 约 300 × 440，JPG/PNG/SVG；矢量封面由 `scripts/generate-theme-covers.py` 生成 | `themeBookCovers()` |
+| 主题封面 | `theme_cover_<id>_NN` | 450 × 660 JPG；内置主题封面均为即梦位图 | `themeBookCovers()` |
 | 书架边框 | `theme_frame_<id>.svg` | 中心透明，只画外框和角花 | `themeShelfFrame()` |
 | 分组文件夹插画 | `theme_folder_art_<id>.jpg` | 450 × 660 | `themeShelfFolder()` |
 | 主题标识 | `theme_logo_<id>.svg` | `viewBox="0 0 64 64"` | `themeLogo()` |
-| 启动封面 | `theme_startup_<id>` | 竖屏插画 | `startupBackground()` |
+| 启动封面 | `theme_startup_<id>` | 841 × 1870 JPG 竖屏插画；底部约 1/5 叠加文案，不放主体 | `startupBackground()` |
 | 导航图标包 | `ic_theme_<pack>_<tab>.svg` | `viewBox="0 0 24 24"`，单色纯黑填充 | `navigationIcon()` |
 | 正则气泡边框 / 端饰 | `regex_frame_<style>.svg` / `regex_cap_<style>.svg` | — | `regexBubbleFrame()` / `regexBubbleCap()` |
 
@@ -184,8 +195,6 @@ BuiltinThemeRegistry.register(theme);
 
 可选的调整点：
 
-- `readerBackgroundBorderWidth()`：需要边框的主题返回边框宽度。
-- `readerBackgroundBorderColor()`：返回边框颜色，默认返回空字符串。
 - `readerBackgroundTrailingRotation()`：有独立右下角图案时返回 0；只有未登记右下角图案的资源才回退为左上角装饰旋转 180°。
 
 装饰锚定在左上和右下的正方形区域，使用 `ImageFit.Contain`。不要把内置主题改回 `Cover` 全屏壁纸，`theme-framework-check` 会检查这一点。旧版 `reader_bg_*` 仅作为兼容资源保留。
@@ -262,6 +271,12 @@ BuiltinThemeRegistry.register(theme);
 - 匹配循环必须处理零长度匹配，避免死循环。
 
 ## 验证
+
+### 终身超级会员领取型主题
+
+`obsidian-archive`（曜金藏书）是手动领取型主题，不能套用普通主题的点数购买、会员主题库自动授权或试用逻辑。它使用 `gilded-orbit` 气泡、配套浅深阅读角饰及独立即梦位图。授权同时要求终身超级会员身份和一年内的有效领取记录；到期后才能再次领取。
+
+修改相关入口时，保持 `ThemeAccessPolicy`、自定义部件选择、`ThemeTrialManager`、`AppIconManager` 和 `MembershipThemeGuard` 的一致性。详细规则、资源记录和数据库迁移顺序见 [专属主题说明](membership/super-exclusive-theme.md)。
 
 运行主题回归脚本：
 

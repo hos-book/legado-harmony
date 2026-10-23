@@ -166,14 +166,10 @@ export class ThemeRuntime {
       ThemeRuntime.KEY_LIGHT_CARD_COLOR, fallback);
   }
 
+  /** 顶栏与页面同色且不透明，不再用模糊和半透明，也不做成一条单独的白条。 */
   static topBarColor(darkMode: boolean): string {
-    const fallback = ThemeRuntime.fallbackVariant(darkMode).colors.cardColor;
-    const color = ThemeRuntime.normalizeColor(ThemeRuntime.cardColor(darkMode), fallback);
-    return ThemeRuntime.dropdownPanelColor(darkMode, color, 'overlay');
-  }
-
-  static topBarBlur(): number {
-    return ThemeRuntime.glassBlur('overlay', 18);
+    const fallback = ThemeRuntime.fallbackVariant(darkMode).colors.pageColor;
+    return ThemeRuntime.normalizeColor(ThemeRuntime.pageColor(darkMode), fallback);
   }
 
   static inputColor(darkMode: boolean): string {
@@ -398,7 +394,17 @@ export class ThemeRuntime {
   }
 
   /** 强调色、按钮色、危险色等实色背景上的文字。 */
-  static onAccentColor(): string {
+  static onAccentColor(backgroundColor: string = ''): string {
+    // Detail previews may use another theme's champagne accent before that theme is applied.
+    // Preserve the legacy default; callers painting a light fill can supply its actual color.
+    if (/^#[0-9a-fA-F]{6}$/.test(backgroundColor)) {
+      const channels: number[] = [1, 3, 5].map((start: number): number => {
+        const value = Number.parseInt(backgroundColor.slice(start, start + 2), 16) / 255;
+        return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+      });
+      const luminance = channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+      return luminance > 0.179 ? '#000000' : '#FFFFFF';
+    }
     return '#FFFFFF';
   }
 
@@ -410,6 +416,16 @@ export class ThemeRuntime {
   /** 列表行、卡片的细分隔线和描边。 */
   static hairlineColor(darkMode: boolean): string {
     return darkMode ? '#24FFFFFF' : '#14000000';
+  }
+
+  /** 首页顶部白色胶囊、圆形按钮等悬浮控件的浅投影；深色模式靠底色区分，不加投影。 */
+  static floatingControlShadow(darkMode: boolean): ShadowOptions {
+    return {
+      radius: darkMode ? 0 : 12,
+      color: darkMode ? Color.Transparent : '#14000000',
+      offsetX: 0,
+      offsetY: darkMode ? 0 : 2
+    };
   }
 
   /** 叠在任意底色上的浅色填充，用于次要按钮、选中行、占位块。 */
@@ -744,7 +760,8 @@ export class ThemeRuntime {
       style === ThemeBubbleStyles.ROSE_FRAME || style === ThemeBubbleStyles.MOON_HALO ||
       style === ThemeBubbleStyles.SWORD_TALISMAN || style === ThemeBubbleStyles.QINGLUAN_JADE ||
       style === ThemeBubbleStyles.PIPI_SOFT_PAW || style === ThemeBubbleStyles.MECHA_COMM ||
-      style === ThemeBubbleStyles.STARWISH_RIBBON || style === ThemeBubbleStyles.PENCIL_MARK) {
+      style === ThemeBubbleStyles.STARWISH_RIBBON || style === ThemeBubbleStyles.PENCIL_MARK ||
+      style === ThemeBubbleStyles.GILDED_ORBIT) {
       return style;
     }
     const fallbackStyle = (fallback || '').trim();
@@ -761,7 +778,8 @@ export class ThemeRuntime {
       fallbackStyle === ThemeBubbleStyles.PIPI_SOFT_PAW ||
       fallbackStyle === ThemeBubbleStyles.MECHA_COMM ||
       fallbackStyle === ThemeBubbleStyles.STARWISH_RIBBON ||
-      fallbackStyle === ThemeBubbleStyles.PENCIL_MARK) {
+      fallbackStyle === ThemeBubbleStyles.PENCIL_MARK ||
+      fallbackStyle === ThemeBubbleStyles.GILDED_ORBIT) {
       return fallbackStyle;
     }
     return ThemeBubbleStyles.QQ_SOFT;

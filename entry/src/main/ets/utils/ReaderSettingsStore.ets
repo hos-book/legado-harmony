@@ -1,3 +1,4 @@
+import { ReaderFontWeight } from '../core/reader/ReaderFontWeight';
 import { Context } from '@kit.AbilityKit';
 import preferences from '@ohos.data.preferences';
 import { ReaderThemeHelper } from './ReaderThemeHelper';
@@ -7,6 +8,7 @@ import { ReaderInfoBarConfig } from '../core/reader/ReaderInfoBarModel';
 
 export class ReaderSettings {
   fontSize: number = 20;
+  fontWeight: number = ReaderFontWeight.DEFAULT;
   letterSpacing: number = 0;
   textAlign: string = 'justify';
   lineHeight: number = 12;
@@ -60,7 +62,7 @@ export class ReaderSettings {
   fontFamily: string = '';
   fontFilePath: string = '';
   fontSourceName: string = '系统默认';
-  fontMode: string = 'system';
+  fontMode: string = 'device';
   systemFontFamily: string = '';
   customFontsRaw: string = '';
   bodyFontMode: string = 'global';
@@ -90,6 +92,7 @@ export class ReaderSettingsStore {
   static readonly SCREEN_ORIENTATION_SYSTEM: string = 'system';
   static readonly SCREEN_ORIENTATION_PORTRAIT: string = 'portrait';
   static readonly SCREEN_ORIENTATION_LANDSCAPE: string = 'landscape';
+  static readonly KEY_FONT_WEIGHT: string = 'readerFontWeight';
   static readonly KEY_FONT_SIZE: string = 'readerFontSize';
   static readonly KEY_LETTER_SPACING: string = 'readerLetterSpacing';
   static readonly KEY_TEXT_ALIGN: string = 'readerTextAlign';
@@ -142,6 +145,11 @@ export class ReaderSettingsStore {
   static readonly KEY_FONT_FILE_PATH: string = 'readerFontFilePath';
   static readonly KEY_FONT_SOURCE_NAME: string = 'readerFontSourceName';
   static readonly KEY_FONT_MODE: string = 'readerFontMode';
+  /** 全局字体模式：device 跟随系统（默认），system 是历史名、表示跟随主题，custom 为自定义字体。 */
+  static readonly FONT_MODE_DEVICE: string = 'device';
+  static readonly FONT_MODE_THEME: string = 'system';
+  static readonly FONT_MODE_CUSTOM: string = 'custom';
+  static readonly FONT_SOURCE_NAME_THEME: string = '跟随主题';
   static readonly KEY_SYSTEM_FONT_FAMILY: string = 'readerSystemFontFamily';
   static readonly KEY_CUSTOM_FONTS_RAW: string = 'readerCustomFontsRaw';
   static readonly KEY_BODY_FONT_MODE: string = 'readerBodyFontMode';
@@ -163,6 +171,7 @@ export class ReaderSettingsStore {
   private static readerFontStyleSaveQueue: Promise<void> = Promise.resolve();
   private static layoutElementSaveQueue: Promise<void> = Promise.resolve();
   private static readerChromeSaveQueue: Promise<void> = Promise.resolve();
+  private static readerLayoutSaveQueue: Promise<void> = Promise.resolve();
 
   static async load(context: Context): Promise<ReaderSettings> {
     const activeThemeId = ReaderSettingsStore.activeThemeId();
@@ -172,6 +181,9 @@ export class ReaderSettingsStore {
     const store = await preferences.getPreferences(context, ReaderSettingsStore.STORE_NAME);
     const profile = await ReaderSettingsStore.loadThemeProfile(store, activeThemeId);
     if (profile) {
+      await ReaderSettingsStore.readGlobalFontSettings(store, profile);
+      ReaderSettingsStore.normalizeGlobalFontMode(profile);
+      await ReaderSettingsStore.applyThemePageTurnDefault(store, activeThemeId, profile);
       ReaderSettingsStore.cachedSettings = ReaderSettingsStore.clone(profile);
       ReaderSettingsStore.cachedThemeId = activeThemeId;
       return ReaderSettingsStore.clone(profile);
@@ -183,6 +195,8 @@ export class ReaderSettingsStore {
       20,
       'fontSize'
     );
+    settings.fontWeight = await ReaderSettingsStore.getNumber(
+      store, ReaderSettingsStore.KEY_FONT_WEIGHT, ReaderFontWeight.DEFAULT, 'fontWeight');
     settings.letterSpacing = await ReaderSettingsStore.getNumber(
       store, ReaderSettingsStore.KEY_LETTER_SPACING, 0, 'letterSpacing');
     settings.textAlign = ReaderSettingsStore.normalizeTextAlign(
@@ -407,7 +421,7 @@ export class ReaderSettingsStore {
     settings.fontFamily = await ReaderSettingsStore.getString(store, ReaderSettingsStore.KEY_FONT_FAMILY, '');
     settings.fontFilePath = await ReaderSettingsStore.getString(store, ReaderSettingsStore.KEY_FONT_FILE_PATH, '');
     settings.fontSourceName = await ReaderSettingsStore.getString(store, ReaderSettingsStore.KEY_FONT_SOURCE_NAME, '系统默认');
-    settings.fontMode = await ReaderSettingsStore.getString(store, ReaderSettingsStore.KEY_FONT_MODE, 'system');
+    settings.fontMode = await ReaderSettingsStore.getString(store, ReaderSettingsStore.KEY_FONT_MODE, ReaderSettingsStore.FONT_MODE_DEVICE);
     settings.systemFontFamily = await ReaderSettingsStore.getString(store, ReaderSettingsStore.KEY_SYSTEM_FONT_FAMILY, '');
     settings.customFontsRaw = await ReaderSettingsStore.getString(store, ReaderSettingsStore.KEY_CUSTOM_FONTS_RAW, '');
     settings.bodyFontMode = ReaderSettingsStore.normalizeFontMode(await ReaderSettingsStore.getString(store, ReaderSettingsStore.KEY_BODY_FONT_MODE, 'global'));
@@ -423,6 +437,8 @@ export class ReaderSettingsStore {
     settings.regexShadowColor = await ReaderSettingsStore.getString(store, ReaderSettingsStore.KEY_REGEX_SHADOW_COLOR, '');
     settings.regexFontRulesRaw = await ReaderSettingsStore.getString(store, ReaderSettingsStore.KEY_REGEX_FONT_RULES_RAW, '');
     ReaderSettingsStore.mergeStorageFontSettings(settings);
+    ReaderSettingsStore.normalizeGlobalFontMode(settings);
+    await ReaderSettingsStore.applyThemePageTurnDefault(store, activeThemeId, settings);
     ReaderSettingsStore.cachedSettings = ReaderSettingsStore.clone(settings);
     ReaderSettingsStore.cachedThemeId = activeThemeId;
     await ReaderSettingsStore.persistThemeProfile(store, activeThemeId, settings);
@@ -433,6 +449,8 @@ export class ReaderSettingsStore {
   static async reload(context: Context): Promise<ReaderSettings> {
     await ReaderSettingsStore.waitForReaderFontStyleSaves();
     await ReaderSettingsStore.waitForLayoutElementSaves();
+    await ReaderSettingsStore.waitForReaderLayoutSaves();
+    await ReaderSettingsStore.waitForReaderChromeSaves();
     ReaderSettingsStore.cachedSettings = null;
     ReaderSettingsStore.cachedThemeId = '';
     return await ReaderSettingsStore.load(context);
@@ -440,6 +458,10 @@ export class ReaderSettingsStore {
 
   static async switchThemeProfile(context: Context, previousThemeId: string,
     nextThemeId: string): Promise<ReaderSettings> {
+    await ReaderSettingsStore.waitForReaderFontStyleSaves();
+    await ReaderSettingsStore.waitForLayoutElementSaves();
+    await ReaderSettingsStore.waitForReaderLayoutSaves();
+    await ReaderSettingsStore.waitForReaderChromeSaves();
     const store = await preferences.getPreferences(context, ReaderSettingsStore.STORE_NAME);
     const previousId = ReaderSettingsStore.normalizeThemeProfileId(previousThemeId);
     const nextId = ReaderSettingsStore.normalizeThemeProfileId(nextThemeId);
@@ -453,8 +475,10 @@ export class ReaderSettingsStore {
       next.lightThemeIndex = ReaderThemeHelper.APP_THEME_INDEX;
       next.darkThemeIndex = ReaderThemeHelper.APP_THEME_INDEX;
       next.themeIndex = ReaderThemeHelper.APP_THEME_INDEX;
-      await ReaderSettingsStore.persistThemeProfile(store, nextId, next);
     }
+    ReaderSettingsStore.copyGlobalFontSettings(current, next);
+    await ReaderSettingsStore.applyThemePageTurnDefault(store, nextId, next);
+    await ReaderSettingsStore.persistThemeProfile(store, nextId, next);
     ReaderSettingsStore.cachedSettings = ReaderSettingsStore.clone(next);
     ReaderSettingsStore.cachedThemeId = nextId;
     ReaderSettingsStore.applyToStorage(next);
@@ -462,7 +486,7 @@ export class ReaderSettingsStore {
     return ReaderSettingsStore.clone(next);
   }
 
-  static async saveLayoutSettings(
+  static saveLayoutSettings(
     context: Context,
     fontSize: number,
     lineHeight: number,
@@ -472,10 +496,12 @@ export class ReaderSettingsStore {
     marginTop: number = 18,
     marginBottom: number = 18,
     letterSpacing: number = 0,
-    textAlign: string = 'justify'
+    textAlign: string = 'justify',
+    fontWeight?: number
   ): Promise<void> {
     const settings = ReaderSettingsStore.cachedSettings || ReaderSettingsStore.fromStorage();
     settings.fontSize = ReaderSettingsStore.normalizeFontSize(fontSize);
+    settings.fontWeight = ReaderFontWeight.normalize(fontWeight ?? settings.fontWeight);
     settings.letterSpacing = ReaderSettingsStore.normalizeLetterSpacing(letterSpacing);
     settings.textAlign = ReaderSettingsStore.normalizeTextAlign(textAlign);
     settings.lineHeight = ReaderSettingsStore.normalizeLineHeight(lineHeight);
@@ -486,8 +512,30 @@ export class ReaderSettingsStore {
     settings.marginBottom = ReaderSettingsStore.normalizeVerticalMargin(marginBottom);
     ReaderSettingsStore.cachedSettings = ReaderSettingsStore.clone(settings);
     ReaderSettingsStore.applyLayoutToStorage(settings);
+    const snapshot = ReaderSettingsStore.clone(settings);
+    const themeId = ReaderSettingsStore.activeThemeId();
+    const previous = ReaderSettingsStore.readerLayoutSaveQueue.catch(() => {
+    });
+    const next = previous.then(async () => {
+      await ReaderSettingsStore.persistLayoutSettings(context, snapshot, themeId);
+    });
+    ReaderSettingsStore.readerLayoutSaveQueue = next;
+    return next;
+  }
+
+  private static async waitForReaderLayoutSaves(): Promise<void> {
+    try {
+      await ReaderSettingsStore.readerLayoutSaveQueue;
+    } catch (e) {
+      console.warn('等待阅读排版设置保存失败:', e);
+    }
+  }
+
+  private static async persistLayoutSettings(context: Context, settings: ReaderSettings,
+    themeId: string): Promise<void> {
     const store = await preferences.getPreferences(context, ReaderSettingsStore.STORE_NAME);
     await store.put(ReaderSettingsStore.KEY_FONT_SIZE, settings.fontSize);
+    await store.put(ReaderSettingsStore.KEY_FONT_WEIGHT, settings.fontWeight);
     await store.put(ReaderSettingsStore.KEY_LETTER_SPACING, settings.letterSpacing);
     await store.put(ReaderSettingsStore.KEY_TEXT_ALIGN, settings.textAlign);
     await store.put(ReaderSettingsStore.KEY_LINE_HEIGHT, settings.lineHeight);
@@ -497,7 +545,7 @@ export class ReaderSettingsStore {
     await store.put(ReaderSettingsStore.KEY_MARGIN_RIGHT, settings.marginRight);
     await store.put(ReaderSettingsStore.KEY_MARGIN_TOP, settings.marginTop);
     await store.put(ReaderSettingsStore.KEY_MARGIN_BOTTOM, settings.marginBottom);
-    await ReaderSettingsStore.persistActiveThemeProfile(store, settings);
+    await ReaderSettingsStore.persistThemeProfile(store, themeId, settings);
     await store.flush();
   }
 
@@ -551,6 +599,7 @@ export class ReaderSettingsStore {
     await store.put(ReaderSettingsStore.KEY_DARK_CUSTOM_THEME_TEXT_COLOR, settings.darkCustomThemeTextColor);
     await store.put(ReaderSettingsStore.KEY_CUSTOM_THEMES_RAW, settings.customThemesRaw);
     await ReaderSettingsStore.persistActiveThemeProfile(store, settings);
+    CloudSyncChangeTracker.markPreferenceChanged();
     await store.flush();
   }
 
@@ -690,7 +739,7 @@ export class ReaderSettingsStore {
     settings.fontFamily = fontFamily || '';
     settings.fontFilePath = fontFilePath || '';
     settings.fontSourceName = fontSourceName || '系统默认';
-    settings.fontMode = fontMode || 'system';
+    settings.fontMode = fontMode || ReaderSettingsStore.FONT_MODE_DEVICE;
     settings.systemFontFamily = systemFontFamily || '';
     settings.customFontsRaw = customFontsRaw || '';
     ReaderSettingsStore.cachedSettings = ReaderSettingsStore.clone(settings);
@@ -710,12 +759,39 @@ export class ReaderSettingsStore {
 
   static async saveReaderFontStyleSettings(context: Context, settings: ReaderSettings): Promise<void> {
     const current = ReaderSettingsStore.cachedSettings || ReaderSettingsStore.fromStorage();
+    const previousRules = ReaderSettingsStore.fontRulesKey(current);
     current.fontSize = ReaderSettingsStore.normalizeFontSize(settings.fontSize || current.fontSize);
     current.bodyFontMode = ReaderSettingsStore.normalizeFontMode(settings.bodyFontMode);
     current.bodyFontFamily = settings.bodyFontFamily || '';
     current.titleFontMode = ReaderSettingsStore.normalizeFontMode(settings.titleFontMode);
     current.titleFontFamily = settings.titleFontFamily || '';
     current.titleFontSize = ReaderSettingsStore.normalizeFontSize(settings.titleFontSize);
+    ReaderSettingsStore.updateFontRules(current, settings);
+    ReaderSettingsStore.cachedSettings = ReaderSettingsStore.clone(current);
+    ReaderSettingsStore.applyLayoutToStorage(current);
+    ReaderSettingsStore.applyReaderFontStyleToStorage(current);
+    const snapshot = ReaderSettingsStore.clone(current);
+    await ReaderSettingsStore.enqueueReaderFontStyleSave(context, snapshot);
+    if (previousRules !== ReaderSettingsStore.fontRulesKey(snapshot)) {
+      CloudSyncChangeTracker.markPreferenceChanged();
+    }
+  }
+
+  /** 云端只允许更新字体规则，不触碰正文、标题字号或设备字体选择。 */
+  static async saveReaderFontRuleSettings(context: Context, settings: ReaderSettings): Promise<void> {
+    const current = ReaderSettingsStore.cachedSettings || ReaderSettingsStore.fromStorage();
+    const previousRules = ReaderSettingsStore.fontRulesKey(current);
+    ReaderSettingsStore.updateFontRules(current, settings);
+    ReaderSettingsStore.cachedSettings = ReaderSettingsStore.clone(current);
+    ReaderSettingsStore.applyRegexFontToStorage(current);
+    const snapshot = ReaderSettingsStore.clone(current);
+    await ReaderSettingsStore.enqueueReaderFontStyleSave(context, snapshot, true);
+    if (previousRules !== ReaderSettingsStore.fontRulesKey(snapshot)) {
+      CloudSyncChangeTracker.markPreferenceChanged();
+    }
+  }
+
+  private static updateFontRules(current: ReaderSettings, settings: ReaderSettings): void {
     current.regexFontEnabled = settings.regexFontEnabled;
     current.regexFontPattern = settings.regexFontPattern || '';
     current.regexFontMode = ReaderSettingsStore.normalizeFontMode(settings.regexFontMode);
@@ -723,19 +799,20 @@ export class ReaderSettingsStore {
     current.regexFontSize = ReaderSettingsStore.normalizeFontSize(settings.regexFontSize);
     current.regexShadowColor = settings.regexShadowColor || '';
     current.regexFontRulesRaw = settings.regexFontRulesRaw || '';
-    ReaderSettingsStore.cachedSettings = ReaderSettingsStore.clone(current);
-    ReaderSettingsStore.applyLayoutToStorage(current);
-    ReaderSettingsStore.applyReaderFontStyleToStorage(current);
-    const snapshot = ReaderSettingsStore.clone(current);
-    await ReaderSettingsStore.enqueueReaderFontStyleSave(context, snapshot);
   }
 
-  private static enqueueReaderFontStyleSave(context: Context, settings: ReaderSettings): Promise<void> {
+  private static fontRulesKey(settings: ReaderSettings): string {
+    return JSON.stringify([settings.regexFontEnabled, settings.regexFontPattern, settings.regexFontMode,
+      settings.regexFontFamily, settings.regexFontSize, settings.regexShadowColor, settings.regexFontRulesRaw]);
+  }
+
+  private static enqueueReaderFontStyleSave(context: Context, settings: ReaderSettings,
+    rulesOnly: boolean = false): Promise<void> {
     const themeId = ReaderSettingsStore.activeThemeId();
     const previous = ReaderSettingsStore.readerFontStyleSaveQueue.catch(() => {
     });
     const next = previous.then(async () => {
-      await ReaderSettingsStore.persistReaderFontStyleSettings(context, settings, themeId);
+      await ReaderSettingsStore.persistReaderFontStyleSettings(context, settings, themeId, rulesOnly);
     });
     ReaderSettingsStore.readerFontStyleSaveQueue = next;
     return next;
@@ -750,14 +827,16 @@ export class ReaderSettingsStore {
   }
 
   private static async persistReaderFontStyleSettings(context: Context, current: ReaderSettings,
-    themeId: string): Promise<void> {
+    themeId: string, rulesOnly: boolean): Promise<void> {
     const store = await preferences.getPreferences(context, ReaderSettingsStore.STORE_NAME);
-    await store.put(ReaderSettingsStore.KEY_FONT_SIZE, current.fontSize);
-    await store.put(ReaderSettingsStore.KEY_BODY_FONT_MODE, current.bodyFontMode);
-    await store.put(ReaderSettingsStore.KEY_BODY_FONT_FAMILY, current.bodyFontFamily);
-    await store.put(ReaderSettingsStore.KEY_TITLE_FONT_MODE, current.titleFontMode);
-    await store.put(ReaderSettingsStore.KEY_TITLE_FONT_FAMILY, current.titleFontFamily);
-    await store.put(ReaderSettingsStore.KEY_TITLE_FONT_SIZE, current.titleFontSize);
+    if (!rulesOnly) {
+      await store.put(ReaderSettingsStore.KEY_FONT_SIZE, current.fontSize);
+      await store.put(ReaderSettingsStore.KEY_BODY_FONT_MODE, current.bodyFontMode);
+      await store.put(ReaderSettingsStore.KEY_BODY_FONT_FAMILY, current.bodyFontFamily);
+      await store.put(ReaderSettingsStore.KEY_TITLE_FONT_MODE, current.titleFontMode);
+      await store.put(ReaderSettingsStore.KEY_TITLE_FONT_FAMILY, current.titleFontFamily);
+      await store.put(ReaderSettingsStore.KEY_TITLE_FONT_SIZE, current.titleFontSize);
+    }
     await store.put(ReaderSettingsStore.KEY_REGEX_FONT_ENABLED, current.regexFontEnabled);
     await store.put(ReaderSettingsStore.KEY_REGEX_FONT_PATTERN, current.regexFontPattern);
     await store.put(ReaderSettingsStore.KEY_REGEX_FONT_MODE, current.regexFontMode);
@@ -828,6 +907,14 @@ export class ReaderSettingsStore {
     return next;
   }
 
+  private static async waitForReaderChromeSaves(): Promise<void> {
+    try {
+      await ReaderSettingsStore.readerChromeSaveQueue;
+    } catch (e) {
+      console.warn('等待阅读页眉页脚设置保存失败:', e);
+    }
+  }
+
   static async savePageTurnAnimationType(context: Context, type: number): Promise<void> {
     const settings = ReaderSettingsStore.cachedSettings || ReaderSettingsStore.fromStorage();
     settings.pageTurnAnimationType = ReaderSettingsStore.normalizePageTurnAnimationType(type);
@@ -881,7 +968,8 @@ export class ReaderSettingsStore {
       settings.marginTop,
       settings.marginBottom,
       settings.letterSpacing,
-      settings.textAlign
+      settings.textAlign,
+      settings.fontWeight
     );
     await ReaderSettingsStore.saveThemeSettings(
       context,
@@ -982,6 +1070,10 @@ export class ReaderSettingsStore {
     AppStorage.setOrCreate(ReaderSettingsStore.KEY_TITLE_FONT_MODE, settings.titleFontMode);
     AppStorage.setOrCreate(ReaderSettingsStore.KEY_TITLE_FONT_FAMILY, settings.titleFontFamily);
     AppStorage.setOrCreate(ReaderSettingsStore.KEY_TITLE_FONT_SIZE, settings.titleFontSize);
+    ReaderSettingsStore.applyRegexFontToStorage(settings);
+  }
+
+  private static applyRegexFontToStorage(settings: ReaderSettings): void {
     AppStorage.setOrCreate(ReaderSettingsStore.KEY_REGEX_FONT_ENABLED, settings.regexFontEnabled);
     AppStorage.setOrCreate(ReaderSettingsStore.KEY_REGEX_FONT_PATTERN, settings.regexFontPattern);
     AppStorage.setOrCreate(ReaderSettingsStore.KEY_REGEX_FONT_MODE, settings.regexFontMode);
@@ -1026,6 +1118,7 @@ export class ReaderSettingsStore {
 
   private static applyLayoutToStorage(settings: ReaderSettings): void {
     AppStorage.setOrCreate(ReaderSettingsStore.KEY_FONT_SIZE, settings.fontSize);
+    AppStorage.setOrCreate(ReaderSettingsStore.KEY_FONT_WEIGHT, settings.fontWeight);
     AppStorage.setOrCreate(ReaderSettingsStore.KEY_LETTER_SPACING, settings.letterSpacing);
     AppStorage.setOrCreate(ReaderSettingsStore.KEY_TEXT_ALIGN, settings.textAlign);
     AppStorage.setOrCreate(ReaderSettingsStore.KEY_LINE_HEIGHT, settings.lineHeight);
@@ -1075,6 +1168,20 @@ export class ReaderSettingsStore {
     return `${ReaderSettingsStore.THEME_PROFILE_PREFIX}${ReaderSettingsStore.normalizeThemeProfileId(themeId)}`;
   }
 
+  // Upgrade this theme once, including existing profiles. Later manual animation choices remain intact.
+  private static async applyThemePageTurnDefault(store: preferences.Preferences, themeId: string,
+    settings: ReaderSettings): Promise<void> {
+    if (ReaderSettingsStore.normalizeThemeProfileId(themeId) !== 'obsidian-archive') return;
+    const key = 'readerObsidian3DDefaultV1';
+    if (await store.get(key, false) === true) return;
+    // Vertical paging cannot render a horizontal page curl; use the normal horizontal mode for this preset.
+    if (settings.pageTurnMode === 0) settings.pageTurnMode = 2;
+    settings.pageTurnAnimationType = ReaderSettingsStore.PAGE_TURN_ANIMATION_3D;
+    await store.put(ReaderSettingsStore.themeProfileKey(themeId), JSON.stringify(ReaderSettingsStore.clone(settings)));
+    await store.put(key, true);
+    await store.flush();
+  }
+
   private static async loadThemeProfile(store: preferences.Preferences,
     themeId: string): Promise<ReaderSettings | null> {
     const raw = await store.get(ReaderSettingsStore.themeProfileKey(themeId), '');
@@ -1090,16 +1197,62 @@ export class ReaderSettingsStore {
     }
   }
 
+  // The global font is one app-wide choice. Theme profiles still carry a copy because they serialize the whole
+  // ReaderSettings, but the top-level keys written by saveFontSettings are the source of truth.
+  /**
+   * 默认是跟随系统。旧版本把“没选过”和“跟随主题”都存成 system，只有用户在下拉框里点过跟随主题时
+   * 字体名才是“跟随主题”，据此区分；其余没有自定义字体文件的情况一律视为跟随系统。
+   */
+  static normalizeGlobalFontMode(settings: ReaderSettings): void {
+    if (settings.fontFilePath) {
+      settings.fontMode = settings.fontMode || ReaderSettingsStore.FONT_MODE_CUSTOM;
+      return;
+    }
+    if (settings.fontMode === ReaderSettingsStore.FONT_MODE_THEME &&
+      settings.fontSourceName === ReaderSettingsStore.FONT_SOURCE_NAME_THEME) {
+      return;
+    }
+    settings.fontMode = ReaderSettingsStore.FONT_MODE_DEVICE;
+  }
+
+  private static async readGlobalFontSettings(store: preferences.Preferences,
+    settings: ReaderSettings): Promise<void> {
+    settings.fontFamily = await ReaderSettingsStore.getString(
+      store, ReaderSettingsStore.KEY_FONT_FAMILY, settings.fontFamily);
+    settings.fontFilePath = await ReaderSettingsStore.getString(
+      store, ReaderSettingsStore.KEY_FONT_FILE_PATH, settings.fontFilePath);
+    settings.fontSourceName = await ReaderSettingsStore.getString(
+      store, ReaderSettingsStore.KEY_FONT_SOURCE_NAME, settings.fontSourceName);
+    settings.fontMode = await ReaderSettingsStore.getString(
+      store, ReaderSettingsStore.KEY_FONT_MODE, settings.fontMode);
+    settings.systemFontFamily = await ReaderSettingsStore.getString(
+      store, ReaderSettingsStore.KEY_SYSTEM_FONT_FAMILY, settings.systemFontFamily);
+    settings.customFontsRaw = await ReaderSettingsStore.getString(
+      store, ReaderSettingsStore.KEY_CUSTOM_FONTS_RAW, settings.customFontsRaw);
+  }
+
+  private static copyGlobalFontSettings(source: ReaderSettings, target: ReaderSettings): void {
+    target.fontFamily = source.fontFamily;
+    target.fontFilePath = source.fontFilePath;
+    target.fontSourceName = source.fontSourceName;
+    target.fontMode = source.fontMode;
+    target.systemFontFamily = source.systemFontFamily;
+    target.customFontsRaw = source.customFontsRaw;
+  }
+
   private static async persistActiveThemeProfile(store: preferences.Preferences,
     settings: ReaderSettings): Promise<void> {
     await ReaderSettingsStore.persistThemeProfile(store, ReaderSettingsStore.activeThemeId(), settings);
     ReaderSettingsStore.cachedThemeId = ReaderSettingsStore.activeThemeId();
-    CloudSyncChangeTracker.markPreferenceChanged();
   }
 
   private static async persistThemeProfile(store: preferences.Preferences, themeId: string,
     settings: ReaderSettings): Promise<void> {
-    await store.put(ReaderSettingsStore.themeProfileKey(themeId), JSON.stringify(ReaderSettingsStore.clone(settings)));
+    // 各类设置可能异步交错保存；较早的整份快照不能覆盖同主题已经更新的排版和页眉页脚。
+    const latest = ReaderSettingsStore.cachedSettings &&
+      ReaderSettingsStore.cachedThemeId === ReaderSettingsStore.normalizeThemeProfileId(themeId) ?
+      ReaderSettingsStore.cachedSettings : settings;
+    await store.put(ReaderSettingsStore.themeProfileKey(themeId), JSON.stringify(ReaderSettingsStore.clone(latest)));
   }
 
   private static async getNumber(
@@ -1163,6 +1316,7 @@ export class ReaderSettingsStore {
     fontSize: number = 20,
     lineHeightMode: string = ''
   ): number {
+    if (type === 'fontWeight') return ReaderFontWeight.normalize(value);
     if (type === 'fontSize') {
       return ReaderSettingsStore.normalizeFontSize(value);
     }
@@ -1360,6 +1514,7 @@ export class ReaderSettingsStore {
   private static clone(source: ReaderSettings): ReaderSettings {
     const settings = new ReaderSettings();
     settings.fontSize = ReaderSettingsStore.normalizeFontSize(source.fontSize);
+    settings.fontWeight = ReaderFontWeight.normalize(source.fontWeight);
     settings.letterSpacing = ReaderSettingsStore.normalizeLetterSpacing(source.letterSpacing);
     settings.textAlign = ReaderSettingsStore.normalizeTextAlign(source.textAlign);
     settings.lineHeight = ReaderSettingsStore.normalizeLineHeight(source.lineHeight);
@@ -1433,7 +1588,7 @@ export class ReaderSettingsStore {
     settings.fontFamily = source.fontFamily || '';
     settings.fontFilePath = source.fontFilePath || '';
     settings.fontSourceName = source.fontSourceName || '系统默认';
-    settings.fontMode = source.fontMode || 'system';
+    settings.fontMode = source.fontMode || ReaderSettingsStore.FONT_MODE_DEVICE;
     settings.systemFontFamily = source.systemFontFamily || '';
     settings.customFontsRaw = source.customFontsRaw || '';
     settings.bodyFontMode = ReaderSettingsStore.normalizeFontMode(source.bodyFontMode);
@@ -1456,6 +1611,8 @@ export class ReaderSettingsStore {
     settings.fontSize = ReaderSettingsStore.normalizeFontSize(
       AppStorage.get<number>(ReaderSettingsStore.KEY_FONT_SIZE) ?? 20
     );
+    settings.fontWeight = ReaderFontWeight.normalize(
+      AppStorage.get<number>(ReaderSettingsStore.KEY_FONT_WEIGHT) ?? ReaderFontWeight.DEFAULT);
     settings.letterSpacing = ReaderSettingsStore.normalizeLetterSpacing(
       AppStorage.get<number>(ReaderSettingsStore.KEY_LETTER_SPACING) ?? 0);
     settings.textAlign = ReaderSettingsStore.normalizeTextAlign(
@@ -1570,7 +1727,7 @@ export class ReaderSettingsStore {
     settings.fontFamily = AppStorage.get<string>(ReaderSettingsStore.KEY_FONT_FAMILY) || '';
     settings.fontFilePath = AppStorage.get<string>(ReaderSettingsStore.KEY_FONT_FILE_PATH) || '';
     settings.fontSourceName = AppStorage.get<string>(ReaderSettingsStore.KEY_FONT_SOURCE_NAME) || '系统默认';
-    settings.fontMode = AppStorage.get<string>(ReaderSettingsStore.KEY_FONT_MODE) || 'system';
+    settings.fontMode = AppStorage.get<string>(ReaderSettingsStore.KEY_FONT_MODE) || ReaderSettingsStore.FONT_MODE_DEVICE;
     settings.systemFontFamily = AppStorage.get<string>(ReaderSettingsStore.KEY_SYSTEM_FONT_FAMILY) || '';
     settings.customFontsRaw = AppStorage.get<string>(ReaderSettingsStore.KEY_CUSTOM_FONTS_RAW) || '';
     settings.bodyFontMode = ReaderSettingsStore.normalizeFontMode(AppStorage.get<string>(ReaderSettingsStore.KEY_BODY_FONT_MODE) || 'global');

@@ -9,6 +9,7 @@ interface ThemeCatalogRow {
   display_name: string;
   price_points: string;
   valid_days: number;
+  acquisition?: 'POINTS' | 'SUPER_CLAIM';
 }
 
 export interface ThemeCatalogEntry {
@@ -16,6 +17,7 @@ export interface ThemeCatalogEntry {
   displayName: string;
   pricePoints: number;
   validDays: number;
+  acquisition?: 'POINTS' | 'SUPER_CLAIM';
 }
 
 const LEGACY_THEME_PRICE_POINTS = 60;
@@ -30,6 +32,7 @@ export function themeOfferMatchesExpectation(
   expectedPricePoints: number | undefined,
   expectedValidDays: number | undefined
 ): boolean {
+  if (theme.acquisition === 'SUPER_CLAIM' || theme.themeId === 'obsidian-archive') return false;
   if (expectedPricePoints === undefined && expectedValidDays === undefined) {
     return theme.pricePoints === LEGACY_THEME_PRICE_POINTS &&
       theme.validDays === LEGACY_THEME_VALID_DAYS;
@@ -39,7 +42,7 @@ export function themeOfferMatchesExpectation(
 
 export async function listPublishedThemes(db: Queryable): Promise<ThemeCatalogEntry[]> {
   const result = await db.query<ThemeCatalogRow>(
-    `SELECT theme_id, display_name, price_points, valid_days
+    `SELECT theme_id, display_name, price_points, valid_days, acquisition
      FROM theme_catalog
      WHERE enabled = TRUE
      ORDER BY theme_id`
@@ -51,11 +54,11 @@ export async function findRedeemableTheme(
   db: Queryable,
   themeId: string
 ): Promise<ThemeCatalogEntry | null> {
-  if (!isValidThemeId(themeId)) return null;
+  if (!isValidThemeId(themeId) || themeId === 'obsidian-archive') return null;
   const result = await db.query<ThemeCatalogRow>(
     `SELECT theme_id, display_name, price_points, valid_days
      FROM theme_catalog
-     WHERE theme_id = $1 AND enabled = TRUE`,
+     WHERE theme_id = $1 AND enabled = TRUE AND acquisition = 'POINTS'`,
     [themeId]
   );
   const row = result.rows[0];
@@ -67,6 +70,7 @@ function toThemeCatalogEntry(row: ThemeCatalogRow): ThemeCatalogEntry {
     themeId: row.theme_id,
     displayName: row.display_name,
     pricePoints: Number(row.price_points),
-    validDays: row.valid_days
+    validDays: row.valid_days,
+    acquisition: row.acquisition ?? 'POINTS'
   };
 }

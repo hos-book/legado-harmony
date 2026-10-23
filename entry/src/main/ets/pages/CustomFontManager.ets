@@ -2,6 +2,7 @@ import { syncSystemBars } from '../utils/SystemBars';
 import { ReaderSettingsStore } from '../utils/ReaderSettingsStore';
 import { ReaderFontHelper, ReaderFontItem } from '../utils/ReaderFontHelper';
 import { ReaderSystemFontHelper } from '../utils/ReaderSystemFontHelper';
+import { ReaderFontBootstrap } from '../utils/ReaderFontBootstrap';
 import picker from '@ohos.file.picker';
 import fs from '@ohos.file.fs';
 import fileUri from '@ohos.file.fileuri';
@@ -10,6 +11,7 @@ import { HdsFeedback } from '../utils/HdsFeedback';
 import { AppFontSize } from '../theme/AppFontSize';
 import { AppSpacing } from '../theme/AppSpacing';
 import { PageScaffold } from '../components/common/PageScaffold';
+import { CloudAutoSync } from '../account/CloudAutoSync';
 
 class ReaderCustomFontItem {
   familyName: string = '';
@@ -27,7 +29,7 @@ struct CustomFontManagerPage {
   @StorageLink('readerFontFamily') readerFontFamily: string = '';
   @StorageLink('readerFontFilePath') readerFontFilePath: string = '';
   @StorageLink('readerFontSourceName') readerFontSourceName: string = '系统默认';
-  @StorageLink('readerFontMode') readerFontMode: string = 'system';
+  @StorageLink('readerFontMode') readerFontMode: string = 'device';
   @StorageLink('readerSystemFontFamily') readerSystemFontFamily: string = '';
   @StorageLink('readerCustomFontsRaw') readerCustomFontsRaw: string = '';
   @StorageLink('readerActiveFontFamily') readerActiveFontFamily: string = '';
@@ -224,6 +226,7 @@ struct CustomFontManagerPage {
       const next = this.customFonts.slice();
       next.push(item);
       this.saveCustomFonts(next);
+      CloudAutoSync.schedule(getContext(this));
       if (this.registerCustomFont(item)) {
         HdsFeedback.showToast('已上传字体，可返回阅读设置选择');
       } else {
@@ -240,21 +243,26 @@ struct CustomFontManagerPage {
       fontItem.familyName !== item.familyName && fontItem.filePath !== item.filePath);
     this.saveCustomFonts(next);
     if (this.readerFontFilePath === item.filePath || this.readerFontFamily === item.familyName) {
-      const systemFontFamily = this.refreshSystemFontFamily();
-      this.readerFontMode = 'system';
+      this.refreshSystemFontFamily();
+      this.readerFontMode = ReaderSettingsStore.FONT_MODE_DEVICE;
       this.readerFontFamily = '';
       this.readerFontFilePath = '';
       this.readerFontSourceName = '系统默认';
       this.readerActiveFontFamily = '';
       this.readerFontRegistered = false;
-      this.applyApplicationFont(systemFontFamily);
+      this.applyApplicationFont();
     }
     this.saveFontSettings();
-    try {
-      fs.unlinkSync(item.filePath);
-    } catch (e) {
-      console.warn('删除字体文件失败:', e);
-    }
+    // The cloud copy is matched by the file's fingerprint, so record it before the file is gone.
+    CloudAutoSync.onFontDeleted(getContext(this), item.filePath).catch((error: Error) => {
+      console.warn('记录云端字体删除失败:', error.message);
+    }).finally(() => {
+      try {
+        fs.unlinkSync(item.filePath);
+      } catch (e) {
+        console.warn('删除字体文件失败:', e);
+      }
+    });
     HdsFeedback.showToast('已删除字体');
   }
 
@@ -287,15 +295,11 @@ struct CustomFontManagerPage {
       }
       return result.familyName;
     }
-    return this.readerSystemFontFamily || ReaderSystemFontHelper.currentFromStorage(this.getUIContext());
+    return '';
   }
 
-  applyApplicationFont(familyName: string): void {
-    try {
-      getContext(this).getApplicationContext().setFont(familyName || '');
-    } catch (e) {
-      console.warn('应用阅读字体失败:', e);
-    }
+  applyApplicationFont(): void {
+    ReaderFontBootstrap.applyApplicationFont(getContext(this), 'custom-font-manager');
   }
 
   async ensureDir(path: string): Promise<void> {
