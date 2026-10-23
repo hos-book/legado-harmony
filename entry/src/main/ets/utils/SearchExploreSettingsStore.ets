@@ -18,6 +18,9 @@ export class SearchExploreSettings {
   sourceSortRaw: string = '';
   exploreSourceUrl: string = '';
   explorePlatform: string = '';
+  // 搜索、发现结果的布局：'list' 卡片列表，'grid' 封面平铺。
+  searchResultLayout: string = 'list';
+  exploreResultLayout: string = 'list';
 }
 
 export class SearchExploreSettingsStore {
@@ -37,6 +40,8 @@ export class SearchExploreSettingsStore {
   static readonly KEY_SOURCE_SORT: string = 'searchExploreSourceSort';
   static readonly KEY_EXPLORE_SOURCE_URL: string = 'exploreSourceUrl';
   static readonly KEY_EXPLORE_PLATFORM: string = 'explorePlatform';
+  static readonly KEY_SEARCH_RESULT_LAYOUT: string = 'searchResultLayout';
+  static readonly KEY_EXPLORE_RESULT_LAYOUT: string = 'exploreResultLayout';
   private static readonly STORE_NAME: string = 'search_explore_settings';
   private static readonly DEFAULT_SEARCH_CONCURRENCY: number = 6;
   private static readonly MIN_SEARCH_CONCURRENCY: number = 1;
@@ -85,6 +90,13 @@ export class SearchExploreSettingsStore {
       store, SearchExploreSettingsStore.KEY_EXPLORE_SOURCE_URL, '');
     settings.explorePlatform = await SearchExploreSettingsStore.getString(
       store, SearchExploreSettingsStore.KEY_EXPLORE_PLATFORM, '');
+    // 旧版本只存在 PersistentStorage 里，偏好里还没有时沿用 AppStorage 中的值。
+    settings.searchResultLayout = SearchExploreSettingsStore.normalizeResultLayout(
+      await SearchExploreSettingsStore.getString(store, SearchExploreSettingsStore.KEY_SEARCH_RESULT_LAYOUT,
+        AppStorage.get<string>(SearchExploreSettingsStore.KEY_SEARCH_RESULT_LAYOUT) ?? 'list'));
+    settings.exploreResultLayout = SearchExploreSettingsStore.normalizeResultLayout(
+      await SearchExploreSettingsStore.getString(store, SearchExploreSettingsStore.KEY_EXPLORE_RESULT_LAYOUT,
+        AppStorage.get<string>(SearchExploreSettingsStore.KEY_EXPLORE_RESULT_LAYOUT) ?? 'list'));
     SearchExploreSettingsStore.cachedSettings = SearchExploreSettingsStore.clone(settings);
     return settings;
   }
@@ -110,6 +122,10 @@ export class SearchExploreSettingsStore {
     await store.put(SearchExploreSettingsStore.KEY_SOURCE_SORT, settings.sourceSortRaw);
     await store.put(SearchExploreSettingsStore.KEY_EXPLORE_SOURCE_URL, settings.exploreSourceUrl);
     await store.put(SearchExploreSettingsStore.KEY_EXPLORE_PLATFORM, settings.explorePlatform);
+    await store.put(SearchExploreSettingsStore.KEY_SEARCH_RESULT_LAYOUT,
+      SearchExploreSettingsStore.normalizeResultLayout(settings.searchResultLayout));
+    await store.put(SearchExploreSettingsStore.KEY_EXPLORE_RESULT_LAYOUT,
+      SearchExploreSettingsStore.normalizeResultLayout(settings.exploreResultLayout));
     await store.flush();
     if (!previous || SearchExploreSettingsStore.syncFieldsChanged(previous, settings)) {
       CloudSyncChangeTracker.markApplicationPreferenceChanged();
@@ -130,6 +146,22 @@ export class SearchExploreSettingsStore {
     const store = await preferences.getPreferences(context, SearchExploreSettingsStore.STORE_NAME);
     await store.put(SearchExploreSettingsStore.KEY_EXPLORE_SOURCE_URL, exploreSourceUrl);
     await store.put(SearchExploreSettingsStore.KEY_EXPLORE_PLATFORM, explorePlatform);
+    await store.flush();
+  }
+
+  /** 搜索或发现页切换列表/平铺后立即写入偏好，key 为 KEY_SEARCH_RESULT_LAYOUT 或 KEY_EXPLORE_RESULT_LAYOUT。 */
+  static async saveResultLayout(context: Context, key: string, layout: string): Promise<void> {
+    const normalized = SearchExploreSettingsStore.normalizeResultLayout(layout);
+    if (SearchExploreSettingsStore.cachedSettings) {
+      if (key === SearchExploreSettingsStore.KEY_SEARCH_RESULT_LAYOUT) {
+        SearchExploreSettingsStore.cachedSettings.searchResultLayout = normalized;
+      } else {
+        SearchExploreSettingsStore.cachedSettings.exploreResultLayout = normalized;
+      }
+    }
+    AppStorage.setOrCreate(key, normalized);
+    const store = await preferences.getPreferences(context, SearchExploreSettingsStore.STORE_NAME);
+    await store.put(key, normalized);
     await store.flush();
   }
 
@@ -160,6 +192,10 @@ export class SearchExploreSettingsStore {
     AppStorage.setOrCreate(SearchExploreSettingsStore.KEY_SOURCE_SORT, settings.sourceSortRaw);
     AppStorage.setOrCreate(SearchExploreSettingsStore.KEY_EXPLORE_SOURCE_URL, settings.exploreSourceUrl);
     AppStorage.setOrCreate(SearchExploreSettingsStore.KEY_EXPLORE_PLATFORM, settings.explorePlatform);
+    AppStorage.setOrCreate(SearchExploreSettingsStore.KEY_SEARCH_RESULT_LAYOUT,
+      SearchExploreSettingsStore.normalizeResultLayout(settings.searchResultLayout));
+    AppStorage.setOrCreate(SearchExploreSettingsStore.KEY_EXPLORE_RESULT_LAYOUT,
+      SearchExploreSettingsStore.normalizeResultLayout(settings.exploreResultLayout));
   }
 
   static getSearchConcurrency(): number {
@@ -182,6 +218,10 @@ export class SearchExploreSettingsStore {
       SearchExploreSettingsStore.MIN_SEARCH_CONCURRENCY,
       Math.min(parsed, SearchExploreSettingsStore.MAX_SEARCH_CONCURRENCY)
     );
+  }
+
+  private static normalizeResultLayout(value: string): string {
+    return value === 'grid' ? 'grid' : 'list';
   }
 
   private static async getBoolean(
@@ -210,6 +250,8 @@ export class SearchExploreSettingsStore {
     settings.sourceSortRaw = source.sourceSortRaw;
     settings.exploreSourceUrl = source.exploreSourceUrl;
     settings.explorePlatform = source.explorePlatform || '';
+    settings.searchResultLayout = SearchExploreSettingsStore.normalizeResultLayout(source.searchResultLayout);
+    settings.exploreResultLayout = SearchExploreSettingsStore.normalizeResultLayout(source.exploreResultLayout);
     return settings;
   }
 

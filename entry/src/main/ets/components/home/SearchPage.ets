@@ -507,12 +507,12 @@ export struct SearchPage {
                   if (this.searchResultLayout === 'grid') {
                     this.searchHeaderCircleButton($r('sys.symbol.list_bullet'), false,
                       '当前为平铺，切换为列表', () => {
-                        this.searchResultLayout = 'list';
+                        this.applyResultLayout('list');
                       })
                   } else {
                     this.searchHeaderCircleButton($r('sys.symbol.square_grid_2x2'), false,
                       '当前为列表，切换为平铺', () => {
-                        this.searchResultLayout = 'grid';
+                        this.applyResultLayout('grid');
                       })
                   }
                 }
@@ -1689,6 +1689,15 @@ export struct SearchPage {
   normalizeSourceGroup(source: BookSource): string {
     const group = (source.bookSourceGroup || '').trim();
     return group || '未分组';
+  }
+
+  applyResultLayout(layout: string): void {
+    this.searchResultLayout = layout;
+    SearchExploreSettingsStore.saveResultLayout(
+      getContext(this), SearchExploreSettingsStore.KEY_SEARCH_RESULT_LAYOUT, layout
+    ).catch((e: Error) => {
+      console.warn('保存搜索结果布局失败:', e);
+    });
   }
 
   saveSearchExploreSettings(): void {

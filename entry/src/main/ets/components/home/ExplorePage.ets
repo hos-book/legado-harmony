@@ -460,12 +460,12 @@ export struct ExplorePage {
                 if (this.exploreResultLayout === 'grid') {
                   this.exploreHeaderCircleButton($r('sys.symbol.list_bullet'), false,
                     '当前为平铺，切换为列表', () => {
-                      this.exploreResultLayout = 'list';
+                      this.applyResultLayout('list');
                     })
                 } else {
                   this.exploreHeaderCircleButton($r('sys.symbol.square_grid_2x2'), false,
                     '当前为列表，切换为平铺', () => {
-                      this.exploreResultLayout = 'grid';
+                      this.applyResultLayout('grid');
                     })
                 }
               }
@@ -1932,6 +1932,15 @@ export struct ExplorePage {
     } catch (e) {
       console.warn('恢复发现页选择失败:', e);
     }
+  }
+
+  applyResultLayout(layout: string): void {
+    this.exploreResultLayout = layout;
+    SearchExploreSettingsStore.saveResultLayout(
+      getContext(this), SearchExploreSettingsStore.KEY_EXPLORE_RESULT_LAYOUT, layout
+    ).catch((e: Error) => {
+      console.warn('保存发现结果布局失败:', e);
+    });
   }
 
   saveExploreSelection(): void {
