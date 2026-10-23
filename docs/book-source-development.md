@@ -7,6 +7,7 @@
 - [后台脚本阶段 `script`](../harmony-book-source-engine/docs/book-source-development.md#脚本阶段-script)：请求、状态、登录、网页交互、完整示例与排错
 - [封面解密 coverDecode](https://github.com/wip3l/harmony-book-source-engine/blob/main/docs/book-source-development.md#加密封面-coverdecode)：含封面请求头 `coverHeaders`
 - [自定义图片字节脚本](../harmony-book-source-engine/docs/book-source-development.md#自定义图片字节脚本)：`content.imageDecode.script`，以及标准算法的 `ivPrefixBytes`、`keyEncoding`
+- [图片清单与按需加载](https://github.com/wip3l/harmony-book-source-engine/blob/main/docs/book-source-development.md#图片清单与按需加载)：原始页序号、横条重排及宿主逐张物化约定
 - [宿主图片加载接入](https://github.com/wip3l/harmony-book-source-engine/blob/main/docs/cover-decoding.md)
 - [内核 HAR 接入说明](https://github.com/wip3l/harmony-book-source-engine/blob/main/sourceengine/README.md)
 
@@ -63,6 +64,12 @@ Node 检查使用替身，不会验证真机 QuickJS、系统网页控件或实�
 | 可选宿主端口 `SourceEngineHost` | 不安装，按内核默认行为运行；这不影响独立安装的 `NativeSourceInteraction` 界面处理器与 `BookSourceRuntimeStore` 持久化 |
 
 修改规则格式与开发说明请到内核仓库提交。轻页只维护自己的页面、导入与调试操作和宿主接入说明。
+
+## 使用公共正文辅助层的宿主
+
+`WebBookService` 支持可信宿主通过 `SourceEngineHost.setReaderImagesDeferred(source, true)` 为单次阅读请求保留完整 ReaderImageMarker，先返回清单，再由宿主下载和处理各页。策略默认关闭，不属于书源字段；请求头、解码参数、原始 `imageIndex` 和尺寸都须传递到逐图管线，下载及导出保留默认完整物化行为。该接口的存在不代表轻页阅读器已经启用按需模式。
+
+简听 v0.1.67 已接入这一策略，图片总并发最多 6，后台预加载最多占 2 个名额，可见页优先；图片脚本保持逐张执行，队列总容量同步为 6。规则作者仍使用公共规范中的 `content.images` 和 `content.imageDecode`，无需为简听另写并发配置。
 
 ## 4.3.927 验收补充
 
