@@ -47,6 +47,8 @@ export default class EntryAbility extends UIAbility {
   private membershipThemeTimer: number = -1;
   private deferredStartupScheduled: boolean = false;
   private mainWindowStage: window.WindowStage | null = null;
+  // 系统全局字体的 ID，后台换了手机字体后回到前台靠它发现变化。
+  private systemFontId: string = '';
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(0x0000, 'testTag', '%{public}s', 'Ability onCreate');
@@ -92,6 +94,8 @@ export default class EntryAbility extends UIAbility {
     AppStorage.setOrCreate('readerSystemFontFamily', ReaderSystemFontHelper.FALLBACK_SYSTEM_FONT_FAMILY);
     AppStorage.setOrCreate('readerActiveFontFamily', '');
     AppStorage.setOrCreate('readerFontRegistered', false);
+    AppStorage.setOrCreate('systemFontRevision', 0);
+    this.systemFontId = this.context.config.fontId || '';
     PersistentStorage.persistProp('readerPageTurnMode', 1);
     PersistentStorage.persistProp('readerPreloadEnabled', true);
     PersistentStorage.persistProp('readerPreloadChapterCount', 1);
@@ -357,6 +361,7 @@ export default class EntryAbility extends UIAbility {
     }
     ThemeTrialManager.stopIfExpired();
     this.syncSystemColorMode(this.context.config);
+    this.syncSystemFont(this.context.config, 'foreground');
     this.accountBootstrapPromise
       .then(() => HuaweiAccountService.renewSession(this.context))
       .then(() => MembershipThemeGuard.refresh(this.context))
@@ -420,6 +425,28 @@ export default class EntryAbility extends UIAbility {
 
   onConfigurationUpdate(newConfig: Configuration): void {
     this.syncSystemColorMode(newConfig);
+    this.syncSystemFont(newConfig, 'configuration-update');
+  }
+
+  private syncSystemFont(config: Configuration, source: string): void {
+    const fontId = config.fontId || '';
+    if (!fontId || fontId === this.systemFontId) {
+      return;
+    }
+    const known = !!this.systemFontId;
+    this.systemFontId = fontId;
+    if (!known) {
+      return;
+    }
+    // 等阅读设置载入后再处理，回写的系统字体名才不会被启动流程用旧值盖掉。
+    // 回调先于 ArkUI 收到这次配置变化（日志里相差约 30ms），延后一点，等它装好新的主题字体再清缓存、重排。
+    this.readerBootstrapPromise.then(() => {
+      setTimeout(() => {
+        ReaderFontBootstrap.onSystemFontChanged(this.context, this.mainUIContext(), source);
+      }, 500);
+    }).catch((e: Error) => {
+      hilog.warn(0x0000, 'testTag', 'Sync system font failed: %{public}s', JSON.stringify(e));
+    });
   }
 
   private syncSystemColorMode(config: Configuration): void {

@@ -62,7 +62,7 @@ export class ReaderSettings {
   fontFamily: string = '';
   fontFilePath: string = '';
   fontSourceName: string = '系统默认';
-  fontMode: string = 'system';
+  fontMode: string = 'device';
   systemFontFamily: string = '';
   customFontsRaw: string = '';
   bodyFontMode: string = 'global';
@@ -145,6 +145,11 @@ export class ReaderSettingsStore {
   static readonly KEY_FONT_FILE_PATH: string = 'readerFontFilePath';
   static readonly KEY_FONT_SOURCE_NAME: string = 'readerFontSourceName';
   static readonly KEY_FONT_MODE: string = 'readerFontMode';
+  /** 全局字体模式：device 跟随系统（默认），system 是历史名、表示跟随主题，custom 为自定义字体。 */
+  static readonly FONT_MODE_DEVICE: string = 'device';
+  static readonly FONT_MODE_THEME: string = 'system';
+  static readonly FONT_MODE_CUSTOM: string = 'custom';
+  static readonly FONT_SOURCE_NAME_THEME: string = '跟随主题';
   static readonly KEY_SYSTEM_FONT_FAMILY: string = 'readerSystemFontFamily';
   static readonly KEY_CUSTOM_FONTS_RAW: string = 'readerCustomFontsRaw';
   static readonly KEY_BODY_FONT_MODE: string = 'readerBodyFontMode';
@@ -177,6 +182,7 @@ export class ReaderSettingsStore {
     const profile = await ReaderSettingsStore.loadThemeProfile(store, activeThemeId);
     if (profile) {
       await ReaderSettingsStore.readGlobalFontSettings(store, profile);
+      ReaderSettingsStore.normalizeGlobalFontMode(profile);
       await ReaderSettingsStore.applyThemePageTurnDefault(store, activeThemeId, profile);
       ReaderSettingsStore.cachedSettings = ReaderSettingsStore.clone(profile);
       ReaderSettingsStore.cachedThemeId = activeThemeId;
@@ -415,7 +421,7 @@ export class ReaderSettingsStore {
     settings.fontFamily = await ReaderSettingsStore.getString(store, ReaderSettingsStore.KEY_FONT_FAMILY, '');
     settings.fontFilePath = await ReaderSettingsStore.getString(store, ReaderSettingsStore.KEY_FONT_FILE_PATH, '');
     settings.fontSourceName = await ReaderSettingsStore.getString(store, ReaderSettingsStore.KEY_FONT_SOURCE_NAME, '系统默认');
-    settings.fontMode = await ReaderSettingsStore.getString(store, ReaderSettingsStore.KEY_FONT_MODE, 'system');
+    settings.fontMode = await ReaderSettingsStore.getString(store, ReaderSettingsStore.KEY_FONT_MODE, ReaderSettingsStore.FONT_MODE_DEVICE);
     settings.systemFontFamily = await ReaderSettingsStore.getString(store, ReaderSettingsStore.KEY_SYSTEM_FONT_FAMILY, '');
     settings.customFontsRaw = await ReaderSettingsStore.getString(store, ReaderSettingsStore.KEY_CUSTOM_FONTS_RAW, '');
     settings.bodyFontMode = ReaderSettingsStore.normalizeFontMode(await ReaderSettingsStore.getString(store, ReaderSettingsStore.KEY_BODY_FONT_MODE, 'global'));
@@ -431,6 +437,7 @@ export class ReaderSettingsStore {
     settings.regexShadowColor = await ReaderSettingsStore.getString(store, ReaderSettingsStore.KEY_REGEX_SHADOW_COLOR, '');
     settings.regexFontRulesRaw = await ReaderSettingsStore.getString(store, ReaderSettingsStore.KEY_REGEX_FONT_RULES_RAW, '');
     ReaderSettingsStore.mergeStorageFontSettings(settings);
+    ReaderSettingsStore.normalizeGlobalFontMode(settings);
     await ReaderSettingsStore.applyThemePageTurnDefault(store, activeThemeId, settings);
     ReaderSettingsStore.cachedSettings = ReaderSettingsStore.clone(settings);
     ReaderSettingsStore.cachedThemeId = activeThemeId;
@@ -732,7 +739,7 @@ export class ReaderSettingsStore {
     settings.fontFamily = fontFamily || '';
     settings.fontFilePath = fontFilePath || '';
     settings.fontSourceName = fontSourceName || '系统默认';
-    settings.fontMode = fontMode || 'system';
+    settings.fontMode = fontMode || ReaderSettingsStore.FONT_MODE_DEVICE;
     settings.systemFontFamily = systemFontFamily || '';
     settings.customFontsRaw = customFontsRaw || '';
     ReaderSettingsStore.cachedSettings = ReaderSettingsStore.clone(settings);
@@ -1192,6 +1199,22 @@ export class ReaderSettingsStore {
 
   // The global font is one app-wide choice. Theme profiles still carry a copy because they serialize the whole
   // ReaderSettings, but the top-level keys written by saveFontSettings are the source of truth.
+  /**
+   * 默认是跟随系统。旧版本把“没选过”和“跟随主题”都存成 system，只有用户在下拉框里点过跟随主题时
+   * 字体名才是“跟随主题”，据此区分；其余没有自定义字体文件的情况一律视为跟随系统。
+   */
+  static normalizeGlobalFontMode(settings: ReaderSettings): void {
+    if (settings.fontFilePath) {
+      settings.fontMode = settings.fontMode || ReaderSettingsStore.FONT_MODE_CUSTOM;
+      return;
+    }
+    if (settings.fontMode === ReaderSettingsStore.FONT_MODE_THEME &&
+      settings.fontSourceName === ReaderSettingsStore.FONT_SOURCE_NAME_THEME) {
+      return;
+    }
+    settings.fontMode = ReaderSettingsStore.FONT_MODE_DEVICE;
+  }
+
   private static async readGlobalFontSettings(store: preferences.Preferences,
     settings: ReaderSettings): Promise<void> {
     settings.fontFamily = await ReaderSettingsStore.getString(
@@ -1565,7 +1588,7 @@ export class ReaderSettingsStore {
     settings.fontFamily = source.fontFamily || '';
     settings.fontFilePath = source.fontFilePath || '';
     settings.fontSourceName = source.fontSourceName || '系统默认';
-    settings.fontMode = source.fontMode || 'system';
+    settings.fontMode = source.fontMode || ReaderSettingsStore.FONT_MODE_DEVICE;
     settings.systemFontFamily = source.systemFontFamily || '';
     settings.customFontsRaw = source.customFontsRaw || '';
     settings.bodyFontMode = ReaderSettingsStore.normalizeFontMode(source.bodyFontMode);
@@ -1704,7 +1727,7 @@ export class ReaderSettingsStore {
     settings.fontFamily = AppStorage.get<string>(ReaderSettingsStore.KEY_FONT_FAMILY) || '';
     settings.fontFilePath = AppStorage.get<string>(ReaderSettingsStore.KEY_FONT_FILE_PATH) || '';
     settings.fontSourceName = AppStorage.get<string>(ReaderSettingsStore.KEY_FONT_SOURCE_NAME) || '系统默认';
-    settings.fontMode = AppStorage.get<string>(ReaderSettingsStore.KEY_FONT_MODE) || 'system';
+    settings.fontMode = AppStorage.get<string>(ReaderSettingsStore.KEY_FONT_MODE) || ReaderSettingsStore.FONT_MODE_DEVICE;
     settings.systemFontFamily = AppStorage.get<string>(ReaderSettingsStore.KEY_SYSTEM_FONT_FAMILY) || '';
     settings.customFontsRaw = AppStorage.get<string>(ReaderSettingsStore.KEY_CUSTOM_FONTS_RAW) || '';
     settings.bodyFontMode = ReaderSettingsStore.normalizeFontMode(AppStorage.get<string>(ReaderSettingsStore.KEY_BODY_FONT_MODE) || 'global');

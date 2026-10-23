@@ -2,6 +2,7 @@ import { syncSystemBars } from '../utils/SystemBars';
 import { ReaderSettingsStore } from '../utils/ReaderSettingsStore';
 import { ReaderFontHelper, ReaderFontItem } from '../utils/ReaderFontHelper';
 import { ReaderSystemFontHelper } from '../utils/ReaderSystemFontHelper';
+import { ReaderFontBootstrap } from '../utils/ReaderFontBootstrap';
 import picker from '@ohos.file.picker';
 import fs from '@ohos.file.fs';
 import fileUri from '@ohos.file.fileuri';
@@ -28,7 +29,7 @@ struct CustomFontManagerPage {
   @StorageLink('readerFontFamily') readerFontFamily: string = '';
   @StorageLink('readerFontFilePath') readerFontFilePath: string = '';
   @StorageLink('readerFontSourceName') readerFontSourceName: string = '系统默认';
-  @StorageLink('readerFontMode') readerFontMode: string = 'system';
+  @StorageLink('readerFontMode') readerFontMode: string = 'device';
   @StorageLink('readerSystemFontFamily') readerSystemFontFamily: string = '';
   @StorageLink('readerCustomFontsRaw') readerCustomFontsRaw: string = '';
   @StorageLink('readerActiveFontFamily') readerActiveFontFamily: string = '';
@@ -242,14 +243,14 @@ struct CustomFontManagerPage {
       fontItem.familyName !== item.familyName && fontItem.filePath !== item.filePath);
     this.saveCustomFonts(next);
     if (this.readerFontFilePath === item.filePath || this.readerFontFamily === item.familyName) {
-      const systemFontFamily = this.refreshSystemFontFamily();
-      this.readerFontMode = 'system';
+      this.refreshSystemFontFamily();
+      this.readerFontMode = ReaderSettingsStore.FONT_MODE_DEVICE;
       this.readerFontFamily = '';
       this.readerFontFilePath = '';
       this.readerFontSourceName = '系统默认';
       this.readerActiveFontFamily = '';
       this.readerFontRegistered = false;
-      this.applyApplicationFont(systemFontFamily);
+      this.applyApplicationFont();
     }
     this.saveFontSettings();
     // The cloud copy is matched by the file's fingerprint, so record it before the file is gone.
@@ -297,12 +298,8 @@ struct CustomFontManagerPage {
     return '';
   }
 
-  applyApplicationFont(familyName: string): void {
-    try {
-      getContext(this).getApplicationContext().setFont(familyName || '');
-    } catch (e) {
-      console.warn('应用阅读字体失败:', e);
-    }
+  applyApplicationFont(): void {
+    ReaderFontBootstrap.applyApplicationFont(getContext(this), 'custom-font-manager');
   }
 
   async ensureDir(path: string): Promise<void> {

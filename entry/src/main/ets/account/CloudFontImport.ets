@@ -60,7 +60,7 @@ export class CloudFontImport {
     const nextRaw = JSON.stringify(data);
     await ReaderSettingsStore.saveFontSettings(context,
       AppStorage.get<string>('readerFontFamily') || '', selectedPath, selectedName,
-      AppStorage.get<string>('readerFontMode') || 'system',
+      AppStorage.get<string>('readerFontMode') || ReaderSettingsStore.FONT_MODE_DEVICE,
       AppStorage.get<string>('readerSystemFontFamily') || '', nextRaw);
     AppStorage.setOrCreate('readerCustomFontsRaw', nextRaw);
     AppStorage.setOrCreate('readerFontSourceName', selectedName);

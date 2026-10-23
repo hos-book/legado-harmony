@@ -12,6 +12,7 @@ import { ImmersiveBackButton } from '../components/ImmersiveBackButton';
 import { ReaderHeaderFooterSettings } from '../components/reader/ReaderLayoutSettings';
 import { ReaderFontHelper, ReaderFontItem } from '../utils/ReaderFontHelper';
 import { ReaderSystemFontHelper } from '../utils/ReaderSystemFontHelper';
+import { ReaderFontBootstrap } from '../utils/ReaderFontBootstrap';
 import { AdaptiveColorPicker } from '../components/AdaptiveColorPicker';
 import { ThemeRuntime } from '../theme/ThemeRuntime';
 import { EyeTurnController } from '../core/reader/EyeTurnController';
@@ -66,7 +67,7 @@ struct SettingsPage {
   @StorageLink('readerFontFamily') readerFontFamily: string = '';
   @StorageLink('readerFontFilePath') readerFontFilePath: string = '';
   @StorageLink('readerFontSourceName') readerFontSourceName: string = '系统默认';
-  @StorageLink('readerFontMode') readerFontMode: string = 'system';
+  @StorageLink('readerFontMode') readerFontMode: string = 'device';
   @StorageLink('readerSystemFontFamily') readerSystemFontFamily: string = '';
   @StorageLink('readerCustomFontsRaw') readerCustomFontsRaw: string = '';
   @StorageLink('cloudRemoteFontsRaw') cloudRemoteFontsRaw: string = '';
@@ -441,7 +442,11 @@ struct SettingsPage {
       this.readerFontFilePath = '';
       this.readerFontSourceName = '系统默认';
     }
-    this.readerFontMode = 'system';
+    // 没有自定义字体时，只有明确选过跟随主题的才保留，其余回到默认的跟随系统。
+    if (this.readerFontMode !== ReaderFontBootstrap.FONT_MODE_THEME ||
+      this.readerFontSourceName !== ReaderSettingsStore.FONT_SOURCE_NAME_THEME) {
+      this.readerFontMode = ReaderFontBootstrap.FONT_MODE_DEVICE;
+    }
     this.refreshSystemFontFamily();
     if (this.readerFontFamily) {
       this.readerFontFamily = '';
@@ -556,8 +561,8 @@ struct SettingsPage {
     if (this.readerFontFilePath) {
       return this.readerSystemFontFamily || ReaderSystemFontHelper.currentFromStorage(this.getUIContext());
     }
-    return this.readerFontFamily || ThemeRuntime.fontFamily() || this.readerSystemFontFamily ||
-      ReaderSystemFontHelper.currentFromStorage(this.getUIContext());
+    return this.readerFontFamily || ReaderFontBootstrap.defaultFontFamily(this.readerFontMode,
+      this.readerSystemFontFamily || ReaderSystemFontHelper.currentFromStorage(this.getUIContext()));
   }
 
   getPreviewBodyFontFamily(): string {
@@ -647,7 +652,7 @@ struct SettingsPage {
     this.readerFontFamily = settings.fontFamily || '';
     this.readerFontFilePath = settings.fontFilePath || '';
     this.readerFontSourceName = settings.fontSourceName || '系统默认';
-    this.readerFontMode = settings.fontMode || (settings.fontFilePath ? 'custom' : 'system');
+    this.readerFontMode = settings.fontMode || (settings.fontFilePath ? 'custom' : 'device');
     this.readerSystemFontFamily = settings.systemFontFamily || '';
     this.readerCustomFontsRaw = settings.customFontsRaw || '';
     this.readerBodyFontMode = settings.bodyFontMode || 'global';
@@ -674,22 +679,18 @@ struct SettingsPage {
     if (registeredFamily) {
       this.readerFontFamily = item.familyName;
       this.readerFontFilePath = item.filePath;
-      this.applyApplicationFont(registeredFamily);
+      this.applyApplicationFont();
       this.saveFontSettings();
     }
     return !!registeredFamily;
   }
 
-  applyApplicationFont(familyName: string): void {
-    try {
-      getContext(this).getApplicationContext().setFont(familyName || '');
-    } catch (e) {
-      console.warn('应用阅读字体失败:', e);
-    }
+  applyApplicationFont(): void {
+    ReaderFontBootstrap.applyApplicationFont(getContext(this), 'settings');
   }
 
   selectSystemFont(name: string): void {
-    const systemFontFamily = this.refreshSystemFontFamily();
+    this.refreshSystemFontFamily();
     this.readerFontMode = 'system';
     this.readerFontFamily = '';
     this.readerFontFilePath = '';
@@ -697,9 +698,23 @@ struct SettingsPage {
     this.readerActiveFontFamily = '';
     this.readerFontRegistered = false;
     this.previewFontRenderVersion++;
-    this.applyApplicationFont(ThemeRuntime.fontFamily() || systemFontFamily);
+    this.applyApplicationFont();
     this.saveFontSettings();
     HdsFeedback.showToast('已恢复主题默认字体');
+  }
+
+  selectDeviceFont(): void {
+    this.refreshSystemFontFamily();
+    this.readerFontMode = ReaderFontBootstrap.FONT_MODE_DEVICE;
+    this.readerFontFamily = '';
+    this.readerFontFilePath = '';
+    this.readerFontSourceName = '跟随系统';
+    this.readerActiveFontFamily = '';
+    this.readerFontRegistered = false;
+    this.previewFontRenderVersion++;
+    this.applyApplicationFont();
+    this.saveFontSettings();
+    HdsFeedback.showToast('已改为跟随系统字体');
   }
 
   rememberCurrentSystemFont(): void {
@@ -728,7 +743,7 @@ struct SettingsPage {
     this.readerFontFilePath = item.filePath;
     this.readerFontSourceName = item.sourceName || this.fileNameFromUri(item.filePath);
     this.previewFontRenderVersion++;
-    this.applyApplicationFont(registeredFamily);
+    this.applyApplicationFont();
     this.saveFontSettings();
     if (showToast) {
       HdsFeedback.showToast(`已选择字体：${this.readerFontSourceName}`);
@@ -891,7 +906,7 @@ struct SettingsPage {
   }
 
   readerFontOptions(): SelectOption[] {
-    const options: SelectOption[] = [{ value: '跟随主题' }];
+    const options: SelectOption[] = [{ value: '跟随系统' }, { value: '跟随主题' }];
     for (const item of this.customFonts) {
       options.push({ value: item.sourceName || item.familyName });
     }
@@ -907,7 +922,12 @@ struct SettingsPage {
   }
 
   remoteFontStart(): number {
-    return 1 + this.customFonts.length;
+    return this.customFontOptionStart() + this.customFonts.length;
+  }
+
+  /** 下拉框前两项是“跟随系统”“跟随主题”，本机字体从第 3 项开始。 */
+  customFontOptionStart(): number {
+    return 2;
   }
 
   /** 选中云端字体：静默下载导入，完成后按本机字体应用。 */
@@ -933,20 +953,22 @@ struct SettingsPage {
       for (let i = 0; i < this.customFonts.length; i++) {
         const item = this.customFonts[i];
         if (item.filePath === this.readerFontFilePath || item.familyName === this.readerFontFamily) {
-          return i + 1;
+          return i + this.customFontOptionStart();
         }
       }
-      return 0;
     }
-    return 0;
+    return this.readerFontMode === ReaderFontBootstrap.FONT_MODE_DEVICE ? 0 : 1;
   }
 
   readerFontValue(): string {
     const index = this.readerFontSelectedIndex();
-    if (index <= 0) {
+    if (index === 0) {
+      return '跟随系统';
+    }
+    if (index === 1) {
       return '跟随主题';
     }
-    const customIndex = index - 1;
+    const customIndex = index - this.customFontOptionStart();
     if (customIndex >= 0 && customIndex < this.customFonts.length) {
       const item = this.customFonts[customIndex];
       return item.sourceName || item.familyName || '自定义字体';
@@ -956,10 +978,14 @@ struct SettingsPage {
 
   selectReaderFontByIndex(index: number): void {
     if (index <= 0) {
+      this.selectDeviceFont();
+      return;
+    }
+    if (index === 1) {
       this.selectSystemFont('');
       return;
     }
-    const customIndex = index - 1;
+    const customIndex = index - this.customFontOptionStart();
     if (customIndex >= 0 && customIndex < this.customFonts.length) {
       this.selectCustomFont(this.customFonts[customIndex]);
     }
@@ -1928,7 +1954,7 @@ struct SettingsPage {
         .onSelect((index: number) => {
           if (index >= this.remoteFontStart()) {
             this.selectRemoteFont(index - this.remoteFontStart(), (customIndex: number) => {
-              this.selectReaderFontByIndex(customIndex + 1);
+              this.selectReaderFontByIndex(customIndex + this.customFontOptionStart());
             });
             return;
           }

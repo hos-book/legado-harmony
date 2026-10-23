@@ -12,6 +12,7 @@ import { CloudFileItem, CloudFileMeta, CloudTombstone } from './CloudFileModels'
 import { AppDatabase } from '../model/data/AppDatabase';
 import { LocalBookService } from '../core/book/LocalBookService';
 import { ReaderFontHelper } from '../utils/ReaderFontHelper';
+import { ReaderFontBootstrap } from '../utils/ReaderFontBootstrap';
 import { ReaderSettingsStore } from '../utils/ReaderSettingsStore';
 
 /** 云端有、本机还没下载的字体，供各字体下拉框置灰显示。 */
@@ -472,23 +473,19 @@ export class CloudAutoSync {
     AppStorage.setOrCreate('readerCustomFontsRaw', raw);
     const selected = AppStorage.get<string>('readerFontFilePath') === font.filePath;
     if (selected) {
-      AppStorage.setOrCreate('readerFontMode', 'system');
+      AppStorage.setOrCreate('readerFontMode', ReaderSettingsStore.FONT_MODE_DEVICE);
       AppStorage.setOrCreate('readerFontFamily', '');
       AppStorage.setOrCreate('readerFontFilePath', '');
       AppStorage.setOrCreate('readerFontSourceName', '系统默认');
       AppStorage.setOrCreate('readerActiveFontFamily', '');
       AppStorage.setOrCreate('readerFontRegistered', false);
-      try {
-        context.getApplicationContext().setFont(AppStorage.get<string>('readerSystemFontFamily') || '');
-      } catch (e) {
-        console.warn('[CloudAutoSync] restore system font failed:', e);
-      }
+      ReaderFontBootstrap.applyApplicationFont(context, 'cloud-font-deleted');
     }
     ReaderSettingsStore.saveFontSettings(context,
       AppStorage.get<string>('readerFontFamily') || '',
       AppStorage.get<string>('readerFontFilePath') || '',
       AppStorage.get<string>('readerFontSourceName') || '系统默认',
-      AppStorage.get<string>('readerFontMode') || 'system',
+      AppStorage.get<string>('readerFontMode') || ReaderSettingsStore.FONT_MODE_DEVICE,
       AppStorage.get<string>('readerSystemFontFamily') || '', raw).catch((error: Error) => {
       console.warn('[CloudAutoSync] save font settings failed:', error.message);
     });

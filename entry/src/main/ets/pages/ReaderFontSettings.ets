@@ -3,6 +3,7 @@ import { syncSystemBars } from '../utils/SystemBars';
 import { ReaderSettings, ReaderSettingsStore } from '../utils/ReaderSettingsStore';
 import { ReaderFontHelper, ReaderFontItem } from '../utils/ReaderFontHelper';
 import { ReaderSystemFontHelper } from '../utils/ReaderSystemFontHelper';
+import { ReaderFontBootstrap } from '../utils/ReaderFontBootstrap';
 import { AdaptiveColorPicker } from '../components/AdaptiveColorPicker';
 import { AdaptiveIconButton } from '../components/AdaptiveIconButton';
 import { AdaptiveSwitch } from '../components/AdaptiveSwitch';
@@ -75,6 +76,7 @@ struct ReaderFontSettingsPage {
   @State readerRegexFontRulesRaw: string = '';
   @StorageLink('readerFontFamily') readerFontFamily: string = '';
   @StorageLink('readerSystemFontFamily') readerSystemFontFamily: string = '';
+  @StorageLink('readerFontMode') readerFontMode: string = 'device';
   @StorageLink('readerCustomFontsRaw') readerCustomFontsRaw: string = '';
   @StorageLink('cloudRemoteFontsRaw') cloudRemoteFontsRaw: string = '';
   private downloadingRemoteFont: boolean = false;
@@ -888,7 +890,8 @@ struct ReaderFontSettingsPage {
     if (mode === 'custom' && family) {
       return this.resolveCustomFontFamily(family);
     }
-    return this.readerFontFamily || ThemeRuntime.fontFamily() || this.systemPreviewFontFamily();
+    return this.readerFontFamily ||
+      ReaderFontBootstrap.defaultFontFamily(this.readerFontMode, this.systemPreviewFontFamily());
   }
 
   bodyPreviewFontFamily(): string {

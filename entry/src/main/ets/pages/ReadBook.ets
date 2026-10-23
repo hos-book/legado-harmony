@@ -621,8 +621,12 @@ struct ReadBookPage {
   @StorageLink('readerFontFamily') @Watch('onReaderFontChanged') readerFontFamily: string = '';
   @StorageLink('readerFontFilePath') @Watch('onReaderFontChanged') readerFontFilePath: string = '';
   @StorageLink('readerSystemFontFamily') @Watch('onReaderActiveFontChanged') readerSystemFontFamily: string = '';
+  // 全局字体模式：跟随系统或跟随主题会改变没选自定义字体时的正文字体。
+  @StorageLink('readerFontMode') @Watch('onReaderActiveFontChanged') readerGlobalFontMode: string = 'device';
   @StorageLink('readerActiveFontFamily') @Watch('onReaderActiveFontChanged') readerActiveFontFamily: string = '';
   @StorageLink('readerFontRegistered') @Watch('onReaderActiveFontChanged') readerStoredFontRegistered: boolean = false;
+  // 手机换了系统字体时由 EntryAbility 加一；字体名可能不变（sans-serif），所以单独计入排版缓存键。
+  @StorageLink('systemFontRevision') @Watch('onSystemFontRevisionChanged') systemFontRevision: number = 0;
   @StorageLink('readerBodyFontMode') @Watch('onReaderFontStyleChanged') readerBodyFontMode: string = 'global';
   @StorageLink('readerBodyFontFamily') @Watch('onReaderFontStyleChanged') readerBodyFontFamily: string = '';
   @StorageLink('readerTitleFontMode') @Watch('onReaderFontStyleChanged') readerTitleFontMode: string = 'global';
@@ -6328,7 +6332,8 @@ struct ReadBookPage {
     if (this.readerActiveFontFamily) {
       return this.readerActiveFontFamily;
     }
-    return this.readerFontFamily || ThemeRuntime.fontFamily() || this.getSystemReaderFontFamily();
+    return this.readerFontFamily ||
+      ReaderFontBootstrap.defaultFontFamily(this.readerGlobalFontMode, this.getSystemReaderFontFamily());
   }
 
   getSystemReaderFontFamily(): string {
@@ -6341,7 +6346,7 @@ struct ReadBookPage {
     this.readerActiveFontFamily = '';
     this.readerStoredFontRegistered = false;
     this.readerFontRenderReady = false;
-    this.applyReaderApplicationFont(this.getSystemReaderFontFamily());
+    ReaderFontBootstrap.applyApplicationFont(getContext(this), 'readbook-clear-font');
   }
 
   async registerReaderFont(): Promise<boolean> {
@@ -6493,7 +6498,7 @@ struct ReadBookPage {
     this.readerFontFamily = settings.fontFamily || '';
     this.readerFontFilePath = settings.fontFilePath || '';
     AppStorage.setOrCreate<string>('readerFontSourceName', settings.fontSourceName || '系统默认');
-    AppStorage.setOrCreate<string>('readerFontMode', settings.fontMode || (settings.fontFilePath ? 'custom' : 'system'));
+    AppStorage.setOrCreate<string>('readerFontMode', settings.fontMode || (settings.fontFilePath ? 'custom' : 'device'));
     this.readerSystemFontFamily = settings.systemFontFamily || ReaderSystemFontHelper.currentFromStorage(this.getUIContext());
     AppStorage.setOrCreate<string>('readerSystemFontFamily', this.readerSystemFontFamily);
     AppStorage.setOrCreate<string>('readerCustomFontsRaw', settings.customFontsRaw || '');
@@ -6550,14 +6555,6 @@ struct ReadBookPage {
 
   fileNameFromPath(path: string): string {
     return ReaderFontHelper.fileNameFromPath(path);
-  }
-
-  applyReaderApplicationFont(familyName: string): void {
-    try {
-      getContext(this).getApplicationContext().setFont(familyName || '');
-    } catch (e) {
-      console.warn('应用阅读字体失败:', e);
-    }
   }
 
   setReaderContent(text: string): void {
@@ -7702,6 +7699,11 @@ struct ReadBookPage {
       this.refreshReaderTextRender();
       this.onReadLayoutChanged();
     }
+  }
+
+  onSystemFontRevisionChanged(): void {
+    this.refreshReaderTextRender();
+    this.onReadLayoutChanged();
   }
 
   onReaderExtendToStatusBarChanged(): void {
@@ -15303,7 +15305,8 @@ struct ReadBookPage {
       `${this.readerMarginLeft}_${this.readerMarginRight}_${this.readerMarginTop}_${this.readerMarginBottom}_` +
       `${this.readerBodyFontMode}_${this.readerBodyFontFamily}_${this.getBodyReaderFontFamily()}_` +
       `${this.readerTitleFontSize}_${this.readerTitleFontMode}_${this.readerTitleFontFamily}_` +
-      `${this.getTitleReaderFontFamily()}_${this.getReaderFontFamily()}_${this.hashText(regexIdentity)}`;
+      `${this.getTitleReaderFontFamily()}_${this.getReaderFontFamily()}_${this.systemFontRevision}_` +
+      `${this.hashText(regexIdentity)}`;
   }
 
   getCachedReaderPagination(chapterIndex: number, source: string): ReaderPaginationResult | null {
