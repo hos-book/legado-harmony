@@ -5,7 +5,8 @@
 - [当前内核的公共书源规则开发文档](../harmony-book-source-engine/docs/book-source-development.md)：第一部分原生书源（推荐），第二部分兼容书源（已过时）
 - [JS 函数库 `js`](../harmony-book-source-engine/docs/book-source-development.md#js-函数库-js)：表达式调用、内置函数、参数与返回值、限制
 - [后台脚本阶段 `script`](../harmony-book-source-engine/docs/book-source-development.md#脚本阶段-script)：请求、状态、登录、网页交互、完整示例与排错
-- [封面解密 coverDecode](https://github.com/wip3l/harmony-book-source-engine/blob/main/docs/book-source-development.md#加密封面-coverdecode)
+- [封面解密 coverDecode](https://github.com/wip3l/harmony-book-source-engine/blob/main/docs/book-source-development.md#加密封面-coverdecode)：含封面请求头 `coverHeaders`
+- [自定义图片字节脚本](../harmony-book-source-engine/docs/book-source-development.md#自定义图片字节脚本)：`content.imageDecode.script`，以及标准算法的 `ivPrefixBytes`、`keyEncoding`
 - [宿主图片加载接入](https://github.com/wip3l/harmony-book-source-engine/blob/main/docs/cover-decoding.md)
 - [内核 HAR 接入说明](https://github.com/wip3l/harmony-book-source-engine/blob/main/sourceengine/README.md)
 
@@ -45,7 +46,7 @@ Node 检查使用替身，不会验证真机 QuickJS、系统网页控件或实�
 
 ## 轻页的宿主差异
 
-| 能力 | 轻页现状（4.2.925） |
+| 能力 | 轻页现状（4.3.927） |
 | --- | --- |
 | 原生书源 | 支持编辑、书源设置（变量、音色、账号登录、动作按钮）、搜索、发现、详情、目录、正文、听书、视频播放与漫画图片解密；书源管理和发现页的长按菜单可进入书源设置 |
 | 原生 JS | `js` 函数库与 `script` 阶段已接入；`http`、变量、Cookie、缓存、凭据和详情书籍变量通过内核宿主接口处理，与兼容书源迁移开关独立 |
@@ -53,6 +54,8 @@ Node 检查使用替身，不会验证真机 QuickJS、系统网页控件或实�
 | 原生网页交互 | `browser.verify` 沿用内置验证页，点“完成”返回 HTML 并保存 Cookie；搜索和发现只提示“去验证”。`browser.open` 打开网页但不等待结果；`browser.render` 使用内核网页抓取宿主 |
 | 设置页脚本 | 动作按钮运行中显示状态并防止重复执行；动态选项获取失败时保留静态选项并显示原因；成功加载后若原值不在新列表中，会选中第一项并标记待保存 |
 | 封面解密 `coverDecode` | 已接入：封面下载时识别 `SourceCoverUrl` 标记，从数据库取该书源后调用 `SourceCoverLoader` 解密并缓存到本地；书架、搜索与发现结果、详情页、听书页、目录面板、阅读统计、桌面卡片和朗读媒体卡片都显示解密后的封面，解密完成前显示占位。局域网阅读的封面接口同样转发解密后的图片。解密结果按封面地址缓存，书源改了 `coverDecode` 参数后，已缓存的封面不会自动重新解密 |
+| 正文图片解密 | 漫画图片与正文插图下载后按 `content.imageDecode` 解密：支持标准算法、`ivPrefixBytes:16`、`keyEncoding`，以及在后台 QuickJS 里运行的 `imageDecode.script` 字节脚本；脚本结果按书源、脚本代码、配置和图片地址缓存，翻章或退出阅读时会取消未完成的解密 |
+| 封面请求头 `coverHeaders` | 带请求头的封面经应用下载并缓存，请求头参与缓存标识 |
 | 兼容脚本提示 `java.toast` | 详情、目录、正文阶段的提示显示为应用内提示，同一书源的同一条提示 15 秒内只显示一次；原生脚本使用 `ui.toast` |
 | 网络错误 | 域名解析失败、超时、连接被拒等直接显示真实原因，不会误报“需要登录或网页验证” |
 | 书源导入 | URL、剪贴板、本地文件（可一次多选，合并后统一勾选）和系统“打开方式” |
@@ -60,6 +63,12 @@ Node 检查使用替身，不会验证真机 QuickJS、系统网页控件或实�
 | 可选宿主端口 `SourceEngineHost` | 不安装，按内核默认行为运行；这不影响独立安装的 `NativeSourceInteraction` 界面处理器与 `BookSourceRuntimeStore` 持久化 |
 
 修改规则格式与开发说明请到内核仓库提交。轻页只维护自己的页面、导入与调试操作和宿主接入说明。
+
+## 4.3.927 验收补充
+
+- 验证漫画图片解密时分别检查标准算法、`ivPrefixBytes:16` 和 `imageDecode.script` 三种写法；脚本报错会带上 `content.imageDecode.script (函数名)`。
+- 原生书源误用 `book.url` 时调试页会提示改用 `book.bookUrl`；分类菜单可单独设置 `list`、`fields`。
+- 书源规则与脚本接口之外，本版主要是应用侧改动（会员与云同步、书架与阅读体验），不改变公共书源字段。
 
 ## 4.2.925 验收补充
 
