@@ -33,4 +33,12 @@ export class ExploreSourceOptionDataSource implements IDataSource {
   unregisterDataChangeListener(listener: DataChangeListener): void { const i = this.listeners.indexOf(listener); if (i >= 0) this.listeners.splice(i, 1); }
   replace(options: ExploreSourceOption[]): void { this.options = options.slice(); for (const listener of this.listeners) listener.onDataReloaded(); }
 }
+/** 搜索范围面板的书源列表，存的是书源在面板书源数组里的下标。 */
+export class SearchSourceIndexDataSource implements IDataSource {
+  private indexes: number[] = []; private listeners: DataChangeListener[] = [];
+  totalCount(): number { return this.indexes.length; } getData(index: number): number { return this.indexes[index]; }
+  registerDataChangeListener(listener: DataChangeListener): void { if (!this.listeners.includes(listener)) this.listeners.push(listener); }
+  unregisterDataChangeListener(listener: DataChangeListener): void { const i = this.listeners.indexOf(listener); if (i >= 0) this.listeners.splice(i, 1); }
+  replace(indexes: number[]): void { this.indexes = indexes.slice(); for (const listener of this.listeners) listener.onDataReloaded(); }
+}
 export class ExploreMetadataTask { book: SearchBook = new SearchBook(); loadVersion: number = 0; }

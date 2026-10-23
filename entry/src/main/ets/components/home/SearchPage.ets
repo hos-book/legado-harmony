@@ -4,6 +4,7 @@ import { BookSource, SearchBook, SearchKeyword, BookTypeSupport } from '@legado/
 import { AppDatabase } from '../../model/data/AppDatabase';
 import { SearchCoordinator, SearchCallback, SearchProgress } from '../../core/book/SearchCoordinator';
 import { SearchBookResultList } from '../../components/book/SearchBookResultList';
+import { SearchSourceSheet, SearchSourceSheetSession, confirmDiscardSearchSourceChanges } from './SearchSourceSheet';
 import { ImmersiveMaterialSurface } from '../../components/ImmersiveMaterialSurface';
 import { GlassTagModifier, ImmersiveMaterialRuntime, ImmersiveTagModifier } from '../../utils/ImmersiveMaterialRuntime';
 import { CollapsingHeader } from '../../utils/CollapsingHeader';
@@ -60,11 +61,8 @@ export struct SearchPage {
   @State verificationTitle: string = '';
   @State showSearchSettingsDialog: boolean = false;
   @State showSearchSourcePicker: boolean = false;
-  @State searchSourcePickerQuery: string = '';
   @State searchableSources: BookSource[] = [];
   @State sourceGroups: string[] = [];
-  @State pendingSelectedSourceUrlsRaw: string = '';
-  @State expandedSearchSourceGroups: string[] = [];
   @State searchViewportWidth: number = 360;
   /** 结果分类栏的实际宽度：沉浸材质底板需要具体数值。 */
   @State searchCategoryBarWidth: number = 0;
@@ -106,6 +104,14 @@ export struct SearchPage {
   private searchSessionId: number = 0;
   private readonly NO_SOURCE_GROUPS_SELECTED: string = '__NO_SOURCE_GROUPS_SELECTED__';
   private readonly NO_SOURCES_SELECTED: string = '__NO_SOURCES_SELECTED__';
+  private searchSourceList: BookSource[] = [];
+  private searchSourceUrlList: string[] = [];
+  private searchSourceUrlSet: Set<string> = new Set<string>();
+  private searchSourceGroupOf: string[] = [];
+  private searchSourceGroupOrder: string[] = [];
+  private searchSourceSheetInitialUrls: string[] = [];
+  private searchSourceSheetSession: SearchSourceSheetSession = new SearchSourceSheetSession();
+  private searchSourcePickerOpening: boolean = false;
 
   aboutToAppear() {
     if (this.isActive) {
@@ -245,80 +251,134 @@ export struct SearchPage {
   async loadSearchableSources(db: AppDatabase = AppDatabase.getInstance()): Promise<void> {
     try {
       const sources = await db.getEnabledBookSourcesForSearch();
-      this.searchableSources = sources.filter((source: BookSource): boolean =>
+      const searchable = sources.filter((source: BookSource): boolean =>
         !!(source.bookSourceUrl && source.bookSourceName && source.searchUrl && source.searchRule?.bookList));
-      const groups: string[] = [];
-      for (const source of this.searchableSources) {
-        const group = this.normalizeSourceGroup(source);
-        if (!groups.includes(group)) groups.push(group);
-      }
-      this.sourceGroups = groups.sort((left: string, right: string): number => left.localeCompare(right));
+      this.rebuildSearchSourceIndex(searchable);
+      this.searchableSources = searchable;
+      this.sourceGroups = this.searchSourceGroupOrder.slice();
       this.migrateLegacySearchSourceSelection();
       this.pruneSearchSourceSelection();
     } catch (e) {
       console.warn('加载可搜索书源失败:', e);
+      this.rebuildSearchSourceIndex([]);
       this.searchableSources = [];
     }
   }
 
+  /** 书源上千时，范围统计和筛选都靠这里预先算好的地址集合与分组，界面刷新里不再反复线性查找。 */
+  rebuildSearchSourceIndex(sources: BookSource[]): void {
+    const urls: string[] = [];
+    const urlSet: Set<string> = new Set<string>();
+    const groupOf: string[] = [];
+    const groupSet: Set<string> = new Set<string>();
+    for (const source of sources) {
+      const url = source.bookSourceUrl;
+      const group = this.normalizeSourceGroup(source);
+      groupOf.push(group);
+      groupSet.add(group);
+      if (url && !urlSet.has(url)) {
+        urlSet.add(url);
+        urls.push(url);
+      }
+    }
+    this.searchSourceList = sources;
+    this.searchSourceUrlList = urls;
+    this.searchSourceUrlSet = urlSet;
+    this.searchSourceGroupOf = groupOf;
+    this.searchSourceGroupOrder = Array.from(groupSet)
+      .sort((left: string, right: string): number => left.localeCompare(right));
+  }
+
   async openSearchSourcePicker(): Promise<void> {
+    if (this.showSearchSourcePicker || this.searchSourcePickerOpening) return;
+    this.searchSourcePickerOpening = true;
     this.showSearchHistoryDropdown = false;
     this.showSearchSettingsDialog = false;
-    this.searchSourcePickerQuery = '';
     try {
       await this.loadSearchableSources();
     } catch (e) {
       console.warn('刷新可搜索书源失败:', e);
     }
-    this.pendingSelectedSourceUrlsRaw = (this.singleSourceSearchUrl ? [this.singleSourceSearchUrl] :
-      this.effectiveSelectedSourceUrls()).join('\n');
-    this.expandedSearchSourceGroups = this.sourceGroups.length === 1 ? this.sourceGroups.slice() : [];
+    this.searchSourceSheetInitialUrls = this.singleSourceSearchUrl ? [this.singleSourceSearchUrl] :
+      this.effectiveSelectedSourceUrls();
+    this.searchSourceSheetSession = new SearchSourceSheetSession();
+    this.searchSourcePickerOpening = false;
     this.showSearchSourcePicker = true;
   }
 
-  filteredSearchableSources(): BookSource[] {
-    const keyword = this.searchSourcePickerQuery.trim().toLowerCase().replace(/\s+/g, '');
-    if (!keyword) return this.searchableSources;
-    return this.searchableSources.filter((source: BookSource): boolean => {
-      const text = `${source.bookSourceName}\n${source.bookSourceGroup}`.toLowerCase().replace(/\s+/g, '');
-      return text.includes(keyword);
-    });
-  }
-
-  filteredSearchSourceGroups(): string[] {
-    const result: string[] = [];
-    for (const source of this.filteredSearchableSources()) {
-      const group = this.normalizeSourceGroup(source);
-      if (!result.includes(group)) result.push(group);
+  searchSourceSheetOptions(): SheetOptions {
+    const material = ImmersiveMaterialRuntime.sheetMaterial(this.accentColor());
+    const options: SheetOptions = {
+      detents: ['75%', SheetSize.LARGE],
+      dragBar: true,
+      showClose: false,
+      scrollSizeMode: ScrollSizeMode.CONTINUOUS,
+      // 注册了 onWillDismiss 后系统默认先把下滑的面板弹回原高度再关，看着像回弹一下才收起。
+      // 接管回弹：只有要弹确认框时才弹回，否则从松手位置直接收起。
+      onWillSpringBackWhenDismiss: (action: SpringBackAction): void => {
+        if (this.searchSourceSheetSession.dirty) {
+          action.springBack();
+        }
+      },
+      // 下滑、点遮罩或返回收起时，有没保存的勾选先确认。
+      onWillDismiss: (action: DismissSheetAction): void => {
+        if (!this.searchSourceSheetSession.dirty) {
+          action.dismiss();
+          return;
+        }
+        confirmDiscardSearchSourceChanges().then((discard: boolean): void => {
+          if (discard) {
+            this.searchSourceSheetSession.dirty = false;
+            action.dismiss();
+          }
+        });
+      },
+      onDisappear: () => {
+        this.showSearchSourcePicker = false;
+      }
+    };
+    if (material !== undefined) {
+      options.backgroundColor = Color.Transparent;
+      options.systemMaterial = material;
+    } else {
+      options.blurStyle = BlurStyle.COMPONENT_THICK;
+      options.backgroundColor = ThemeRuntime.glassPanelColor(this.appDarkMode, '', 'panel');
     }
-    return result.sort((left: string, right: string): number => left.localeCompare(right));
+    return options;
   }
 
-  searchSourcesInGroup(group: string, filtered: boolean = false): BookSource[] {
-    const sources = filtered ? this.filteredSearchableSources() : this.searchableSources;
-    return sources.filter((source: BookSource): boolean => this.normalizeSourceGroup(source) === group);
+  @Builder
+  searchSourceSheet() {
+    SearchSourceSheet({
+      sources: this.searchSourceList,
+      sourceGroupOf: this.searchSourceGroupOf,
+      groups: this.searchSourceGroupOrder,
+      initialSelectedUrls: this.searchSourceSheetInitialUrls,
+      session: this.searchSourceSheetSession,
+      onDone: (urls: string[]): void => {
+        this.applySearchSourceSelection(urls);
+      },
+      onCancel: (): void => {
+        this.showSearchSourcePicker = false;
+      }
+    })
   }
 
   searchableSourceUrls(): string[] {
-    return this.searchableSources.map((source: BookSource): string => source.bookSourceUrl)
-      .filter((url: string): boolean => !!url);
+    return this.searchSourceUrlList.slice();
   }
 
   uniqueSourceUrls(urls: string[]): string[] {
     const result: string[] = [];
+    const seen: Set<string> = new Set<string>();
     for (const rawUrl of urls) {
       const url = (rawUrl || '').trim();
-      if (url && !result.includes(url)) result.push(url);
+      if (url && !seen.has(url)) {
+        seen.add(url);
+        result.push(url);
+      }
     }
     return result;
-  }
-
-  pendingSelectedSourceUrls(): string[] {
-    return this.uniqueSourceUrls(this.pendingSelectedSourceUrlsRaw.split('\n'));
-  }
-
-  setPendingSelectedSourceUrls(urls: string[]): void {
-    this.pendingSelectedSourceUrlsRaw = this.uniqueSourceUrls(urls).join('\n');
   }
 
   selectedSourceUrls(): string[] {
@@ -340,82 +400,31 @@ export struct SearchPage {
   effectiveSelectedSourceUrls(): string[] {
     if (this.isAllSearchSourcesSelected()) return this.searchableSourceUrls();
     if (this.isNoSearchSourcesSelected()) return [];
-    const available = this.searchableSourceUrls();
-    return this.selectedSourceUrls().filter((url: string): boolean => available.includes(url));
-  }
-
-  pendingSourceSelectionState(urls: string[]): number {
-    const normalized = this.uniqueSourceUrls(urls);
-    if (normalized.length === 0) return 0;
-    let selectedCount = 0;
-    for (const url of normalized) {
-      if (this.pendingSelectedSourceUrls().includes(url)) selectedCount++;
-    }
-    if (selectedCount === 0) return 0;
-    return selectedCount === normalized.length ? 2 : 1;
-  }
-
-  togglePendingAllSources(): void {
-    this.setPendingSelectedSourceUrls(this.pendingSourceSelectionState(this.searchableSourceUrls()) === 2 ?
-      [] : this.searchableSourceUrls());
-  }
-
-  togglePendingSourceGroup(group: string): void {
-    const groupUrls = this.searchSourcesInGroup(group)
-      .map((source: BookSource): string => source.bookSourceUrl);
-    if (this.pendingSourceSelectionState(groupUrls) === 2) {
-      this.setPendingSelectedSourceUrls(this.pendingSelectedSourceUrls()
-        .filter((url: string): boolean => !groupUrls.includes(url)));
-      return;
-    }
-    this.setPendingSelectedSourceUrls(this.pendingSelectedSourceUrls().concat(groupUrls));
-  }
-
-  togglePendingSource(source: BookSource): void {
-    const url = source.bookSourceUrl;
-    if (!url) return;
-    if (this.pendingSelectedSourceUrls().includes(url)) {
-      this.setPendingSelectedSourceUrls(this.pendingSelectedSourceUrls()
-        .filter((item: string): boolean => item !== url));
-    } else {
-      this.setPendingSelectedSourceUrls(this.pendingSelectedSourceUrls().concat([url]));
-    }
-  }
-
-  isSearchSourceGroupExpanded(group: string): boolean {
-    return !!this.searchSourcePickerQuery.trim() || this.expandedSearchSourceGroups.includes(group);
-  }
-
-  toggleSearchSourceGroupExpanded(group: string): void {
-    if (this.expandedSearchSourceGroups.includes(group)) {
-      this.expandedSearchSourceGroups = this.expandedSearchSourceGroups
-        .filter((item: string): boolean => item !== group);
-    } else {
-      this.expandedSearchSourceGroups = this.expandedSearchSourceGroups.concat([group]);
-    }
+    return this.selectedSourceUrls().filter((url: string): boolean => this.searchSourceUrlSet.has(url));
   }
 
   selectedSourceGroupCount(urls: string[]): number {
-    const groups: string[] = [];
-    for (const source of this.searchableSources) {
-      if (!urls.includes(source.bookSourceUrl)) continue;
-      const group = this.normalizeSourceGroup(source);
-      if (!groups.includes(group)) groups.push(group);
+    const selected: Set<string> = new Set<string>(urls);
+    const groups: Set<string> = new Set<string>();
+    for (let index = 0; index < this.searchSourceList.length; index++) {
+      if (selected.has(this.searchSourceList[index].bookSourceUrl)) groups.add(this.searchSourceGroupOf[index]);
     }
-    return groups.length;
+    return groups.size;
   }
 
   searchScopeSummary(): string {
     if (this.singleSourceSearchUrl) {
       return this.singleSourceSearchName || this.singleSourceSearchUrl;
     }
+    // 先读一次书源列表状态，书源重新加载后标签跟着刷新。
+    const total = this.searchableSources.length;
     if (this.isAllSearchSourcesSelected()) {
-      return this.searchableSources.length > 0 ? `全部书源 · ${this.searchableSources.length}` : '全部书源';
+      return total > 0 ? `全部书源 · ${total}` : '全部书源';
     }
     const selected = this.effectiveSelectedSourceUrls();
     if (selected.length === 0) return '未选择书源';
     if (selected.length === 1) {
-      const source = this.searchableSources.find((item: BookSource): boolean => item.bookSourceUrl === selected[0]);
+      const source = this.searchSourceList.find((item: BookSource): boolean => item.bookSourceUrl === selected[0]);
       return source?.bookSourceName || '1 个书源';
     }
     return `${selected.length} 个书源 · ${this.selectedSourceGroupCount(selected)} 个分组`;
@@ -441,8 +450,7 @@ export struct SearchPage {
 
   pruneSearchSourceSelection(): void {
     if (this.isAllSearchSourcesSelected() || this.isNoSearchSourcesSelected()) return;
-    const available = this.searchableSourceUrls();
-    const selected = this.selectedSourceUrls().filter((url: string): boolean => available.includes(url));
+    const selected = this.selectedSourceUrls().filter((url: string): boolean => this.searchSourceUrlSet.has(url));
     const normalized = selected.length > 0 ? selected.join('\n') : this.NO_SOURCES_SELECTED;
     if (normalized !== this.selectedSourceUrlsRaw) {
       this.selectedSourceUrlsRaw = normalized;
@@ -450,11 +458,10 @@ export struct SearchPage {
     }
   }
 
-  applySearchSourceSelection(): void {
-    const available = this.searchableSourceUrls();
-    const selected = this.pendingSelectedSourceUrls()
-      .filter((url: string): boolean => available.includes(url));
-    this.selectedSourceUrlsRaw = selected.length === available.length ? '' :
+  applySearchSourceSelection(urls: string[]): void {
+    const selected = this.uniqueSourceUrls(urls)
+      .filter((url: string): boolean => this.searchSourceUrlSet.has(url));
+    this.selectedSourceUrlsRaw = selected.length === this.searchSourceUrlList.length ? '' :
       (selected.length > 0 ? selected.join('\n') : this.NO_SOURCES_SELECTED);
     this.selectedSourceGroupsRaw = '';
     this.singleSourceSearchUrl = '';
@@ -706,9 +713,6 @@ export struct SearchPage {
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
 
 
-      if (this.showSearchSourcePicker) {
-        this.searchSourcePickerDialog()
-      }
 
 
     }
@@ -758,7 +762,7 @@ export struct SearchPage {
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .flexShrink(1)
-          SymbolGlyph($r('sys.symbol.chevron_down'))
+          SymbolGlyph(this.showSearchSourcePicker ? $r('sys.symbol.chevron_up') : $r('sys.symbol.chevron_down'))
             .fontSize(14)
             .fontColor([this.secondaryTextColor()])
         }
@@ -770,11 +774,13 @@ export struct SearchPage {
         .accessibilityText(`搜索范围：${this.searchScopeSummary()}，选择书源`)
         .onClick(() => {
           this.showSearchHistoryDropdown = false;
+          this.hideKeyboard();
           this.openSearchSourcePicker();
         })
       }
     }
     .margin({ left: AppSpacing.MD, right: 10 })
+    .bindSheet($$this.showSearchSourcePicker, this.searchSourceSheet(), this.searchSourceSheetOptions())
   }
 
   isSearchScopeNarrowed(): boolean {
@@ -1111,197 +1117,6 @@ export struct SearchPage {
     .padding({ top: AppSpacing.SM, bottom: AppSpacing.XS })
   }
 
-  @Builder
-  searchSourcePickerDialog() {
-    Stack({ alignContent: Alignment.Center }) {
-      Column()
-        .width('100%')
-        .height('100%')
-        .backgroundColor(this.appDarkMode ? '#52000000' : '#26FFFFFF')
-        .backdropBlur(ThemeRuntime.glassBlur('popover', 18))
-        .onClick(() => {
-          this.showSearchSourcePicker = false;
-        })
-
-      Column() {
-      Row() {
-        Column({ space: AppSpacing.XXS }) {
-          Text('搜索范围')
-            .fontSize(AppFontSize.SUBTITLE)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(this.primaryTextColor())
-          Text(`已选 ${this.pendingSelectedSourceUrls().length} / ${this.searchableSources.length} 个书源`)
-            .fontSize(AppFontSize.CAPTION)
-            .fontColor(this.subTextColor())
-        }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Start)
-        Text('完成')
-          .fontSize(AppFontSize.BODY)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.buttonColor())
-          .height(36)
-          .padding({ left: AppSpacing.XL, right: AppSpacing.XS })
-          .textAlign(TextAlign.Center)
-          .onClick(() => {
-            this.applySearchSourceSelection();
-          })
-      }
-      .width('100%')
-      .height(44)
-      .alignItems(VerticalAlign.Center)
-
-      TextInput({ placeholder: '搜索书源或分组', text: this.searchSourcePickerQuery })
-        .width('100%')
-        .height(40)
-        .fontSize(AppFontSize.BODY)
-        .fontColor(this.primaryTextColor())
-        .placeholderColor(this.subTextColor())
-        .backgroundColor(ThemeRuntime.glassPanelColor(this.appDarkMode,
-          ThemeRuntime.inputColor(this.appDarkMode), 'button'))
-        .backdropBlur(ThemeRuntime.glassBlur('button', 12))
-        .border({ width: ThemeRuntime.glassBorderWidth('button'),
-          color: ThemeRuntime.glassBorderColor(this.appDarkMode, 'button') })
-        .borderRadius(20)
-        .padding({ left: AppSpacing.LG, right: AppSpacing.LG })
-        .onChange((value: string) => {
-          this.searchSourcePickerQuery = value;
-        })
-
-      Row() {
-        Toggle({ type: ToggleType.Checkbox, isOn: this.pendingSourceSelectionState(this.searchableSourceUrls()) === 2 })
-          .selectedColor(this.buttonColor())
-          .hitTestBehavior(HitTestMode.None)
-        Column({ space: AppSpacing.XXS }) {
-          Text('全部书源')
-            .fontSize(AppFontSize.BODY_LARGE)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(this.primaryTextColor())
-          Text(`已启用且支持搜索的 ${this.searchableSources.length} 个书源`)
-            .fontSize(AppFontSize.CAPTION)
-            .fontColor(this.subTextColor())
-        }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Start)
-        Text(this.pendingSourceSelectionState(this.searchableSourceUrls()) === 2 ? '取消全选' : '全选')
-          .fontSize(AppFontSize.CAPTION)
-          .fontColor(this.buttonColor())
-      }
-      .width('100%')
-      .constraintSize({ minHeight: 56 })
-      .padding({ left: AppSpacing.LG, right: AppSpacing.LG, top: AppSpacing.MD, bottom: AppSpacing.MD })
-      .margin({ top: AppSpacing.MD, bottom: AppSpacing.MD })
-      .alignItems(VerticalAlign.Center)
-      .onClick(() => this.togglePendingAllSources())
-
-      List({ space: AppSpacing.MD }) {
-        ForEach(this.filteredSearchSourceGroups(), (group: string) => {
-          ListItem() {
-            Column() {
-              Row() {
-                Row() {
-                  Toggle({ type: ToggleType.Checkbox, isOn: this.pendingSourceSelectionState(this.searchSourcesInGroup(group)
-                    .map((source: BookSource): string => source.bookSourceUrl)) === 2 })
-                    .selectedColor(this.buttonColor())
-                    .hitTestBehavior(HitTestMode.None)
-                }
-                .height(48)
-                .padding({ left: AppSpacing.LG, right: AppSpacing.MD })
-                .onClick(() => this.togglePendingSourceGroup(group))
-
-                Column({ space: AppSpacing.XXS }) {
-                  Text(group)
-                    .fontSize(AppFontSize.BODY_LARGE)
-                    .fontWeight(FontWeight.Medium)
-                    .fontColor(this.primaryTextColor())
-                    .maxLines(1)
-                    .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  Text(`${this.searchSourcesInGroup(group).filter((source: BookSource): boolean =>
-                    this.pendingSelectedSourceUrls().includes(source.bookSourceUrl)).length} / ` +
-                    `${this.searchSourcesInGroup(group).length} 个书源`)
-                    .fontSize(AppFontSize.CAPTION)
-                    .fontColor(this.subTextColor())
-                }
-                .layoutWeight(1)
-                .alignItems(HorizontalAlign.Start)
-
-                SymbolGlyph(this.isSearchSourceGroupExpanded(group) ?
-                  $r('sys.symbol.chevron_up') : $r('sys.symbol.chevron_down'))
-                  .fontSize(16)
-                  .fontColor([this.subTextColor()])
-                  .width(44)
-                  .height(48)
-                  .onClick(() => this.toggleSearchSourceGroupExpanded(group))
-              }
-              .width('100%')
-              .alignItems(VerticalAlign.Center)
-
-              if (this.isSearchSourceGroupExpanded(group)) {
-                Divider()
-                  .color(this.glassBorderColor())
-                  .margin({ left: 44, right: AppSpacing.LG })
-
-                ForEach(this.searchSourcesInGroup(group, !!this.searchSourcePickerQuery.trim()),
-                  (source: BookSource) => {
-                  Row() {
-                    Toggle({ type: ToggleType.Checkbox, isOn: this.pendingSourceSelectionState([source.bookSourceUrl]) === 2 })
-                      .selectedColor(this.buttonColor())
-                      .hitTestBehavior(HitTestMode.None)
-                    Text(source.bookSourceName || source.bookSourceUrl)
-                      .fontSize(AppFontSize.BODY)
-                      .fontColor(this.secondaryTextColor())
-                      .maxLines(1)
-                      .textOverflow({ overflow: TextOverflow.Ellipsis })
-                      .layoutWeight(1)
-                      .margin({ left: AppSpacing.MD })
-                  }
-                  .width('100%')
-                  .height(44)
-                  .padding({ left: 30, right: AppSpacing.LG })
-                  .alignItems(VerticalAlign.Center)
-                  .onClick(() => this.togglePendingSource(source))
-                }, (source: BookSource) => source.bookSourceUrl)
-              }
-            }
-            .width('100%')
-          }
-        }, (group: string) => group)
-
-        if (this.filteredSearchSourceGroups().length === 0) {
-          ListItem() {
-            Text('没有匹配的书源')
-              .fontSize(AppFontSize.BODY)
-              .fontColor(this.subTextColor())
-              .width('100%')
-              .height(96)
-              .textAlign(TextAlign.Center)
-          }
-        }
-      }
-      .width('100%')
-      .layoutWeight(1)
-      .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
-    }
-      .width(Math.min(520, Math.max(280, this.searchViewportWidth - 32)))
-      .height('66%')
-      .padding(AppSpacing.XL)
-      .borderRadius(ThemeRuntime.glassCornerRadius(16, 'overlay'))
-      .backgroundColor(ThemeRuntime.dropdownPanelColor(this.appDarkMode, '', 'overlay'))
-      .backdropBlur(ThemeRuntime.glassBlur('overlay', 28))
-      .border({ width: ThemeRuntime.glassBorderWidth('overlay'),
-        color: ThemeRuntime.glassBorderColor(this.appDarkMode, 'overlay') })
-      .shadow({ radius: ThemeRuntime.glassShadowRadius('overlay'), color: ThemeRuntime.glassShadowColor(this.appDarkMode, 'overlay'), offsetX: ThemeRuntime.glassShadowOffsetX('overlay'), offsetY: ThemeRuntime.glassShadowOffsetY('overlay') })
-      .onClick(() => {
-      })
-    }
-    .width('100%')
-    .height('100%')
-    .zIndex(20)
-  }
-
-
-
-
   searchFromHistory(keyword: string): void {
     this.keyword = keyword;
     this.hideKeyboard();
@@ -1415,9 +1230,9 @@ export struct SearchPage {
           return;
         }
         if (!this.isAllSearchSourcesSelected()) {
-          const selectedUrls = this.effectiveSelectedSourceUrls();
-          targetSources.push(...this.searchableSources.filter((source: BookSource): boolean =>
-            selectedUrls.includes(source.bookSourceUrl)));
+          const selectedUrls: Set<string> = new Set<string>(this.effectiveSelectedSourceUrls());
+          targetSources.push(...this.searchSourceList.filter((source: BookSource): boolean =>
+            selectedUrls.has(source.bookSourceUrl)));
         }
       }
 
