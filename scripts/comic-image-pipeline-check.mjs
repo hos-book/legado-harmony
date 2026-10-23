@@ -13,7 +13,11 @@ try {
   const scriptRuntime = imageScriptTestRuntime();
   const sandbox = vm.createContext({
     console, Uint8Array, ArrayBuffer,
-    util: { TextEncoder: class { encodeInto(text) { return new TextEncoder().encode(text); } } },
+    util: { TextEncoder: class { encodeInto(text) { return new TextEncoder().encode(text); } },
+      Base64Helper: class { decodeSync(text) {
+        if (!/^[A-Za-z0-9+/]*={0,2}$/.test(text)) throw new Error('bad base64');
+        return new Uint8Array(Buffer.from(text, 'base64'));
+      } } },
     NativeSourceSpec: mods.NativeSourceSpec,
     NativeImageScriptRunner: scriptRuntime.runner,
     digestHashHex: (algorithm, text) => crypto.createHash(algorithm).update(text).digest('hex'),
@@ -35,11 +39,13 @@ try {
       }
     }
   });
-  for (const file of ['core/nativesource/SourceImageDecoder.ts', 'core/book/ComicImagePipeline.ts']) {
+  for (const file of ['core/nativesource/SourceImageDecoder.ts', 'core/book/ComicImagePipeline.ts',
+    'core/book/ReaderImageMarker.ts']) {
     const code = stripTypeScriptTypes(readEtsModule(file).replace(/^import .*;\r?\n/gm, '').replace(/^export /gm, ''), {mode:'strip'});
     vm.runInContext(code, sandbox);
   }
-  const { pipeline, decoder } = vm.runInContext('({pipeline:ComicImagePipeline,decoder:SourceImageDecoder})',sandbox);
+  const { pipeline, decoder, marker } = vm.runInContext(
+    '({pipeline:ComicImagePipeline,decoder:SourceImageDecoder,marker:ReaderImageMarker})',sandbox);
   const png = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000b49444154789c636000020000050001a5f645400000000049454e44ae426082','hex');
   const source = {bookSourceUrl:'https://example.com',contentRule:{imageDecode:''}};
   let downloads = 0;
@@ -109,6 +115,32 @@ try {
   const headersChanged=await pipeline.materialize(http,source,raw('identity',prefix,{Referer:'https://b.example'}));
   assert.notEqual(original,changed); assert.notEqual(original,headersChanged);
   await assert.rejects(decoder.decodeAsync(new Uint8Array(20*1024*1024+1),{...prefix,keyEncoding:'hex'},20*1024*1024),/byte limit/);
+  // data: images become cache files without a download, and imageDecode applies to them as well.
+  const beforeData=downloads;
+  const dataUrl=`data:image/png;base64,${png.toString('base64')}`;
+  const dataPath=await pipeline.materialize(http,source,dataUrl,true);
+  assert(dataPath.startsWith('/cache/comic_images/') && dataPath.endsWith('.png'),dataPath);
+  assert.deepEqual(files.get(dataPath),png);
+  assert.equal(await pipeline.materialize(http,source,dataUrl,true),dataPath,'data: cache hit');
+  const urlSafe=`data:image/png;base64,${png.toString('base64url')}`;
+  assert.deepEqual(files.get(await pipeline.materialize(http,source,urlSafe,true)),png);
+  const encryptedData=`data:image/jpeg;base64,${encrypt(png,key,iv).toString('base64')},${JSON.stringify({decode:fixed})}`;
+  assert.deepEqual(files.get(await pipeline.materialize(http,source,encryptedData,true)),png);
+  assert.equal(downloads,beforeData,'data: images never hit the network');
+  await assert.rejects(pipeline.materialize(http,source,'data:image/png;base64,',true),/没有数据/);
+  await assert.rejects(pipeline.materialize(http,source,'data:image/png;base64,@@@@',true),/Base64/);
+  const svg=`data:image/svg+xml;base64,${Buffer.from('<svg/>').toString('base64')}`;
+  assert.equal(await pipeline.materialize(http,source,svg,true),svg,'unrecognised embedded formats stay inline');
+  // A failed image becomes a marker that carries its reason; such chapters are detected before caching.
+  const failed=marker.create(marker.failureSource('正文图片解密失败：密钥为空 [x]'));
+  assert.equal(marker.failureReason(marker.parse(failed).source),'正文图片解密失败：密钥为空 [x]');
+  assert.ok(marker.hasFailure(`前文
+
+${failed}
+
+后文`));
+  assert.ok(!marker.hasFailure(marker.create(dataPath)));
+  assert.equal(marker.failureReason(dataPath),'');
   const definition = {nativeSource:1,name:'script',url:source.bookSourceUrl,type:'comic',
     search:{url:'/search',list:'$.items[*]',fields:{name:'$.name',bookUrl:'$.url'}},
     js:'function decodeImage(bytes,ctx){return bytes.subarray(ctx.params.offset)}',
@@ -154,5 +186,5 @@ try {
   definition.content.imageDecode.processPlainImages=false; scripted.jsLib=mods.NativeSourceSpec.pack(definition);
   await assert.rejects(pipeline.materialize(cancelHttp,scripted,raw('cancel',decodeScript),true,()=>stop),/已取消/);
   assert.equal(files.size,fileCount);
-  console.log('comic-image-pipeline-check: per-image IVs, AES 128/192/256, fixed IV/CTR/3DES, plaintext/HEIF, cache identity and failures passed');
+  console.log('comic-image-pipeline-check: per-image IVs, AES 128/192/256, fixed IV/CTR/3DES, plaintext/HEIF, data: images, cache identity, failure markers and failures passed');
 } finally { mods.cleanup(); }

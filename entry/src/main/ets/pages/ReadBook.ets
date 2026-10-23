@@ -13208,7 +13208,8 @@ struct ReadBookPage {
   }
 
   readerImageUriForSource(path: string): string {
-    if (!path) return '';
+    // 获取正文时就失败的图片（ReaderImageMarker.FAILURE_SCHEME）没有可加载的地址。
+    if (!path || path.startsWith('legado-image-error:')) return '';
     if (/^(?:https?:|data:|file:)/i.test(path)) return path;
     try {
       return fileUri.getUriFromPath(path);

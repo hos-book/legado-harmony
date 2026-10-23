@@ -99,9 +99,11 @@ export class ComicImagePipeline {
       !/^AES\/CBC\/PKCS(?:5|7)Padding$/i.test(spec.decodeAlgorithm))) {
       throw new Error('正文图片解密配置无效：ivPrefixBytes 必须为 16，使用 AES-CBC 且不能同时设置 iv');
     }
-    if (!/^https?:\/\//i.test(spec.url)) return spec.url || raw;
+    // data: 内嵌图片也落成缓存文件：正文里不必带着几十上百 KB 的 Base64，解密配置对它同样生效。
+    const embedded = this.dataImageBytes(spec.url);
+    if (!embedded && !/^https?:\/\//i.test(spec.url)) return spec.url || raw;
     const decodeRule = source.contentRule?.imageDecode || '';
-    if (!forceLocal && !spec.hasOptions && !decodeRule) return spec.url;
+    if (!embedded && !forceLocal && !spec.hasOptions && !decodeRule) return spec.url;
     const cacheDir = AppStorage.get<string>('appCacheDir') || '';
     if (!cacheDir) {
       if (spec.decodeAlgorithm || spec.decodeScript) throw new Error('正文图片解密失败：图片缓存目录不可用');
@@ -109,7 +111,9 @@ export class ComicImagePipeline {
     }
     const dir = `${cacheDir}/comic_images`;
     this.ensureDir(dir);
-    const cacheIdentity = `${source.bookSourceUrl}\n${spec.url}\n${decodeRule}` +
+    // data: 地址可能很长，缓存标识里只放它的摘要。
+    const urlIdentity = embedded ? `data:${digestHashHex('SHA256', spec.url)}` : spec.url;
+    const cacheIdentity = `${source.bookSourceUrl}\n${urlIdentity}\n${decodeRule}` +
       `\n${spec.decodeAlgorithm}\n${spec.decodeKey}\n${spec.decodeIv}\n${spec.decodeIvPrefixBytes || 0}` +
       `\n${JSON.stringify(spec.headers)}`;
     const cacheKey = spec.decodeScript ? digestHashHex('SHA256', JSON.stringify({
@@ -120,26 +124,30 @@ export class ComicImagePipeline {
     const existing = this.findExisting(basePath);
     if (existing) return existing;
 
-    const response = await http.executeBinary({
-      cookieSource: source.bookSourceUrl,
-      cancelCheck: cancelled,
-      url: spec.url,
-      method: 'GET',
-      headers: {
-        'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
-        ...spec.headers
-      },
-      connectTimeout: 15000,
-      readTimeout: 30000
-    }, this.MAX_IMAGE_BYTES);
-    if (cancelled()) throw new Error(HttpClient.CANCELLED_ERROR);
-    if (!response.success || response.data.length === 0) {
-      if (spec.decodeAlgorithm || spec.decodeScript) throw new Error(`正文图片下载失败（HTTP ${response.statusCode}）`);
-      console.warn(`[ComicImagePipeline] download failed status=${response.statusCode} error=${response.error || ''}`);
-      return spec.url;
+    let bytes: Uint8Array;
+    if (embedded) {
+      bytes = embedded;
+    } else {
+      const response = await http.executeBinary({
+        cookieSource: source.bookSourceUrl,
+        cancelCheck: cancelled,
+        url: spec.url,
+        method: 'GET',
+        headers: {
+          'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+          ...spec.headers
+        },
+        connectTimeout: 15000,
+        readTimeout: 30000
+      }, this.MAX_IMAGE_BYTES);
+      if (cancelled()) throw new Error(HttpClient.CANCELLED_ERROR);
+      if (!response.success || response.data.length === 0) {
+        if (spec.decodeAlgorithm || spec.decodeScript) throw new Error(`正文图片下载失败（HTTP ${response.statusCode}）`);
+        console.warn(`[ComicImagePipeline] download failed status=${response.statusCode} error=${response.error || ''}`);
+        return spec.url;
+      }
+      bytes = response.data;
     }
-
-    let bytes = response.data;
     if (spec.decodeScript && (spec.processPlainImages || !this.looksLikeImage(bytes))) {
       try {
         bytes = await NativeImageScriptRunner.run(scriptCode, spec.decodeScript, bytes,
@@ -229,6 +237,30 @@ export class ComicImagePipeline {
     const call = (rule || '').match(
       /createSymmetricCrypto\s*\(\s*(['"])[^'"]+\1\s*,\s*[^,]+,\s*(['"])(.*?)\2/);
     return call && call[3] ? call[3] : fallback;
+  }
+
+  /** data:image/...;base64, 地址解出的字节；不是这种地址时返回 null，数据损坏或过大时抛出原因。 */
+  private static dataImageBytes(url: string): Uint8Array | null {
+    const header = /^data:image\/[\w.+-]+(?:;[\w-]+=[^;,]*)*;base64,/i.exec(url || '');
+    if (!header) return null;
+    let payload = url.substring(header[0].length).replace(/\s+/g, '');
+    if (payload.includes('%')) {
+      try {
+        payload = decodeURIComponent(payload);
+      } catch (_) {
+      }
+    }
+    payload = payload.replace(/-/g, '+').replace(/_/g, '/');
+    if (!payload) throw new Error('内嵌图片没有数据');
+    if (payload.length > Math.ceil(this.MAX_IMAGE_BYTES / 3) * 4 + 4) throw new Error('内嵌图片数据超过 20 MiB');
+    let bytes: Uint8Array;
+    try {
+      bytes = new util.Base64Helper().decodeSync(payload);
+    } catch (_) {
+      throw new Error('内嵌图片的 Base64 数据无效');
+    }
+    if (!bytes || bytes.length === 0) throw new Error('内嵌图片的 Base64 数据无效');
+    return bytes;
   }
 
   private static findOptionIndex(value: string): number {

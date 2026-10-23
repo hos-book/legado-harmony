@@ -48,8 +48,16 @@ const busy=run('return bytes',input,ctx,()=>stop);
 setTimeout(()=>{stop=true;},10);
 await assert.rejects(busy,/已取消/);
 const queued=Array.from({length:4},()=>run('return bytes'));
-await assert.rejects(run('return bytes'),/队列已满/);
-await Promise.all(queued);
+// A full queue makes the next image wait for room (current chapter plus a preloading neighbour), not fail.
+let overflowCancelled=false;
+const overflowCancel=run('return bytes',input,ctx,()=>overflowCancelled);
+const overflow=run('return bytes');
+const assertOverflowCancel=assert.rejects(overflowCancel,/已取消/);
+overflowCancelled=true;
+await assertOverflowCancel;
+const drained=await Promise.all([...queued,overflow]);
+assert.equal(drained.length,5);
+assert.ok(drained.every((bytes)=>bytes[0]===99));
 stats.delay=0;
 assert.equal((await run('return bytes'))[0],99);
 assert.equal(stats.maxActive,1);

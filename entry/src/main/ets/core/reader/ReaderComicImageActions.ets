@@ -1,6 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import image from '@ohos.multimedia.image';
 import { HdsFeedback } from '../../utils/HdsFeedback';
+import { ReaderImageMarker } from '../book/ReaderImageMarker';
 import { ReaderComicImageExport, ReaderComicSnapshotProvider } from './ReaderComicImageExport';
 
 /** 阅读页为漫画图片操作提供的环境。 */
@@ -40,6 +41,20 @@ export class ReaderComicImageActions {
 
   async showMenu(source: string, reload: () => void, snapshotId: string): Promise<void> {
     if (!source) return;
+    const failure = ReaderImageMarker.failureReason(source);
+    if (failure) {
+      // 获取正文时就没拿到这张图，没有可保存的内容；只能重新抓取本章。
+      try {
+        await this.host.uiContext().getPromptAction().showActionMenu({
+          title: failure.length > 60 ? `${failure.substring(0, 60)}…` : failure,
+          buttons: [{ text: '刷新本章', color: this.host.accentColor() }]
+        });
+      } catch (_) {
+        return;
+      }
+      if (!this.host.busy()) this.host.refreshCurrentChapter();
+      return;
+    }
     const snapshot: ReaderComicSnapshotProvider | null = snapshotId ?
       (): Promise<image.PixelMap> => this.host.uiContext().getComponentSnapshot().get(snapshotId) : null;
     let index = -1;

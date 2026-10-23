@@ -6,6 +6,7 @@ import { CoverUrlNormalizer } from '../../utils/CoverUrlNormalizer';
 import { LocalChapterContentLoader } from './LocalChapterContentLoader';
 import { BookSourceInteractionPostProcessor } from './BookSourceInteractionPostProcessor';
 import { ReaderOpenTrace } from '../../utils/ReaderOpenTrace';
+import { ReaderImageMarker } from './ReaderImageMarker';
 
 export class ReadBookEngine {
   private static inst: ReadBookEngine | null = null;
@@ -576,6 +577,8 @@ export class ReadBookEngine {
     if (text && !this.isInvalidChapterContent(text)) {
       this.putChapterCache(idx, text);
       ReaderOpenTrace.mark(sessionBookUrl, 'content-network-ready', `chapter=${idx} length=${text.length}`);
+      // 有图片没下载/解密成功时只留在内存里：写进正文缓存的话，失败会一直留着，重新打开也不再重试。
+      if (ReaderImageMarker.hasFailure(text)) return text;
       try {
         await appDb.saveCachedChapterContent(sessionBookUrl, chapter, text);
       } catch (err) {
@@ -623,7 +626,8 @@ export class ReadBookEngine {
   async cacheChapter(idx: number, shouldCancel: (() => boolean) | null = null): Promise<boolean> {
     if (shouldCancel && shouldCancel()) return false;
     const text = await this.fetchContent(idx, shouldCancel);
-    return !(shouldCancel && shouldCancel()) && !!text;
+    // 有图片失败的章节没有写入正文缓存，算作这一章没缓存成功。
+    return !(shouldCancel && shouldCancel()) && !!text && !ReaderImageMarker.hasFailure(text);
   }
 
   cancelPendingRequests(): void {

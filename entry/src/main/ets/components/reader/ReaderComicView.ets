@@ -30,12 +30,18 @@ export class ReaderComicImageSizes {
     return ratio;
   }
 
+  /** 不是本地文件（网络地址或内嵌 data: 数据），不能按文件探测尺寸。 */
   static isRemote(source: string): boolean {
     return /^(?:https?:|data:)/i.test(source || '');
   }
 
+  /** 真正要走网络的地址；data: 内嵌数据不算，出错时不能提示成网络问题。 */
+  static isNetwork(source: string): boolean {
+    return /^https?:/i.test(source || '');
+  }
+
   static uri(source: string): string {
-    if (!source) return '';
+    if (!source || ReaderImageMarker.failureReason(source)) return '';
     if (/^(?:https?:|data:|file:)/i.test(source)) return source;
     try {
       return fileUri.getUriFromPath(source);
@@ -151,6 +157,8 @@ export struct ReaderComicImageItem {
   @State private loadToken: number = 0;
   /** 服务器拒绝（401/403），多为签名地址过期，重试无用，需要重新抓取本章。 */
   @State private denied: boolean = false;
+  /** 正文获取时这张图已下载/解密失败：只显示原因，不再加载。 */
+  @State private failure: string = '';
   private source: string = '';
   private registeredRetryKey: string = '';
   private readonly retryHandler: () => void = (): void => this.retry();
@@ -192,10 +200,15 @@ export struct ReaderComicImageItem {
   private resetForMarker(): void {
     const info = ReaderImageMarker.parse(this.marker);
     this.source = info.source;
+    this.failure = ReaderImageMarker.failureReason(info.source);
     this.loaded = false;
     this.broken = false;
     this.denied = false;
     this.unregisterRetry();
+    if (this.failure) {
+      this.ratio = 0;
+      return;
+    }
     let ratio = info.width > 0 && info.height > 0 ? info.height / info.width : 0;
     if (ratio <= 0) ratio = ReaderComicImageSizes.ratio(this.source);
     this.ratio = ratio;
@@ -232,6 +245,7 @@ export struct ReaderComicImageItem {
       this.retryRegistry.register(this.retryKey, this.retryHandler);
     }
     const remote = ReaderComicImageSizes.isRemote(this.source);
+    const origin = ReaderComicImageSizes.isNetwork(this.source) ? '网络' : (remote ? '内嵌数据' : '本地');
     let exists = false;
     if (!remote && this.source) {
       try {
@@ -240,8 +254,8 @@ export struct ReaderComicImageItem {
         exists = false;
       }
     }
-    console.error(`[ReaderComic] 图片加载失败 来源=${remote ? '网络' : '本地'} 文件存在=${exists} ` +
-      `message=${error?.message || ''} 路径=${this.source}`);
+    console.error(`[ReaderComic] 图片加载失败 来源=${origin} 文件存在=${exists} ` +
+      `message=${error?.message || ''} 路径=${remote ? this.source.substring(0, 160) : this.source}`);
   }
 
   private imageWidth(): number {
@@ -268,52 +282,75 @@ export struct ReaderComicImageItem {
 
   build() {
     Stack({ alignContent: Alignment.Center }) {
-      ForEach([this.loadToken], (_token: number) => {
-        Image(ReaderComicImageSizes.uri(this.source))
-          .width(this.boxed() ? '100%' : this.imageWidth())
-          .height(this.boxed() ? '100%' : this.imageHeight() + this.overlap())
-          // 原图比例尚未返回时保持 Contain；比例已知后容器严格等比，Fill 只消除边缘 letterbox。
-          .objectFit(this.boxed() || this.ratio <= 0 ? ImageFit.Contain : ImageFit.Fill)
-          .draggable(false)
-          .onComplete((event) => {
-            if (!event) return;
-            if (event.width > 0 && event.height > 0) {
-              const ratio = ReaderComicImageSizes.remember(this.source, event.width, event.height);
-              if (ratio > 0 && Math.abs(ratio - this.ratio) >= 0.0001) this.ratio = ratio;
-              this.loaded = true;
-            }
-          })
-          .onError((error: ImageError) => this.markBroken(error))
-          .id(this.retryKey ? ReaderComicImageItem.snapshotId(this.retryKey) : '')
-      }, (token: number) => `${token}`)
-
-      if (this.broken) {
+      if (this.failure) {
         Column({ space: AppSpacing.SM }) {
-          Text('⚠ 图片加载失败')
+          Text('⚠ 图片未能显示')
             .fontSize(AppFontSize.BODY)
             .fontColor(this.hintColor)
-          Text(this.denied ? '图片地址已失效，请点右上角刷新本章' :
-            (ReaderComicImageSizes.isRemote(this.source) ? '网络图片加载失败，点击重试' :
-              '文件可能已被移动、删除或尚未重新导入'))
+          Text(this.failure)
             .fontSize(AppFontSize.CAPTION)
             .fontColor(this.hintColor)
             .opacity(0.8)
+            .maxLines(4)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .textAlign(TextAlign.Center)
+          Text('点右上角刷新本章可重新获取')
+            .fontSize(AppFontSize.CAPTION)
+            .fontColor(this.hintColor)
+            .opacity(0.6)
         }
         .width('100%')
-        .onClick(() => this.retry())
-      } else if (!this.loaded) {
-        Column({ space: AppSpacing.MD }) {
-          LoadingProgress()
-            .width(28)
-            .height(28)
-            .color(this.hintColor)
-          if (this.pageLabel) {
-            Text(this.pageLabel)
+        .padding({ left: AppSpacing.LG, right: AppSpacing.LG })
+        .hitTestBehavior(HitTestMode.None)
+      } else {
+        ForEach([this.loadToken], (_token: number) => {
+          Image(ReaderComicImageSizes.uri(this.source))
+            .width(this.boxed() ? '100%' : this.imageWidth())
+            .height(this.boxed() ? '100%' : this.imageHeight() + this.overlap())
+            // 原图比例尚未返回时保持 Contain；比例已知后容器严格等比，Fill 只消除边缘 letterbox。
+            .objectFit(this.boxed() || this.ratio <= 0 ? ImageFit.Contain : ImageFit.Fill)
+            .draggable(false)
+            .onComplete((event) => {
+              if (!event) return;
+              if (event.width > 0 && event.height > 0) {
+                const ratio = ReaderComicImageSizes.remember(this.source, event.width, event.height);
+                if (ratio > 0 && Math.abs(ratio - this.ratio) >= 0.0001) this.ratio = ratio;
+                this.loaded = true;
+              }
+            })
+            .onError((error: ImageError) => this.markBroken(error))
+            .id(this.retryKey ? ReaderComicImageItem.snapshotId(this.retryKey) : '')
+        }, (token: number) => `${token}`)
+
+        if (this.broken) {
+          Column({ space: AppSpacing.SM }) {
+            Text('⚠ 图片加载失败')
+              .fontSize(AppFontSize.BODY)
+              .fontColor(this.hintColor)
+            Text(this.denied ? '图片地址已失效，请点右上角刷新本章' :
+              (ReaderComicImageSizes.isNetwork(this.source) ? '网络图片加载失败，点击重试' :
+                (ReaderComicImageSizes.isRemote(this.source) ? '内嵌图片数据无法解码，不是支持的图片格式' :
+                  '文件可能已被移动、删除或尚未重新导入')))
               .fontSize(AppFontSize.CAPTION)
               .fontColor(this.hintColor)
+              .opacity(0.8)
           }
+          .width('100%')
+          .onClick(() => this.retry())
+        } else if (!this.loaded) {
+          Column({ space: AppSpacing.MD }) {
+            LoadingProgress()
+              .width(28)
+              .height(28)
+              .color(this.hintColor)
+            if (this.pageLabel) {
+              Text(this.pageLabel)
+                .fontSize(AppFontSize.CAPTION)
+                .fontColor(this.hintColor)
+            }
+          }
+          .hitTestBehavior(HitTestMode.None)
         }
-        .hitTestBehavior(HitTestMode.None)
       }
     }
     .width(this.boxed() ? this.boxWidth : '100%')

@@ -1519,15 +1519,27 @@ export class WebBookService {
     }
     if (values.length === 0) return content;
     const resolved: Record<string, string> = {};
+    let failed = 0;
     for (let start = 0; start < values.length; start += 4) {
       if (cancelled()) throw new Error(HttpClient.CANCELLED_ERROR);
       const batch = values.slice(start, start + 4);
-      const paths = await Promise.all(batch.map((value: string, index: number): Promise<string> =>
-        ComicImagePipeline.materialize(this.http, source, value, true, cancelled, start + index)));
+      // 一张图下载或解密失败只影响这一张：原因写进它的标记由阅读器显示，其余图片照常显示。
+      const paths = await Promise.all(batch.map(async (value: string, index: number): Promise<string> => {
+        try {
+          return await ComicImagePipeline.materialize(this.http, source, value, true, cancelled, start + index);
+        } catch (e) {
+          const message = (e as Error)?.message || String(e);
+          if (cancelled() || message === HttpClient.CANCELLED_ERROR) throw e as Error;
+          failed++;
+          console.warn(`[ReaderImage] 第 ${start + index + 1} 张图片处理失败: ${message}`);
+          return ReaderImageMarker.failureSource(message);
+        }
+      }));
       for (let index = 0; index < batch.length; index++) {
         resolved[batch[index]] = paths[index] || batch[index];
       }
     }
+    if (failed > 0) console.warn(`[ReaderImage] 本章 ${values.length} 张图片中 ${failed} 张未能显示`);
     return content.replace(pattern, (_all: string, encoded: string): string => {
       try {
         const raw = decodeURIComponent(encoded);
