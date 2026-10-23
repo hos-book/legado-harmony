@@ -329,6 +329,9 @@ struct ReadBookPage {
   private readerPagedProgressSaveTimerId: number = -1;
   private readerComicPanLastOffsetY: number = 0;
   private readerComicPanMoved: boolean = false;
+  /** 点击翻屏的逐帧滚动：定时器与尚未滚完的距离。 */
+  private readerComicScreenScrollTimerId: number = -1;
+  private readerComicScreenScrollRemaining: number = 0;
   // isAtEnd()/currentOffset() 是同步跨线程查询，手势更新事件频率高于刷新率；
   // 边界方向探测按时间片取样，提示徽标晚一两帧出现无感知。
   private readerComicBoundaryProbeNotUntil: number = 0;
@@ -973,6 +976,7 @@ struct ReadBookPage {
     this.setReaderTextSelectionActive(false);
     this.cancelReaderPaginationWork(true);
     this.resetReaderPageCurl();
+    this.stopReaderComicScreenScroll();
     if (this.readerExtendLayoutRefreshTimerId >= 0) {
       clearTimeout(this.readerExtendLayoutRefreshTimerId);
       this.readerExtendLayoutRefreshTimerId = -1;
@@ -2306,21 +2310,60 @@ struct ReadBookPage {
       return;
     }
     if ((direction > 0 && atEnd) || (direction < 0 && offset <= 1)) {
+      this.stopReaderComicScreenScroll();
       this.crossReaderComicChapterBoundary(direction);
       return;
     }
     // 放大后屏幕只显示列表的 1/倍数，翻一屏对应的列表距离同比缩短。
     const step = Math.max(120, this.pageViewHeight * 0.8) / Math.max(1, this.readerComicZoomScale) *
       (direction > 0 ? 1 : -1);
-    try {
-      this.readerComicScroller.scrollTo({
-        xOffset: 0,
-        yOffset: Math.max(0, offset + step),
-        animation: { duration: 260, curve: Curve.EaseOut }
-      });
-    } catch (_) {
-      this.readerComicScroller.scrollBy(0, step);
+    this.startReaderComicScreenScroll(step);
+  }
+
+  /**
+   * 点击翻屏的滚动动画。不用 scrollTo(绝对位置)：列表的绝对位置是按已量过的项估算的，滚进相邻章节时
+   * 上方会去掉一章（或接上一章、图片加载后变高），估算值随之跳变，动画仍奔向旧目标，就会一下冲到下一章末尾。
+   * 这里每帧按相对距离 scrollBy，列表怎么增删都只滚这一屏。连点时把没滚完的距离并进下一次。
+   */
+  startReaderComicScreenScroll(distance: number): void {
+    const total = this.readerComicScreenScrollRemaining + distance;
+    this.stopReaderComicScreenScroll();
+    const durationMs = 260;
+    const startedAt = Date.now();
+    let applied = 0;
+    this.readerComicScreenScrollRemaining = total;
+    const tick = (): void => {
+      this.readerComicScreenScrollTimerId = -1;
+      if (!this.readerPageVisible || !this.isReaderComicModeActive() || this.isReaderComicPagedMode()) {
+        this.readerComicScreenScrollRemaining = 0;
+        return;
+      }
+      const t = Math.min(1, (Date.now() - startedAt) / durationMs);
+      const eased = 1 - Math.pow(1 - t, 3);
+      const target = total * eased;
+      const delta = target - applied;
+      applied = target;
+      this.readerComicScreenScrollRemaining = total - applied;
+      if (Math.abs(delta) >= 0.01) {
+        try {
+          this.readerComicScroller.scrollBy(0, delta);
+        } catch (error) {
+          console.warn('漫画点击翻屏滚动失败:', error);
+          this.readerComicScreenScrollRemaining = 0;
+          return;
+        }
+      }
+      if (t < 1) this.readerComicScreenScrollTimerId = setTimeout(tick, 16);
+    };
+    tick();
+  }
+
+  stopReaderComicScreenScroll(): void {
+    if (this.readerComicScreenScrollTimerId >= 0) {
+      clearTimeout(this.readerComicScreenScrollTimerId);
+      this.readerComicScreenScrollTimerId = -1;
     }
+    this.readerComicScreenScrollRemaining = 0;
   }
 
   /** 已在本章首尾再往外翻：切到相邻一话。 */
@@ -5035,6 +5078,7 @@ struct ReadBookPage {
   }
 
   beginReaderComicPan(): void {
+    this.stopReaderComicScreenScroll();
     if (this.readerComicChapterSwitching) return;
     this.readerComicPanLastOffsetY = 0;
     this.readerComicPanMoved = false;
