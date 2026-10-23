@@ -246,6 +246,7 @@ struct ReadBookPage {
   @State readerWebFetchRuntimeNeeded: boolean = false;
   @State readerComicMode: boolean = false;
   @State readerComicSettings: ReaderComicSettings = new ReaderComicSettings();
+  @State readerComicTitleCapsuleWidth: number = 0;
   /** 本书单独选的漫画阅读方式（书籍变量 readerComicReadingMode）；空串跟随全局默认。 */
   @State readerComicBookMode: string = '';
   /** 翻页模式预先切好的相邻章节分页，翻过本话首尾时直接显示；章节号为 -1 表示没有。 */
@@ -2383,31 +2384,102 @@ struct ReadBookPage {
 
   @Builder
   readerComicTitleCapsule() {
-    Column({ space: 1 }) {
-      Text(this.getChapterTitle())
-        .fontSize(AppFontSize.BODY)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(this.getTextColor())
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-      if (this.book?.name) {
-        Text(this.book.name)
-          .fontSize(AppFontSize.MICRO + 1)
-          .fontColor(this.getSubTextColor())
+    Stack({ alignContent: Alignment.Start }) {
+      if (ImmersiveMaterialRuntime.supportsHdsTabs() && this.readerComicTitleCapsuleWidth > 0) {
+        this.readerComicTitleCapsuleMaterial()
+      }
+      Column({ space: 1 }) {
+        Text(this.getChapterTitle())
+          .fontSize(AppFontSize.BODY)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.getTextColor())
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
+        if (this.book?.name) {
+          Text(this.book.name)
+            .fontSize(AppFontSize.MICRO + 1)
+            .fontColor(this.getSubTextColor())
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
       }
+      .width('100%')
+      .height('100%')
+      .padding({ left: 14, right: 14 })
+      .justifyContent(FlexAlign.Center)
+      .alignItems(HorizontalAlign.Start)
+      .hitTestBehavior(HitTestMode.None)
     }
     .layoutWeight(1)
     .height(40)
     .margin({ left: AppSpacing.MD, right: AppSpacing.MD })
-    .padding({ left: 14, right: 14 })
-    .justifyContent(FlexAlign.Center)
-    .alignItems(HorizontalAlign.Start)
     .borderRadius(20)
-    .backgroundColor(this.readerGlassPanelColor())
-    .backdropBlur(ThemeRuntime.glassBlur('panel', 22))
-    .border({ width: ThemeRuntime.glassBorderWidth('panel'), color: this.readerGlassBorderColor() })
+    // With HDS material the capsule shares the round buttons' untinted system glass; older systems keep the
+    // themed glass panel because their round buttons have no surface to match.
+    .backgroundColor(ImmersiveMaterialRuntime.supportsHdsTabs() ? Color.Transparent : this.readerGlassPanelColor())
+    .backdropBlur(ImmersiveMaterialRuntime.supportsHdsTabs() ? 0 : ThemeRuntime.glassBlur('panel', 22))
+    .border({
+      width: ImmersiveMaterialRuntime.supportsHdsTabs() ? 0 : ThemeRuntime.glassBorderWidth('panel'),
+      color: this.readerGlassBorderColor()
+    })
+    .onAreaChange((_oldArea: Area, newArea: Area) => {
+      const width = Math.round(Number(newArea.width));
+      if (width !== this.readerComicTitleCapsuleWidth) this.readerComicTitleCapsuleWidth = width;
+    })
+  }
+
+  @Builder
+  readerComicTitleCapsuleMaterial() {
+    // Same HdsTabs material trick as ImmersiveBackButton so the capsule and the round buttons render one surface.
+    HdsTabs({ barPosition: BarPosition.End, index: 0 }) {
+      TabContent() {
+        Column()
+      }
+      .height(40)
+      .tabBar(this.readerComicTitleCapsuleMaterialTab())
+    }
+    .barMode(BarMode.Fixed)
+    .barHeight(40)
+    .barOverlap(true)
+    .barFloatingStyle({
+      barWidth: {
+        smallWidth: this.readerComicTitleCapsuleWidth,
+        mediumWidth: this.readerComicTitleCapsuleWidth,
+        largeWidth: this.readerComicTitleCapsuleWidth
+      },
+      systemMaterialEffect: {
+        materialType: ImmersiveMaterialRuntime.materialType(),
+        materialLevel: ImmersiveMaterialRuntime.materialLevel()
+      },
+      barSideMargin: 0,
+      barBottomMargin: 0,
+      gradientMask: {
+        maskColor: Color.Transparent,
+        maskHeight: 40
+      },
+      adaptToHandedness: false,
+      thermoCtrl: true,
+      barOpacity: 1
+    })
+    .scrollable(false)
+    .onContentWillChange(() => false)
+    .width(this.readerComicTitleCapsuleWidth)
+    .height(40)
+    .borderRadius(20, RenderStrategy.OFFSCREEN)
+    .clip(true)
+    .hitTestBehavior(HitTestMode.None)
+  }
+
+  @Builder
+  readerComicTitleCapsuleMaterialTab() {
+    Stack()
+      .width('100%')
+      .height('100%')
+  }
+
+  /** Floating bottom bars use the same untinted material as the top round buttons in every reading mode. */
+  readerFloatingBarTintColor(): ResourceColor {
+    return Color.Transparent;
   }
 
   readerComicSurfaceColor(): string {
@@ -3050,7 +3122,7 @@ struct ReadBookPage {
       if (ImmersiveMaterialRuntime.supportsHds()) {
         ReaderFloatingMaterialBar({
           barWidth: this.readerFloatingBarWidth(),
-          tintColor: this.readerGlassPanelColor()
+          tintColor: this.readerFloatingBarTintColor()
         }) {
           this.readerHdsProgressBarContent(comicPages)
         }
@@ -3075,7 +3147,7 @@ struct ReadBookPage {
     }
     .key(`reader_hds_chapter_bar_${comicPages ? 'comic' : 'chapter'}_${this.themeRevision}_` +
       `${this.isReaderThemeDark() ? 'dark' : 'light'}`)
-    .barBackgroundColor(this.readerGlassPanelColor())
+    .barBackgroundColor(this.readerFloatingBarTintColor())
     .barMode(BarMode.Fixed)
     .barHeight(48)
     .barOverlap(true)
@@ -3269,7 +3341,7 @@ struct ReadBookPage {
       Stack({ alignContent: Alignment.Center }) {
         ReaderFloatingMaterialBar({
           barWidth: this.readerFloatingBarWidth(),
-          tintColor: this.readerGlassPanelColor()
+          tintColor: this.readerFloatingBarTintColor()
         }) {
           this.readerMaterialActionBarContent(fromToc, fromSettings)
         }
@@ -3340,7 +3412,7 @@ struct ReadBookPage {
     }
     .key(`reader_hds_action_bar_${this.isReaderComicModeActive() ? 'comic' : 'text'}_${this.themeRevision}_` +
       `${this.isReaderThemeDark() ? 'dark' : 'light'}`)
-    .barBackgroundColor(this.readerGlassPanelColor())
+    .barBackgroundColor(this.readerFloatingBarTintColor())
     .barMode(BarMode.Fixed)
     .barHeight(48)
     .barOverlap(true)
